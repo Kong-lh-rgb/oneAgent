@@ -1,0 +1,17 @@
+# OpenAI runtime
+openai==2.50.0
+openai-agents==0.19.1
+anthropic==0.120.2
+
+# Local API service
+fastapi==0.141.1
+uvicorn[standard]==0.52.0
+
+# Configuration
+pydantic-settings==2.14.2
+python-dotenv==1.2.2
+
+# Persistence, scheduling, and logging
+aiosqlite==0.22.1
+APScheduler==3.11.3
+structlog==26.1.0
