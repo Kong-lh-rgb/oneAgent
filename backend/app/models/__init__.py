@@ -19,6 +19,7 @@ from .types import (
     ModelUsage,
     ToolCall,
     ToolDefinition,
+    ToolResult,
 )
 
 __all__ = [
@@ -37,6 +38,7 @@ __all__ = [
     "ProviderNotConfiguredError",
     "ToolCall",
     "ToolDefinition",
+    "ToolResult",
     "UnsupportedMessageError",
     "UnsupportedProviderError",
 ]

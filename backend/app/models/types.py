@@ -57,6 +57,19 @@ class ToolDefinition(BaseModel):
     strict: bool | None = None
 
 
+class ToolResult(BaseModel):
+    """Normalized result of one local tool execution."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tool_call_id: str
+    tool_name: str
+    success: bool
+    output: str | None = None
+    error: str | None = None
+    duration_ms: float = Field(ge=0)
+
+
 class ModelRequest(BaseModel):
     """A request that can be translated to any configured provider."""
 
