@@ -1,4 +1,4 @@
-"""OpenAI Responses and OpenAI-compatible Chat Completions adapter."""
+"""OpenAI Responses 和兼容 Chat Completions 接口的适配器。"""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from ..types import (
 
 
 class OpenAICompatibleAdapter(ModelAdapter):
-    """Serve OpenAI, Qwen, DeepSeek, and compatible custom endpoints."""
+    """支持 OpenAI、Qwen、DeepSeek 及其他兼容端点。"""
 
     def __init__(
         self,

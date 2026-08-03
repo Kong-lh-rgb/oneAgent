@@ -1,4 +1,4 @@
-"""UTF-8 text writer restricted to the OneAgent workspace."""
+"""仅允许写入 OneAgent 工作区的 UTF-8 文本工具。"""
 
 from __future__ import annotations
 

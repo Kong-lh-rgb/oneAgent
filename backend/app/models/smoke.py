@@ -1,6 +1,6 @@
-"""Live smoke test for configured model providers.
+"""对已配置的模型提供商执行在线冒烟测试。
 
-Run from the backend directory:
+在 backend 目录运行：
 
     .venv/bin/python -m app.models.smoke
     .venv/bin/python -m app.models.smoke --provider qwen

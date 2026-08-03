@@ -1,6 +1,6 @@
-"""Interactive multi-turn chat through the configured model adapters.
+"""通过已配置的模型适配器进行交互式多轮聊天。
 
-Run from the backend directory:
+在 backend 目录运行：
 
     .venv/bin/python -m app.models.chat
     .venv/bin/python -m app.models.chat --provider qwen

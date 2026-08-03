@@ -1,4 +1,4 @@
-"""Environment-backed configuration for model providers."""
+"""由环境变量驱动的模型提供商配置。"""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ _BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 class ProviderConfig(BaseModel):
-    """Resolved configuration used to construct one adapter."""
+    """用于创建单个适配器的完整配置。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -32,10 +32,10 @@ class ProviderConfig(BaseModel):
 
 
 class ModelSettings(BaseSettings):
-    """All built-in provider settings.
+    """所有内置模型提供商的配置。
 
-    Values are loaded from ``backend/.env`` and then from process environment
-    variables. Process environment values take precedence.
+    配置先从 ``backend/.env`` 加载，再读取进程环境变量。
+    进程环境变量的优先级更高。
     """
 
     model_config = SettingsConfigDict(

@@ -1,4 +1,4 @@
-"""Anthropic Messages API adapter."""
+"""Anthropic Messages API 适配器。"""
 
 from __future__ import annotations
 

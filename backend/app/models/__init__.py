@@ -1,4 +1,4 @@
-"""Public model adapter API."""
+"""模型适配层的公共接口。"""
 
 from .adapter import ModelAdapter
 from .config import ModelSettings, ProviderConfig

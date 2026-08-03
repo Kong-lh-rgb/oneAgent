@@ -1,8 +1,8 @@
-"""Errors raised by the model adapter layer."""
+"""模型适配层抛出的错误。"""
 
 
 class ModelAdapterError(RuntimeError):
-    """Base error for provider configuration and invocation failures."""
+    """模型提供商配置和调用失败的基础错误。"""
 
 
 class ProviderNotConfiguredError(ModelAdapterError):
@@ -19,4 +19,4 @@ class UnsupportedProviderError(ModelAdapterError):
 
 
 class UnsupportedMessageError(ModelAdapterError):
-    """Raised when a message cannot be represented by a provider API."""
+    """消息无法转换为模型提供商 API 格式时抛出。"""

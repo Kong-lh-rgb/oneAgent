@@ -1,4 +1,4 @@
-"""Local asynchronous tool system."""
+"""本地异步工具系统。"""
 
 from .base import BaseTool
 from .builtin import ListFilesTool, ReadFileTool, WriteFileTool

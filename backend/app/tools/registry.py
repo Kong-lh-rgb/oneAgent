@@ -1,4 +1,4 @@
-"""Registry for local tools."""
+"""本地工具注册表。"""
 
 from __future__ import annotations
 

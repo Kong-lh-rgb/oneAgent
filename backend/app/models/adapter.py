@@ -1,4 +1,4 @@
-"""Abstract model adapter contract."""
+"""模型适配器的抽象接口。"""
 
 from __future__ import annotations
 
@@ -22,8 +22,8 @@ class ModelAdapter(ABC):
 
     @abstractmethod
     async def complete(self, request: ModelRequest) -> ModelResponse:
-        """Return one normalized model response."""
+        """返回一次统一格式的模型响应。"""
 
     @abstractmethod
     async def close(self) -> None:
-        """Release provider client resources."""
+        """释放模型提供商客户端资源。"""

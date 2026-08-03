@@ -1,0 +1,29 @@
+"""最小工具调用 Agent 运行时使用的错误。"""
+
+
+class AgentRuntimeError(RuntimeError):
+    """Agent 运行时错误的基类。"""
+
+
+class ModelInvocationError(AgentRuntimeError):
+    """模型注册表或适配器无法完成请求时抛出。"""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(f"model invocation failed: {detail}")
+
+
+class MaxStepsExceededError(AgentRuntimeError):
+    """运行时达到配置的最大步数时抛出。"""
+
+    def __init__(self, max_steps: int) -> None:
+        super().__init__(f"maximum step limit ({max_steps}) reached")
+
+
+class RepeatedToolCallError(AgentRuntimeError):
+    """模型连续三次重复同一工具调用时抛出。"""
+
+    def __init__(self, tool_name: str) -> None:
+        super().__init__(
+            f"tool {tool_name!r} was called with identical arguments "
+            "3 consecutive times"
+        )

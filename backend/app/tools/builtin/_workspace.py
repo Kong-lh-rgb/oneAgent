@@ -1,4 +1,4 @@
-"""Workspace path validation shared by built-in file tools."""
+"""内置文件工具共用的工作区路径校验。"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Built-in local file tools."""
+"""内置本地文件工具。"""
 
 from .list_files import ListFilesTool
 from .read_file import ReadFileTool

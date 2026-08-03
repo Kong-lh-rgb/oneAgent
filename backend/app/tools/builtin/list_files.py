@@ -1,4 +1,4 @@
-"""Workspace file listing tool."""
+"""工作区文件列表工具。"""
 
 from __future__ import annotations
 

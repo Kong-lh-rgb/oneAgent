@@ -1,4 +1,4 @@
-"""Safe execution boundary for local tools."""
+"""本地工具的安全执行边界。"""
 
 from __future__ import annotations
 

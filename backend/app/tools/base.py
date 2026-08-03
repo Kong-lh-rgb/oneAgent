@@ -1,4 +1,4 @@
-"""Base contract for local OneAgent tools."""
+"""OneAgent 本地工具的基础接口。"""
 
 from __future__ import annotations
 
@@ -9,13 +9,13 @@ from app.models.types import ToolDefinition
 
 
 class BaseTool(ABC):
-    """A locally executed asynchronous tool."""
+    """在本地执行的异步工具。"""
 
     @property
     @abstractmethod
     def definition(self) -> ToolDefinition:
-        """Return the schema exposed to models."""
+        """返回提供给模型的工具定义。"""
 
     @abstractmethod
     async def execute(self, arguments: dict[str, Any]) -> Any:
-        """Execute the tool without blocking the event loop."""
+        """执行工具且不阻塞事件循环。"""

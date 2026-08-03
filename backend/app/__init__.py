@@ -1,1 +1,1 @@
-"""OneAgent backend application."""
+"""OneAgent 后端应用。"""

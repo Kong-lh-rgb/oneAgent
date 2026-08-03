@@ -1,4 +1,4 @@
-"""Provider-neutral model request and response types."""
+"""与模型提供商无关的请求和响应类型。"""
 
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ class ToolDefinition(BaseModel):
 
 
 class ToolResult(BaseModel):
-    """Normalized result of one local tool execution."""
+    """一次本地工具执行的统一结果。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -71,7 +71,7 @@ class ToolResult(BaseModel):
 
 
 class ModelRequest(BaseModel):
-    """A request that can be translated to any configured provider."""
+    """可转换为任意已配置模型提供商格式的请求。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -99,7 +99,7 @@ class ModelUsage(BaseModel):
 
 
 class ModelResponse(BaseModel):
-    """A normalized result returned by every provider adapter."""
+    """所有模型适配器统一返回的结果。"""
 
     model_config = ConfigDict(extra="forbid")
 

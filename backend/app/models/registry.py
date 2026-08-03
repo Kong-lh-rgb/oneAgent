@@ -1,4 +1,4 @@
-"""Lazy model-adapter registry."""
+"""延迟创建模型适配器的注册表。"""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ AdapterFactory = Callable[[ProviderConfig], ModelAdapter]
 
 
 class ModelAdapterRegistry:
-    """Resolve configured adapters without exposing provider SDKs to callers."""
+    """获取已配置的适配器，同时避免向调用方暴露提供商 SDK。"""
 
     def __init__(self, settings: ModelSettings | None = None) -> None:
         self.settings = settings or ModelSettings()
@@ -35,7 +35,7 @@ class ModelAdapterRegistry:
         config: ProviderConfig | None = None,
         replace: bool = False,
     ) -> None:
-        """Register a future provider without changing agent code."""
+        """注册新的模型提供商，无需修改 Agent 代码。"""
 
         name = provider.strip().lower()
         if not name:
