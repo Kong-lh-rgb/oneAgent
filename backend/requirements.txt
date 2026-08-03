@@ -11,6 +11,9 @@ uvicorn[standard]==0.52.0
 pydantic-settings==2.14.2
 python-dotenv==1.2.2
 
+# Network tools
+httpx==0.28.1
+
 # Persistence, scheduling, and logging
 aiosqlite==0.22.1
 APScheduler==3.11.3

@@ -1,4 +1,10 @@
-"""本地工具的安全执行边界。"""
+"""本地工具的安全执行边界。
+
+包含三道防线：
+- 权限控制：ALLOWED 直接执行；HUMAN_APPROVAL 需人工审核；FORBIDDEN 拒绝。
+- 资源限制：超时、输出截断、参数必须是 JSON 对象。
+- 可观测性：每次执行（含失败）都会写入 ToolExecutionLogger。
+"""
 
 from __future__ import annotations
 
@@ -7,8 +13,16 @@ import json
 from time import perf_counter
 from typing import Any
 
-from app.models.types import ToolCall, ToolResult
+from app.models.types import ToolCall, ToolPermission, ToolResult
 
+from .approval import ApprovalDecision, ApprovalGate, ApprovalRequest, DenyAllGate
+from .base import BaseTool
+from .observability import (
+    InMemoryExecutionLogger,
+    ToolExecutionLogger,
+    ToolExecutionRecord,
+    _now_iso,
+)
 from .registry import ToolRegistry
 
 MAX_TOOL_OUTPUT_CHARS = 20_000
@@ -21,6 +35,8 @@ class ToolExecutor:
         *,
         timeout_seconds: float = 30.0,
         max_output_chars: int = MAX_TOOL_OUTPUT_CHARS,
+        approval_gate: ApprovalGate | None = None,
+        logger: ToolExecutionLogger | None = None,
     ) -> None:
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be greater than zero")
@@ -31,19 +47,73 @@ class ToolExecutor:
         self._registry = registry
         self._timeout_seconds = timeout_seconds
         self._max_output_chars = max_output_chars
+        self._approval_gate = approval_gate or DenyAllGate()
+        self.logger = logger or InMemoryExecutionLogger()
+
+    @property
+    def execution_records(self) -> tuple[ToolExecutionRecord, ...]:
+        """最近的执行记录（仅当使用 InMemoryExecutionLogger 时可用）。"""
+        if isinstance(self.logger, InMemoryExecutionLogger):
+            return self.logger.records
+        return ()
 
     async def execute(self, tool_call: ToolCall) -> ToolResult:
         started_at = perf_counter()
+        started_iso = _now_iso()
 
-        try:
-            tool = self._registry.get(tool_call.name)
-        except KeyError:
-            return self._failure(
+        tool = self._lookup_tool(tool_call)
+        if tool is None:
+            result = self._failure(
                 tool_call,
                 f"Tool not found: {tool_call.name}",
                 started_at,
             )
+            self._emit(tool_call, ToolPermission.ALLOWED, result, started_iso)
+            return result
 
+        permission = tool.definition.permission
+        denied_reason = await self._authorize(tool, tool_call)
+        if denied_reason is not None:
+            result = self._failure(tool_call, denied_reason, started_at)
+            self._emit(tool_call, permission, result, started_iso)
+            return result
+
+        result = await self._dispatch(tool, tool_call, started_at)
+        self._emit(tool_call, permission, result, started_iso)
+        return result
+
+    def _lookup_tool(self, tool_call: ToolCall) -> BaseTool | None:
+        try:
+            return self._registry.get(tool_call.name)
+        except KeyError:
+            return None
+
+    async def _authorize(self, tool: BaseTool, tool_call: ToolCall) -> str | None:
+        """返回被拒绝的原因；允许执行时返回 None。"""
+        permission = tool.definition.permission
+        if permission is ToolPermission.FORBIDDEN:
+            return f"Tool '{tool_call.name}' is forbidden for model execution."
+        if permission is ToolPermission.HUMAN_APPROVAL:
+            request = ApprovalRequest(
+                tool_call_id=tool_call.id,
+                tool_name=tool_call.name,
+                arguments=_safe_arguments(tool_call.arguments),
+                description=tool.definition.description,
+            )
+            decision = await self._approval_gate.request_approval(request)
+            if decision is not ApprovalDecision.APPROVED:
+                return (
+                    f"Tool '{tool_call.name}' execution was denied "
+                    "(requires human approval)."
+                )
+        return None
+
+    async def _dispatch(
+        self,
+        tool: BaseTool,
+        tool_call: ToolCall,
+        started_at: float,
+    ) -> ToolResult:
         try:
             arguments = _parse_arguments(tool_call.arguments)
         except (TypeError, ValueError) as exc:
@@ -99,6 +169,25 @@ class ToolExecutor:
             duration_ms=_duration_ms(started_at),
         )
 
+    def _emit(
+        self,
+        tool_call: ToolCall,
+        permission: ToolPermission,
+        result: ToolResult,
+        started_iso: str,
+    ) -> None:
+        record = ToolExecutionRecord(
+            tool_call_id=result.tool_call_id,
+            tool_name=result.tool_name,
+            permission=permission,
+            started_at=started_iso,
+            duration_ms=result.duration_ms,
+            success=result.success,
+            output=result.output,
+            error=result.error,
+        )
+        self.logger.record(record)
+
 
 def _parse_arguments(arguments: dict[str, Any] | str) -> dict[str, Any]:
     if isinstance(arguments, dict):
@@ -112,12 +201,20 @@ def _parse_arguments(arguments: dict[str, Any] | str) -> dict[str, Any]:
     return parsed
 
 
+def _safe_arguments(arguments: dict[str, Any] | str) -> dict[str, Any]:
+    """用于审批展示的参数；解析失败时返回空字典而不是抛错。"""
+    try:
+        return _parse_arguments(arguments)
+    except (TypeError, ValueError):
+        return {}
+
+
 def _serialize_output(output: Any) -> str:
     if isinstance(output, str):
         return output
     try:
         return json.dumps(output, ensure_ascii=False, separators=(",", ":"))
-    except TypeError, ValueError:
+    except (TypeError, ValueError):
         return str(output)
 
 

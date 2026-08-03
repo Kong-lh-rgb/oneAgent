@@ -115,7 +115,7 @@ async def _run(args: argparse.Namespace) -> int:
         while True:
             try:
                 content = input("\n你> ").strip()
-            except EOFError, KeyboardInterrupt:
+            except (EOFError, KeyboardInterrupt):
                 print("\n聊天已结束。")
                 return 0
 

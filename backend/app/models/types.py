@@ -46,6 +46,23 @@ class Message(BaseModel):
     tool_calls: tuple[ToolCall, ...] = ()
 
 
+class ToolPermission(StrEnum):
+    """工具的执行权限档位。
+
+    - ALLOWED: 模型可直接调用，无需额外审核。
+    - HUMAN_APPROVAL: 模型可申请调用，但执行前必须经过人工审核。
+    - FORBIDDEN: 严格禁止模型执行；工具可注册但不向模型暴露。
+    """
+
+    ALLOWED = "allowed"
+    HUMAN_APPROVAL = "human_approval"
+    FORBIDDEN = "forbidden"
+
+    def model_visible(self) -> bool:
+        """是否应该被暴露给模型（禁止档不暴露）。"""
+        return self is not ToolPermission.FORBIDDEN
+
+
 class ToolDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -55,6 +72,7 @@ class ToolDefinition(BaseModel):
         default_factory=lambda: {"type": "object", "properties": {}}
     )
     strict: bool | None = None
+    permission: ToolPermission = ToolPermission.ALLOWED
 
 
 class ToolResult(BaseModel):

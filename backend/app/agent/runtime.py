@@ -15,7 +15,9 @@ from app.models.types import (
     ToolCall,
     ToolResult,
 )
+from app.tools.approval import ApprovalGate
 from app.tools.executor import ToolExecutor
+from app.tools.observability import ToolExecutionRecord
 from app.tools.registry import ToolRegistry
 
 from .errors import (
@@ -38,6 +40,7 @@ class AgentRuntime:
         model: str | None = None,
         max_steps: int = 10,
         tool_executor: ToolExecutor | None = None,
+        approval_gate: ApprovalGate | None = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -47,7 +50,19 @@ class AgentRuntime:
         self._provider = provider
         self._model = model
         self._max_steps = max_steps
-        self._tool_executor = tool_executor or ToolExecutor(tool_registry)
+        self._tool_executor = tool_executor or ToolExecutor(
+            tool_registry,
+            approval_gate=approval_gate,
+        )
+
+    @property
+    def tool_executor(self) -> ToolExecutor:
+        return self._tool_executor
+
+    @property
+    def tool_records(self) -> tuple[ToolExecutionRecord, ...]:
+        """最近一次 run() 中所有工具执行的观测记录。"""
+        return self._tool_executor.execution_records
 
     async def run(
         self,

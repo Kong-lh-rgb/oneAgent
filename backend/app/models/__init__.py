@@ -19,6 +19,7 @@ from .types import (
     ModelUsage,
     ToolCall,
     ToolDefinition,
+    ToolPermission,
     ToolResult,
 )
 
@@ -38,6 +39,7 @@ __all__ = [
     "ProviderNotConfiguredError",
     "ToolCall",
     "ToolDefinition",
+    "ToolPermission",
     "ToolResult",
     "UnsupportedMessageError",
     "UnsupportedProviderError",

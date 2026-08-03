@@ -1,16 +1,50 @@
 """本地异步工具系统。"""
 
+from .approval import (
+    ApprovalDecision,
+    ApprovalGate,
+    ApprovalRequest,
+    AutoApproveGate,
+    ConsoleApprovalGate,
+    DenyAllGate,
+)
 from .base import BaseTool
-from .builtin import ListFilesTool, ReadFileTool, WriteFileTool
+from .builtin import (
+    HttpRequestTool,
+    ListFilesTool,
+    ReadFileTool,
+    ShellCommandTool,
+    WebSearchTool,
+    WriteFileTool,
+)
 from .executor import MAX_TOOL_OUTPUT_CHARS, ToolExecutor
+from .observability import (
+    InMemoryExecutionLogger,
+    StructLogExecutionLogger,
+    ToolExecutionLogger,
+    ToolExecutionRecord,
+)
 from .registry import ToolRegistry
 
 __all__ = [
+    "ApprovalDecision",
+    "ApprovalGate",
+    "ApprovalRequest",
+    "AutoApproveGate",
     "BaseTool",
+    "ConsoleApprovalGate",
+    "DenyAllGate",
+    "HttpRequestTool",
+    "InMemoryExecutionLogger",
     "ListFilesTool",
     "MAX_TOOL_OUTPUT_CHARS",
     "ReadFileTool",
+    "ShellCommandTool",
+    "StructLogExecutionLogger",
+    "ToolExecutionLogger",
+    "ToolExecutionRecord",
     "ToolExecutor",
     "ToolRegistry",
+    "WebSearchTool",
     "WriteFileTool",
 ]
