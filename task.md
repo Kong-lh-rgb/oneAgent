@@ -2,6 +2,7 @@
 
 > 本文件用于记录每日开发任务与进展，作为项目留存。
 > 追加规范：每日一个 `## YYYY-MM-DD` 小节，最新的日期放在最上方；任务用 `- [x] 已完成` / `- [ ] 未完成` 标记。
+> 对架构调整和缺陷修复，应同时记录 Bad Case、影响、根因和修复结果，避免只记录最终功能。
 
 ---
 
@@ -78,6 +79,16 @@
 - [x] 全量验证：`pytest` 71 个用例全部通过，`ruff` 与 CLI 参数检查通过
 
 ### 完成：工具执行生命周期 Hooks 重构
+
+#### 重构前 Bad Case
+- [x] 工具生命周期分散：`AgentRuntime` 发射工具事件，`ToolExecutor` 处理权限和执行，Logger 单独记录结果，缺少统一扩展入口
+- [x] Runtime 内嵌 `approval_callback`，导致模型编排层知道人工审批实现细节，职责越界
+- [x] `ApprovalCallback`、`ToolExecutionLogger`、`AgentEventHandler` 三套扩展机制并存，新增审计或安全策略时容易重复接线
+- [x] 工具开始和完成事件由 Runtime 手动包围 Executor，直接调用 Executor 与通过 Runtime 调用时生命周期行为不一致
+- [x] 权限、审批事件和执行记录位于不同代码路径，异常分支容易漏记事件或日志
+- [x] 普通观察逻辑与安全控制没有明确区分，无法表达“观察者失败可忽略、权限检查失败必须拒绝”的不同策略
+
+#### 修复结果
 - [x] 新增 `ToolExecutionContext`，统一传递运行 ID、会话 ID、步数、工具定义和参数
 - [x] 新增 `ToolHook` 与故障隔离的 `ToolHookRunner`，统一工具执行前后和审批生命周期
 - [x] 新增不可绕过的 `PermissionHook`，继续保持默认拒绝、禁止工具拦截和人工审批语义
