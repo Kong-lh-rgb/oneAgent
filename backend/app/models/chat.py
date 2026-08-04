@@ -11,8 +11,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from pathlib import Path
 
 from app.agent.runtime import AgentRuntime
+from app.conversation import (
+    DEFAULT_DATABASE_PATH,
+    Conversation,
+    SQLiteConversationStore,
+)
 from app.tools import ConsoleApprovalGate, build_builtin_tool_registry
 
 from .config import ModelSettings
@@ -55,15 +61,26 @@ def _initial_history(system_prompt: str | None) -> list[Message]:
 async def _send_message(
     *,
     runtime: AgentRuntime,
+    conversation_store: SQLiteConversationStore,
+    conversation: Conversation,
     provider: ModelProvider,
     history: list[Message],
     content: str,
     model: str,
-) -> bool:
+) -> tuple[bool, Conversation]:
     print("OneAgent 正在思考...", flush=True)
 
     result = await runtime.run(content, history=history)
     history[:] = result.messages
+    conversation = await conversation_store.replace_messages(
+        conversation.id,
+        history,
+    )
+    if conversation.title == "新会话":
+        conversation = await conversation_store.rename(
+            conversation.id,
+            _title_from_content(content),
+        )
     answer = result.content or "<模型未返回文本>"
     print(f"\nOneAgent> {answer.strip()}")
     print(
@@ -77,7 +94,55 @@ async def _send_message(
             for record in result.tool_calls
         )
         print(f"[工具调用：{tools}]")
-    return result.ok
+    return result.ok, conversation
+
+
+async def _load_or_create_conversation(
+    store: SQLiteConversationStore,
+    *,
+    identifier: str | None,
+    force_new: bool,
+    system_prompt: str | None,
+) -> tuple[Conversation, list[Message], bool]:
+    """加载指定或最近会话；不存在时创建新会话。"""
+
+    if force_new:
+        conversation = await store.create(messages=_initial_history(system_prompt))
+        return conversation, list(await store.load_messages(conversation.id)), False
+
+    if identifier:
+        conversation = await store.resolve(identifier)
+        if conversation is None:
+            raise ValueError(f"找不到会话：{identifier}")
+    else:
+        conversation = await store.latest()
+
+    if conversation is None:
+        conversation = await store.create(messages=_initial_history(system_prompt))
+        return conversation, list(await store.load_messages(conversation.id)), False
+
+    history = list(await store.load_messages(conversation.id))
+    return conversation, history, True
+
+
+def _title_from_content(content: str) -> str:
+    title = " ".join(content.split()).strip()
+    return title[:40] or "新会话"
+
+
+def _print_conversations(
+    conversations: tuple[Conversation, ...],
+    current_id: str,
+) -> None:
+    if not conversations:
+        print("暂无会话。")
+        return
+    for conversation in conversations:
+        marker = "*" if conversation.id == current_id else " "
+        print(
+            f"{marker} {conversation.id[:8]}  "
+            f"{conversation.title}  ({conversation.message_count} 条消息)"
+        )
 
 
 async def _run(args: argparse.Namespace) -> int:
@@ -92,6 +157,24 @@ async def _run(args: argparse.Namespace) -> int:
     model = args.model or config.model
     print(f"OneAgent Chat · provider={provider.value} · model={model}")
 
+    conversation_store = SQLiteConversationStore(args.database)
+    await conversation_store.initialize()
+    try:
+        conversation, history, resumed = await _load_or_create_conversation(
+            conversation_store,
+            identifier=args.conversation,
+            force_new=args.new_conversation,
+            system_prompt=args.system,
+        )
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+
+    action = "已恢复" if resumed else "已创建"
+    print(
+        f"{action}会话：{conversation.id[:8]} · "
+        f"{conversation.title} · {conversation.message_count} 条消息"
+    )
     registry = ModelAdapterRegistry(settings)
     runtime = AgentRuntime(
         registry,
@@ -102,11 +185,12 @@ async def _run(args: argparse.Namespace) -> int:
         max_output_tokens=args.max_output_tokens,
         approval_gate=ConsoleApprovalGate(),
     )
-    history = _initial_history(args.system)
     try:
         if args.message is not None:
-            success = await _send_message(
+            success, conversation = await _send_message(
                 runtime=runtime,
+                conversation_store=conversation_store,
+                conversation=conversation,
                 provider=provider,
                 history=history,
                 content=args.message,
@@ -114,7 +198,10 @@ async def _run(args: argparse.Namespace) -> int:
             )
             return 0 if success else 1
 
-        print("命令：/clear 清空上下文，/help 查看帮助，/exit 退出")
+        print(
+            "命令：/new 新建会话，/sessions 查看会话，/use <id> 切换会话，"
+            "/clear 清空当前会话，/help 查看帮助，/exit 退出"
+        )
         while True:
             try:
                 content = input("\n你> ").strip()
@@ -127,16 +214,67 @@ async def _run(args: argparse.Namespace) -> int:
             if content in {"/exit", "/quit"}:
                 print("聊天已结束。")
                 return 0
+            if content == "/new" or content.startswith("/new "):
+                title = content.removeprefix("/new").strip() or "新会话"
+                conversation = await conversation_store.create(
+                    title=title,
+                    messages=_initial_history(args.system),
+                )
+                history = list(
+                    await conversation_store.load_messages(conversation.id)
+                )
+                print(f"已创建会话：{conversation.id[:8]} · {conversation.title}")
+                continue
+            if content == "/sessions":
+                _print_conversations(
+                    await conversation_store.list(),
+                    conversation.id,
+                )
+                continue
+            if content == "/use" or content.startswith("/use "):
+                identifier = content.removeprefix("/use").strip()
+                if not identifier:
+                    print("用法：/use <会话ID>")
+                    continue
+                try:
+                    selected = await conversation_store.resolve(identifier)
+                except ValueError as exc:
+                    print(exc)
+                    continue
+                if selected is None:
+                    print(f"找不到会话：{identifier}")
+                    continue
+                conversation = selected
+                history = list(
+                    await conversation_store.load_messages(conversation.id)
+                )
+                print(
+                    f"已切换会话：{conversation.id[:8]} · "
+                    f"{conversation.title} · {conversation.message_count} 条消息"
+                )
+                continue
             if content == "/clear":
                 history = _initial_history(args.system)
+                conversation = await conversation_store.replace_messages(
+                    conversation.id,
+                    history,
+                )
                 print("上下文已清空。")
                 continue
             if content == "/help":
-                print("/clear 清空上下文\n/exit 退出聊天")
+                print(
+                    "/new [标题] 新建会话\n"
+                    "/sessions 查看最近会话\n"
+                    "/use <会话ID> 切换会话\n"
+                    "/clear 清空当前会话\n"
+                    "/exit 退出聊天"
+                )
                 continue
 
-            await _send_message(
+            _, conversation = await _send_message(
                 runtime=runtime,
+                conversation_store=conversation_store,
+                conversation=conversation,
                 provider=provider,
                 history=history,
                 content=content,
@@ -177,11 +315,28 @@ def _parse_args() -> argparse.Namespace:
         default=10,
         help="Maximum model/tool loop steps for each message.",
     )
+    parser.add_argument(
+        "--database",
+        type=Path,
+        default=DEFAULT_DATABASE_PATH,
+        help="SQLite conversation database path.",
+    )
+    parser.add_argument(
+        "--conversation",
+        help="Resume a conversation by full ID or unique ID prefix.",
+    )
+    parser.add_argument(
+        "--new-conversation",
+        action="store_true",
+        help="Start a new conversation instead of restoring the latest one.",
+    )
     args = parser.parse_args()
     if args.max_output_tokens <= 0:
         parser.error("--max-output-tokens must be greater than zero")
     if args.max_steps <= 0:
         parser.error("--max-steps must be greater than zero")
+    if args.conversation and args.new_conversation:
+        parser.error("--conversation and --new-conversation cannot be used together")
     return args
 
 

@@ -16,3 +16,5 @@ __pycache__/
 # Local runtime data
 workspace/*
 !workspace/.gitkeep
+.oneagent/
+backend/.oneagent/

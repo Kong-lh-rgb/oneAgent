@@ -24,6 +24,26 @@
 - [x] AgentRuntime 支持透传 `max_output_tokens`，CLI 新增 `--max-steps`
 - [x] 全量验证：`pytest` 47 个用例全部通过，`ruff` 无告警
 
+### 完成：SQLite 会话持久化与 CLI 恢复
+- [x] 新增 `app/conversation/`，实现会话模型与 SQLite 存储
+- [x] 持久化完整通用消息，包括 system/user/assistant/tool 与 ToolCall 参数
+- [x] 数据库默认保存在 `backend/.oneagent/oneagent.db`，并加入 Git 忽略
+- [x] CLI 启动时默认恢复最近会话，支持完整 ID 或唯一短 ID
+- [x] CLI 新增 `/new`、`/sessions`、`/use <id>`，`/clear` 同步清空数据库历史
+- [x] CLI 每轮使用 `AgentResult.messages` 更新 SQLite，并根据首条输入生成会话标题
+- [x] 新增 `--database`、`--conversation`、`--new-conversation` 参数
+- [x] 添加 SQLite 重启恢复、消息序列化、会话切换和 CLI 持久化离线测试
+- [x] 全量验证：`pytest` 54 个用例全部通过，`ruff` 与 CLI 参数检查通过
+
+### 完成：AgentEvent 事件模型
+- [x] 新增 `app/agent/events.py`，定义统一 `AgentEvent` 与 `AgentEventType`
+- [x] 事件包含唯一 `event_id`、`run_id`、可选 `conversation_id`、`sequence` 与 `step`
+- [x] 新增带时区的 `event_time`，创建时使用 UTC，并将外部时区统一转换为 UTC
+- [x] 事件载荷复用 Message、ToolCall、ToolResult、ModelUsage、AgentError 与 AgentStopReason
+- [x] 事件模型设为不可变、禁止额外字段并支持 JSON 序列化往返
+- [x] 添加事件 ID、UTC 时间、载荷序列化与非法参数离线测试
+- [x] 全量验证：`pytest` 61 个用例全部通过，`ruff` 无告警
+
 ## 2026-08-03
 
 ### 完成
