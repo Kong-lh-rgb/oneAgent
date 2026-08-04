@@ -3,32 +3,31 @@
 包含三道防线：
 - 权限控制：ALLOWED 直接执行；HUMAN_APPROVAL 需人工审核；FORBIDDEN 拒绝。
 - 资源限制：超时、输出截断、参数必须是 JSON 对象。
-- 可观测性：每次执行（含失败）都会写入 ToolExecutionLogger。
+- 生命周期 Hook：权限、事件和可观测性通过统一执行阶段接入。
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Sequence
+from dataclasses import replace
 from time import perf_counter
 from typing import Any
 
-from app.models.types import ToolCall, ToolPermission, ToolResult
+from app.models.types import ToolCall, ToolResult
 
-from .approval import (
-    ApprovalCallback,
-    ApprovalDecision,
-    ApprovalGate,
-    ApprovalRequest,
-    DenyAllGate,
-)
+from .approval import ApprovalGate, DenyAllGate
 from .base import BaseTool
+from .hooks import ToolExecutionContext, ToolHook, ToolHookDecision, ToolHookRunner
 from .observability import (
     InMemoryExecutionLogger,
+    ObservabilityHook,
     ToolExecutionLogger,
     ToolExecutionRecord,
     _now_iso,
 )
+from .permission_hook import PermissionHook
 from .registry import ToolRegistry
 
 MAX_TOOL_OUTPUT_CHARS = 20_000
@@ -43,6 +42,7 @@ class ToolExecutor:
         max_output_chars: int = MAX_TOOL_OUTPUT_CHARS,
         approval_gate: ApprovalGate | None = None,
         logger: ToolExecutionLogger | None = None,
+        hooks: Sequence[ToolHook] = (),
     ) -> None:
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be greater than zero")
@@ -53,8 +53,13 @@ class ToolExecutor:
         self._registry = registry
         self._timeout_seconds = timeout_seconds
         self._max_output_chars = max_output_chars
-        self._approval_gate = approval_gate or DenyAllGate()
         self.logger = logger or InMemoryExecutionLogger()
+        self._permission_hook = PermissionHook(approval_gate or DenyAllGate())
+        self._hooks = (
+            self._permission_hook,
+            ObservabilityHook(self.logger),
+            *hooks,
+        )
 
     @property
     def execution_records(self) -> tuple[ToolExecutionRecord, ...]:
@@ -67,35 +72,44 @@ class ToolExecutor:
         self,
         tool_call: ToolCall,
         *,
-        approval_callback: ApprovalCallback | None = None,
+        context: ToolExecutionContext | None = None,
+        hooks: Sequence[ToolHook] = (),
     ) -> ToolResult:
         started_at = perf_counter()
         started_iso = _now_iso()
 
         tool = self._lookup_tool(tool_call)
+        arguments = _safe_arguments(tool_call.arguments)
+        base_context = context or ToolExecutionContext(tool_call=tool_call)
+        execution_context = replace(
+            base_context,
+            tool_call=tool_call,
+            tool_definition=tool.definition if tool is not None else None,
+            arguments=arguments,
+            metadata={**base_context.metadata, "started_at": started_iso},
+        )
+        hook_runner = ToolHookRunner(*self._hooks, *hooks)
+        permission_check = await hook_runner.before_execute(execution_context)
+
         if tool is None:
             result = self._failure(
                 tool_call,
                 f"Tool not found: {tool_call.name}",
                 started_at,
             )
-            self._emit(tool_call, ToolPermission.ALLOWED, result, started_iso)
-            return result
+            return await self._complete(execution_context, result, hook_runner)
 
-        permission = tool.definition.permission
         denied_reason = await self._authorize(
-            tool,
-            tool_call,
-            approval_callback=approval_callback,
+            execution_context,
+            hook_runner,
+            permission_check,
         )
         if denied_reason is not None:
             result = self._failure(tool_call, denied_reason, started_at)
-            self._emit(tool_call, permission, result, started_iso)
-            return result
+            return await self._complete(execution_context, result, hook_runner)
 
         result = await self._dispatch(tool, tool_call, started_at)
-        self._emit(tool_call, permission, result, started_iso)
-        return result
+        return await self._complete(execution_context, result, hook_runner)
 
     def _lookup_tool(self, tool_call: ToolCall) -> BaseTool | None:
         try:
@@ -105,31 +119,26 @@ class ToolExecutor:
 
     async def _authorize(
         self,
-        tool: BaseTool,
-        tool_call: ToolCall,
-        *,
-        approval_callback: ApprovalCallback | None,
+        context: ToolExecutionContext,
+        hook_runner: ToolHookRunner,
+        check: ToolHookDecision | None,
     ) -> str | None:
         """返回被拒绝的原因；允许执行时返回 None。"""
-        permission = tool.definition.permission
-        if permission is ToolPermission.FORBIDDEN:
-            return f"Tool '{tool_call.name}' is forbidden for model execution."
-        if permission is ToolPermission.HUMAN_APPROVAL:
-            request = ApprovalRequest(
-                tool_call_id=tool_call.id,
-                tool_name=tool_call.name,
-                arguments=_safe_arguments(tool_call.arguments),
-                description=tool.definition.description,
-            )
-            await _notify_approval(approval_callback, request, None)
-            decision = await self._approval_gate.request_approval(request)
-            await _notify_approval(approval_callback, request, decision)
-            if decision is not ApprovalDecision.APPROVED:
-                return (
-                    f"Tool '{tool_call.name}' execution was denied "
-                    "(requires human approval)."
-                )
-        return None
+        try:
+            if check is None:
+                return None
+            if check.denied_reason is not None:
+                return check.denied_reason
+            if check.approval_request is None:
+                return None
+
+            request = check.approval_request
+            await hook_runner.on_approval_required(context, request)
+            decision = await self._permission_hook.request_approval(request)
+            await hook_runner.on_approval_completed(context, request, decision)
+            return self._permission_hook.denied_reason(context, decision)
+        except Exception as exc:
+            return f"Permission check failed: {type(exc).__name__}: {exc}"
 
     async def _dispatch(
         self,
@@ -192,24 +201,16 @@ class ToolExecutor:
             duration_ms=_duration_ms(started_at),
         )
 
-    def _emit(
+    async def _complete(
         self,
-        tool_call: ToolCall,
-        permission: ToolPermission,
+        context: ToolExecutionContext,
         result: ToolResult,
-        started_iso: str,
-    ) -> None:
-        record = ToolExecutionRecord(
-            tool_call_id=result.tool_call_id,
-            tool_name=result.tool_name,
-            permission=permission,
-            started_at=started_iso,
-            duration_ms=result.duration_ms,
-            success=result.success,
-            output=result.output,
-            error=result.error,
-        )
-        self.logger.record(record)
+        hook_runner: ToolHookRunner,
+    ) -> ToolResult:
+        """发送完成阶段并保持原始工具结果不受观察者影响。"""
+
+        await hook_runner.after_execute(context, result)
+        return result
 
 
 def _parse_arguments(arguments: dict[str, Any] | str) -> dict[str, Any]:
@@ -247,17 +248,3 @@ def _truncate(value: str, limit: int) -> str:
 
 def _duration_ms(started_at: float) -> float:
     return max(0.0, (perf_counter() - started_at) * 1000)
-
-
-async def _notify_approval(
-    callback: ApprovalCallback | None,
-    request: ApprovalRequest,
-    decision: ApprovalDecision | None,
-) -> None:
-    if callback is None:
-        return
-    try:
-        await callback(request, decision)
-    except Exception:
-        # 审批观察者故障不能改变工具的授权结果。
-        return

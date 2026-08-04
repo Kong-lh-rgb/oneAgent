@@ -14,7 +14,9 @@ from uuid import uuid4
 
 import structlog
 
-from app.models.types import ToolPermission
+from app.models.types import ToolPermission, ToolResult
+
+from .hooks import ToolExecutionContext, ToolHook
 
 
 def _now_iso() -> str:
@@ -129,8 +131,38 @@ class StructLogExecutionLogger(ToolExecutionLogger):
             )
 
 
+class ObservabilityHook(ToolHook):
+    """在工具执行结束后写入统一执行记录。"""
+
+    def __init__(self, logger: ToolExecutionLogger) -> None:
+        self._logger = logger
+
+    async def after_execute(
+        self,
+        context: ToolExecutionContext,
+        result: ToolResult,
+    ) -> None:
+        permission = (
+            context.tool_definition.permission
+            if context.tool_definition is not None
+            else ToolPermission.ALLOWED
+        )
+        record = ToolExecutionRecord(
+            tool_call_id=result.tool_call_id,
+            tool_name=result.tool_name,
+            permission=permission,
+            started_at=str(context.metadata["started_at"]),
+            duration_ms=result.duration_ms,
+            success=result.success,
+            output=result.output,
+            error=result.error,
+        )
+        self._logger.record(record)
+
+
 __all__ = [
     "InMemoryExecutionLogger",
+    "ObservabilityHook",
     "StructLogExecutionLogger",
     "ToolExecutionLogger",
     "ToolExecutionRecord",

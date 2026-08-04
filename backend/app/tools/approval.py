@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -43,12 +42,6 @@ class ApprovalRequest:
             f"参数: {serialized}",
         ]
         return "\n".join(lines)
-
-
-ApprovalCallback = Callable[
-    [ApprovalRequest, ApprovalDecision | None],
-    Awaitable[None],
-]
 
 
 class ApprovalGate(ABC):
@@ -97,7 +90,6 @@ __all__ = [
     "ApprovalDecision",
     "ApprovalGate",
     "ApprovalRequest",
-    "ApprovalCallback",
     "AutoApproveGate",
     "ConsoleApprovalGate",
     "DenyAllGate",

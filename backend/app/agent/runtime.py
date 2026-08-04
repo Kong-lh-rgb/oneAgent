@@ -19,13 +19,9 @@ from app.models.types import (
     ToolCall,
     ToolResult,
 )
-from app.tools.approval import (
-    ApprovalCallback,
-    ApprovalDecision,
-    ApprovalGate,
-    ApprovalRequest,
-)
+from app.tools.approval import ApprovalGate
 from app.tools.executor import ToolExecutor
+from app.tools.hooks import ToolExecutionContext, ToolHook
 from app.tools.observability import ToolExecutionRecord
 from app.tools.registry import ToolRegistry
 
@@ -49,6 +45,7 @@ from .result import (
     ToolCallRecord,
     ToolRound,
 )
+from .tool_hooks import AgentEventHook
 
 
 class AgentRuntime:
@@ -111,6 +108,7 @@ class AgentRuntime:
             run_id=run_id,
             conversation_id=conversation_id,
         )
+        tool_event_hook = AgentEventHook(emitter)
         user_message = Message(role=MessageRole.USER, content=user_input)
         messages = [*history, user_message]
         previous_signature: str | None = None
@@ -240,37 +238,15 @@ class AgentRuntime:
                     )
                     return result
 
-                await emitter.emit(
-                    AgentEventType.TOOL_STARTED,
-                    step=step,
-                    tool_call=tool_call,
-                )
-
-                async def approval_callback(
-                    request: ApprovalRequest,
-                    decision: ApprovalDecision | None,
-                ) -> None:
-                    event_type = (
-                        AgentEventType.TOOL_APPROVAL_REQUIRED
-                        if decision is None
-                        else AgentEventType.TOOL_APPROVAL_COMPLETED
-                    )
-                    await emitter.emit(
-                        event_type,
-                        step=step,
-                        tool_call=tool_call,
-                        approval_decision=decision,
-                    )
-
                 result = await self._execute_tool(
                     tool_call,
-                    approval_callback=approval_callback,
-                )
-                await emitter.emit(
-                    AgentEventType.TOOL_COMPLETED,
-                    step=step,
-                    tool_call=tool_call,
-                    tool_result=result,
+                    context=ToolExecutionContext(
+                        run_id=run_id,
+                        conversation_id=conversation_id,
+                        step=step,
+                        tool_call=tool_call,
+                    ),
+                    hook=tool_event_hook,
                 )
                 record = ToolCallRecord(
                     round_index=len(tool_rounds),
@@ -359,21 +335,25 @@ class AgentRuntime:
         self,
         tool_call: ToolCall,
         *,
-        approval_callback: ApprovalCallback | None = None,
+        context: ToolExecutionContext,
+        hook: ToolHook,
     ) -> ToolResult:
         try:
             return await self._tool_executor.execute(
                 tool_call,
-                approval_callback=approval_callback,
+                context=context,
+                hooks=(hook,),
             )
         except Exception as exc:
-            return ToolResult(
+            result = ToolResult(
                 tool_call_id=tool_call.id,
                 tool_name=tool_call.name,
                 success=False,
                 error=f"{type(exc).__name__}: {exc}",
                 duration_ms=0.0,
             )
+            await hook.after_execute(context, result)
+            return result
 
     @staticmethod
     def _tool_result_message(result: ToolResult) -> Message:

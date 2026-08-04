@@ -77,6 +77,18 @@
 - [x] 添加审批批准/拒绝、Trace 重启恢复、完成/失败、幂等和 CLI 落库测试
 - [x] 全量验证：`pytest` 71 个用例全部通过，`ruff` 与 CLI 参数检查通过
 
+### 完成：工具执行生命周期 Hooks 重构
+- [x] 新增 `ToolExecutionContext`，统一传递运行 ID、会话 ID、步数、工具定义和参数
+- [x] 新增 `ToolHook` 与故障隔离的 `ToolHookRunner`，统一工具执行前后和审批生命周期
+- [x] 新增不可绕过的 `PermissionHook`，继续保持默认拒绝、禁止工具拦截和人工审批语义
+- [x] 新增 `ObservabilityHook`，替代 `ToolExecutor` 内部散落的执行记录逻辑
+- [x] 新增 `AgentEventHook`，统一产生工具开始、审批和工具完成事件
+- [x] 精简 `AgentRuntime`，移除工具事件直发、内嵌审批回调和审批细节
+- [x] 删除 `ApprovalCallback`，避免 Callback、Logger、AgentEvent 三套生命周期机制并存
+- [x] 保持 Provider、Conversation、Trace、CLI 和 `AgentResult` 公共行为不变
+- [x] 新增 Hook 上下文、执行顺序、故障隔离、权限不可绕过和审批失败关闭测试
+- [x] 全量验证：`pytest` 77 个用例全部通过，`ruff` 无告警
+
 ## 2026-08-03
 
 ### 完成
