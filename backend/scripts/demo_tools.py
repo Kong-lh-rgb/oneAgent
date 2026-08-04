@@ -29,26 +29,9 @@ from app.models.registry import ModelAdapterRegistry
 from app.models.types import ToolCall
 from app.tools import (
     ConsoleApprovalGate,
-    HttpRequestTool,
-    ListFilesTool,
-    ReadFileTool,
-    ShellCommandTool,
     ToolExecutor,
-    ToolRegistry,
-    WebSearchTool,
-    WriteFileTool,
+    build_builtin_tool_registry,
 )
-
-
-def build_registry() -> ToolRegistry:
-    registry = ToolRegistry()
-    registry.register(ListFilesTool())
-    registry.register(ReadFileTool())
-    registry.register(WriteFileTool())
-    registry.register(ShellCommandTool())
-    registry.register(HttpRequestTool())
-    registry.register(WebSearchTool())
-    return registry
 
 
 def _print_result(result: Any) -> None:
@@ -64,7 +47,7 @@ def _print_result(result: Any) -> None:
 
 
 async def _demo_direct() -> None:
-    registry = build_registry()
+    registry = build_builtin_tool_registry()
     executor = ToolExecutor(registry, approval_gate=ConsoleApprovalGate())
 
     print("===== 1. 免审批工具：write_file / read_file / list_files =====")
@@ -135,7 +118,7 @@ async def _demo_agent(query: str, provider: str | None) -> None:
     model_registry = ModelAdapterRegistry(settings)
     runtime = AgentRuntime(
         model_registry,
-        build_registry(),
+        build_builtin_tool_registry(),
         provider=provider,
         approval_gate=ConsoleApprovalGate(),
     )

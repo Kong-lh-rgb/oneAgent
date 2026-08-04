@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-08-04
+
+### 完成：AgentRuntime 返回完整运行过程
+- [x] 新增 `app/agent/result.py`，定义统一的 `AgentResult` 返回结构
+- [x] `AgentRuntime.run()` 由返回单条 `Message` 调整为返回 `AgentResult`
+- [x] `AgentResult.messages` 返回传入历史与本轮新增消息组成的完整消息历史
+- [x] 返回最终消息、模型执行步数和停止原因
+- [x] 按模型轮次记录工具调用，并同时提供扁平化工具调用记录
+- [x] 汇总多轮模型请求的输入、输出和总 token 用量
+- [x] 模型错误、重复工具调用和最大步数停止均返回结构化错误
+- [x] 保留 `content`、`role` 便捷属性，兼容现有结果读取方式
+- [x] 扩展 FakeModel 离线测试，覆盖正常完成、工具失败、模型错误、重复调用和最大步数
+- [x] 修正 `AgentRuntime.tool_records` 注释，明确其返回执行器累计观测记录
+- [x] 将 `app.models.chat` CLI 接入真实 `AgentRuntime`，使用 `result.messages` 维护多轮历史
+- [x] CLI 注册全部 6 个内置工具，危险工具通过 `ConsoleApprovalGate` 人工审批
+- [x] 提取公共 `build_builtin_tool_registry()`，供 CLI 与演示脚本复用
+- [x] AgentRuntime 支持透传 `max_output_tokens`，CLI 新增 `--max-steps`
+- [x] 全量验证：`pytest` 47 个用例全部通过，`ruff` 无告警
+
 ## 2026-08-03
 
 ### 完成

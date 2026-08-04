@@ -6,6 +6,7 @@ from collections.abc import Sequence
 import pytest
 from pydantic import SecretStr
 
+from app.agent.result import AgentStopReason
 from app.agent.runtime import AgentRuntime
 from app.models.adapter import ModelAdapter
 from app.models.config import ModelSettings, ProviderConfig
@@ -16,6 +17,7 @@ from app.models.types import (
     MessageRole,
     ModelRequest,
     ModelResponse,
+    ModelUsage,
     ToolCall,
     ToolDefinition,
 )
@@ -69,6 +71,7 @@ def model_response(
     *,
     content: str | None = None,
     tool_calls: tuple[ToolCall, ...] = (),
+    usage: ModelUsage | None = None,
 ) -> ModelResponse:
     return ModelResponse(
         id="fake-response",
@@ -79,6 +82,7 @@ def model_response(
             content=content,
             tool_calls=tool_calls,
         ),
+        usage=usage or ModelUsage(),
     )
 
 
@@ -113,7 +117,12 @@ async def test_runtime_reads_then_writes_and_returns_final_text(tmp_path) -> Non
                         name="read_file",
                         arguments={"path": "input.txt"},
                     ),
-                )
+                ),
+                usage=ModelUsage(
+                    input_tokens=10,
+                    output_tokens=2,
+                    total_tokens=12,
+                ),
             ),
             model_response(
                 tool_calls=(
@@ -125,24 +134,76 @@ async def test_runtime_reads_then_writes_and_returns_final_text(tmp_path) -> Non
                             "content": "# 摘要\nOneAgent 能调用本地文件工具。",
                         },
                     ),
-                )
+                ),
+                usage=ModelUsage(
+                    input_tokens=20,
+                    output_tokens=3,
+                    total_tokens=23,
+                ),
             ),
-            model_response(content="摘要已写入 output.md"),
+            model_response(
+                content="摘要已写入 output.md",
+                usage=ModelUsage(
+                    input_tokens=30,
+                    output_tokens=4,
+                    total_tokens=34,
+                ),
+            ),
         ]
     )
     tools = ToolRegistry()
     tools.register(ReadFileTool(tmp_path))
     tools.register(WriteFileTool(tmp_path))
+    initial_history = (
+        Message(role=MessageRole.SYSTEM, content="你是本地文件助理。"),
+    )
 
-    result = await AgentRuntime(registry, tools, provider="fake").run(
-        "读取 input.txt，生成摘要并写入 output.md"
+    result = await AgentRuntime(
+        registry,
+        tools,
+        provider="fake",
+        max_output_tokens=256,
+    ).run(
+        "读取 input.txt，生成摘要并写入 output.md",
+        history=initial_history,
     )
 
     assert result.content == "摘要已写入 output.md"
+    assert result.ok is True
+    assert result.steps == 3
+    assert result.stop_reason is AgentStopReason.FINAL_ANSWER
+    assert result.error is None
+    assert result.messages[0] == initial_history[0]
+    assert result.messages[-1] == result.final_message
+    assert [message.role for message in result.messages] == [
+        MessageRole.SYSTEM,
+        MessageRole.USER,
+        MessageRole.ASSISTANT,
+        MessageRole.TOOL,
+        MessageRole.ASSISTANT,
+        MessageRole.TOOL,
+        MessageRole.ASSISTANT,
+    ]
+    assert result.usage == ModelUsage(
+        input_tokens=60,
+        output_tokens=9,
+        total_tokens=69,
+    )
+    assert len(result.tool_rounds) == 2
+    assert len(result.tool_calls) == 2
+    assert [record.tool_call.name for record in result.tool_calls] == [
+        "read_file",
+        "write_file",
+    ]
+    assert result.tool_rounds[0].round_index == 0
+    assert result.tool_rounds[0].records == (result.tool_calls[0],)
+    assert result.tool_rounds[1].round_index == 1
+    assert result.tool_rounds[1].records == (result.tool_calls[1],)
     assert (tmp_path / "output.md").read_text(encoding="utf-8") == (
         "# 摘要\nOneAgent 能调用本地文件工具。"
     )
     assert len(adapter.requests) == 3
+    assert all(request.max_output_tokens == 256 for request in adapter.requests)
     assert {tool.name for tool in adapter.requests[0].tools} == {
         "read_file",
         "write_file",
@@ -171,6 +232,13 @@ async def test_model_error_returns_assistant_message() -> None:
     ).run("hello")
 
     assert result.role == MessageRole.ASSISTANT
+    assert result.ok is False
+    assert result.steps == 1
+    assert result.stop_reason is AgentStopReason.MODEL_ERROR
+    assert result.error is not None
+    assert result.error.type == "ModelInvocationError"
+    assert result.messages[-1] == result.final_message
+    assert result.usage == ModelUsage()
     assert "model invocation failed" in (result.content or "")
     assert "model unavailable" in (result.content or "")
 
@@ -199,6 +267,13 @@ async def test_tool_error_is_returned_to_model() -> None:
     ).run("调用不存在的工具")
 
     assert result.content == "工具不可用，已停止该操作"
+    assert result.stop_reason is AgentStopReason.FINAL_ANSWER
+    assert result.error is None
+    assert result.messages[-1] == result.final_message
+    assert len(result.tool_rounds) == 1
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].result.success is False
+    assert result.tool_calls[0].result.tool_name == "missing_tool"
     tool_result = json.loads(adapter.requests[1].messages[-1].content or "{}")
     assert tool_result["success"] is False
     assert "not found" in tool_result["error"].lower()
@@ -226,6 +301,14 @@ async def test_three_identical_tool_calls_stop_before_third_execution() -> None:
     result = await AgentRuntime(registry, tools, provider="fake").run("count")
 
     assert counting_tool.executions == 2
+    assert result.ok is False
+    assert result.steps == 3
+    assert result.stop_reason is AgentStopReason.REPEATED_TOOL_CALL
+    assert result.error is not None
+    assert result.error.type == "RepeatedToolCallError"
+    assert result.messages[-1] == result.final_message
+    assert len(result.tool_rounds) == 2
+    assert len(result.tool_calls) == 2
     assert "3 consecutive times" in (result.content or "")
 
 
@@ -256,4 +339,12 @@ async def test_max_steps_stops_the_loop() -> None:
     ).run("keep counting")
 
     assert len(adapter.requests) == 2
+    assert result.ok is False
+    assert result.steps == 2
+    assert result.stop_reason is AgentStopReason.MAX_STEPS
+    assert result.error is not None
+    assert result.error.type == "MaxStepsExceededError"
+    assert result.messages[-1] == result.final_message
+    assert len(result.tool_rounds) == 2
+    assert len(result.tool_calls) == 2
     assert "maximum step limit (2) reached" in (result.content or "")

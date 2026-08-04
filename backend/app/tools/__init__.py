@@ -16,6 +16,7 @@ from .builtin import (
     ShellCommandTool,
     WebSearchTool,
     WriteFileTool,
+    build_builtin_tool_registry,
 )
 from .executor import MAX_TOOL_OUTPUT_CHARS, ToolExecutor
 from .observability import (
@@ -47,4 +48,5 @@ __all__ = [
     "ToolRegistry",
     "WebSearchTool",
     "WriteFileTool",
+    "build_builtin_tool_registry",
 ]

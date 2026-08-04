@@ -12,9 +12,12 @@ import argparse
 import asyncio
 import sys
 
+from app.agent.runtime import AgentRuntime
+from app.tools import ConsoleApprovalGate, build_builtin_tool_registry
+
 from .config import ModelSettings
 from .registry import ModelAdapterRegistry
-from .types import Message, MessageRole, ModelProvider, ModelRequest
+from .types import Message, MessageRole, ModelProvider
 
 
 def _select_provider(
@@ -51,38 +54,30 @@ def _initial_history(system_prompt: str | None) -> list[Message]:
 
 async def _send_message(
     *,
-    registry: ModelAdapterRegistry,
+    runtime: AgentRuntime,
     provider: ModelProvider,
     history: list[Message],
     content: str,
-    model: str | None,
-    max_output_tokens: int,
+    model: str,
 ) -> bool:
-    user_message = Message(role=MessageRole.USER, content=content)
-    history.append(user_message)
     print("OneAgent 正在思考...", flush=True)
 
-    try:
-        response = await registry.get(provider).complete(
-            ModelRequest(
-                messages=tuple(history),
-                model=model,
-                max_output_tokens=max_output_tokens,
-            )
-        )
-    except Exception as exc:
-        history.pop()
-        print(f"请求失败：{type(exc).__name__}: {exc}", file=sys.stderr)
-        return False
-
-    history.append(response.message)
-    answer = response.message.content or "<模型未返回文本>"
+    result = await runtime.run(content, history=history)
+    history[:] = result.messages
+    answer = result.content or "<模型未返回文本>"
     print(f"\nOneAgent> {answer.strip()}")
     print(
-        f"\n[{response.provider}/{response.model} · "
-        f"{response.usage.total_tokens} tokens]"
+        f"\n[{provider.value}/{model} · {result.steps} steps · "
+        f"{result.usage.total_tokens} tokens · {result.stop_reason.value}]"
     )
-    return True
+    if result.tool_calls:
+        tools = ", ".join(
+            f"{record.tool_call.name}"
+            f"({'成功' if record.result.success else '失败'})"
+            for record in result.tool_calls
+        )
+        print(f"[工具调用：{tools}]")
+    return result.ok
 
 
 async def _run(args: argparse.Namespace) -> int:
@@ -98,16 +93,24 @@ async def _run(args: argparse.Namespace) -> int:
     print(f"OneAgent Chat · provider={provider.value} · model={model}")
 
     registry = ModelAdapterRegistry(settings)
+    runtime = AgentRuntime(
+        registry,
+        build_builtin_tool_registry(),
+        provider=provider,
+        model=args.model,
+        max_steps=args.max_steps,
+        max_output_tokens=args.max_output_tokens,
+        approval_gate=ConsoleApprovalGate(),
+    )
     history = _initial_history(args.system)
     try:
         if args.message is not None:
             success = await _send_message(
-                registry=registry,
+                runtime=runtime,
                 provider=provider,
                 history=history,
                 content=args.message,
-                model=args.model,
-                max_output_tokens=args.max_output_tokens,
+                model=model,
             )
             return 0 if success else 1
 
@@ -133,12 +136,11 @@ async def _run(args: argparse.Namespace) -> int:
                 continue
 
             await _send_message(
-                registry=registry,
+                runtime=runtime,
                 provider=provider,
                 history=history,
                 content=content,
-                model=args.model,
-                max_output_tokens=args.max_output_tokens,
+                model=model,
             )
     finally:
         await registry.close()
@@ -169,9 +171,17 @@ def _parse_args() -> argparse.Namespace:
         default=1024,
         help="Maximum output tokens for each reply.",
     )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=10,
+        help="Maximum model/tool loop steps for each message.",
+    )
     args = parser.parse_args()
     if args.max_output_tokens <= 0:
         parser.error("--max-output-tokens must be greater than zero")
+    if args.max_steps <= 0:
+        parser.error("--max-steps must be greater than zero")
     return args
 
 
