@@ -10,6 +10,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.types import Message, ModelUsage, ToolCall, ToolResult
+from app.tools.approval import ApprovalDecision
 
 from .result import AgentError, AgentResult, AgentStopReason
 
@@ -23,6 +24,7 @@ class AgentEventType(StrEnum):
     TOOL_STARTED = "tool_started"
     TOOL_COMPLETED = "tool_completed"
     TOOL_APPROVAL_REQUIRED = "tool_approval_required"
+    TOOL_APPROVAL_COMPLETED = "tool_approval_completed"
     AGENT_COMPLETED = "agent_completed"
     AGENT_FAILED = "agent_failed"
 
@@ -48,6 +50,7 @@ class AgentEvent(BaseModel):
     stop_reason: AgentStopReason | None = None
     error: AgentError | None = None
     result: AgentResult | None = None
+    approval_decision: ApprovalDecision | None = None
 
     @field_validator("run_id")
     @classmethod
@@ -101,10 +104,26 @@ class InMemoryEventHandler(AgentEventHandler):
         self._events.clear()
 
 
+class CompositeEventHandler(AgentEventHandler):
+    """把同一个事件依次发送给多个相互隔离的处理器。"""
+
+    def __init__(self, *handlers: AgentEventHandler) -> None:
+        self._handlers = handlers
+
+    async def emit(self, event: AgentEvent) -> None:
+        for handler in self._handlers:
+            try:
+                await handler.emit(event)
+            except Exception:
+                # 单个观察者故障不影响其他事件消费者。
+                continue
+
+
 __all__ = [
     "AgentEvent",
     "AgentEventHandler",
     "AgentEventType",
+    "CompositeEventHandler",
     "InMemoryEventHandler",
     "NullEventHandler",
 ]

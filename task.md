@@ -64,6 +64,19 @@
 - [x] 添加事件流顺序、最终结果传递、CLI 进度和取消行为离线测试
 - [x] 全量验证：`pytest` 65 个用例全部通过，`ruff` 与 CLI 参数检查通过
 
+### 完成：审批事件与 SQLite Trace
+- [x] ToolExecutor 支持运行期审批回调，不改变现有 ApprovalGate 决策逻辑
+- [x] Runtime 发射 `TOOL_APPROVAL_REQUIRED` 与 `TOOL_APPROVAL_COMPLETED`
+- [x] 审批完成事件记录 approved / denied，观察者异常不影响授权结果
+- [x] 新增 `app/trace/`，使用 SQLite 保存 Agent Run 摘要和完整事件
+- [x] Trace 与 Conversation 共用 `oneagent.db`，但使用独立数据表
+- [x] Trace 支持 Run 列表、完整/短 ID 查询、事件恢复、按会话过滤和删除
+- [x] 事件写入幂等，完成状态不会因重复旧事件回退为 running
+- [x] CLI 每轮自动持久化 Trace，新增 `/runs` 与 `/trace <run_id>`
+- [x] 修复组合事件处理器接入后流结束信号发送目标错误导致的等待问题
+- [x] 添加审批批准/拒绝、Trace 重启恢复、完成/失败、幂等和 CLI 落库测试
+- [x] 全量验证：`pytest` 71 个用例全部通过，`ruff` 与 CLI 参数检查通过
+
 ## 2026-08-03
 
 ### 完成

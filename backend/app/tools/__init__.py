@@ -1,6 +1,7 @@
 """本地异步工具系统。"""
 
 from .approval import (
+    ApprovalCallback,
     ApprovalDecision,
     ApprovalGate,
     ApprovalRequest,
@@ -28,6 +29,7 @@ from .observability import (
 from .registry import ToolRegistry
 
 __all__ = [
+    "ApprovalCallback",
     "ApprovalDecision",
     "ApprovalGate",
     "ApprovalRequest",

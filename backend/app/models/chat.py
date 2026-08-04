@@ -22,6 +22,11 @@ from app.conversation import (
     SQLiteConversationStore,
 )
 from app.tools import ConsoleApprovalGate, build_builtin_tool_registry
+from app.trace import (
+    AgentRunTrace,
+    SQLiteTraceEventHandler,
+    SQLiteTraceStore,
+)
 
 from .config import ModelSettings
 from .registry import ModelAdapterRegistry
@@ -64,6 +69,7 @@ async def _send_message(
     *,
     runtime: AgentRuntime,
     conversation_store: SQLiteConversationStore,
+    trace_handler: SQLiteTraceEventHandler,
     conversation: Conversation,
     provider: ModelProvider,
     history: list[Message],
@@ -77,6 +83,7 @@ async def _send_message(
         content,
         history=history,
         conversation_id=conversation.id,
+        event_handler=trace_handler,
     ):
         _print_agent_event(event)
         if event.result is not None:
@@ -135,6 +142,13 @@ def _print_agent_event(event: AgentEvent) -> None:
         )
     elif event.type is AgentEventType.TOOL_APPROVAL_REQUIRED and event.tool_call:
         print(f"{prefix} 工具等待人工审批：{event.tool_call.name}")
+    elif event.type is AgentEventType.TOOL_APPROVAL_COMPLETED and event.tool_call:
+        decision = (
+            event.approval_decision.value
+            if event.approval_decision is not None
+            else "unknown"
+        )
+        print(f"{prefix} 工具审批完成：{event.tool_call.name} · {decision}")
     elif event.type is AgentEventType.AGENT_COMPLETED:
         print(f"{prefix} Agent 执行完成")
     elif event.type is AgentEventType.AGENT_FAILED:
@@ -190,6 +204,45 @@ def _print_conversations(
         )
 
 
+def _print_runs(runs: tuple[AgentRunTrace, ...], current_conversation_id: str) -> None:
+    """显示最近的 Agent Run 摘要。"""
+
+    if not runs:
+        print("暂无运行记录。")
+        return
+    for run in runs:
+        marker = "*" if run.conversation_id == current_conversation_id else " "
+        started_at = run.started_at.astimezone().strftime("%m-%d %H:%M:%S")
+        reason = run.stop_reason.value if run.stop_reason else "-"
+        print(
+            f"{marker} {run.run_id[:8]}  {started_at}  {run.status.value:<9} "
+            f"steps={run.steps} tokens={run.total_tokens} reason={reason}"
+        )
+
+
+def _print_trace(events: tuple[AgentEvent, ...]) -> None:
+    """显示一次 Run 的完整事件时间线。"""
+
+    for event in events:
+        event_time = event.event_time.astimezone().strftime("%H:%M:%S.%f")[:-3]
+        details: list[str] = []
+        if event.step is not None:
+            details.append(f"step={event.step}")
+        if event.tool_call is not None:
+            details.append(f"tool={event.tool_call.name}")
+        if event.approval_decision is not None:
+            details.append(f"decision={event.approval_decision.value}")
+        if event.tool_result is not None:
+            details.append(
+                f"success={'true' if event.tool_result.success else 'false'}"
+            )
+        detail_text = f"  {' '.join(details)}" if details else ""
+        print(
+            f"{event.sequence:03d}  {event_time}  "
+            f"{event.type.value}{detail_text}"
+        )
+
+
 async def _run(args: argparse.Namespace) -> int:
     settings = ModelSettings()
     try:
@@ -204,6 +257,9 @@ async def _run(args: argparse.Namespace) -> int:
 
     conversation_store = SQLiteConversationStore(args.database)
     await conversation_store.initialize()
+    trace_store = SQLiteTraceStore(args.database)
+    await trace_store.initialize()
+    trace_handler = SQLiteTraceEventHandler(trace_store)
     try:
         conversation, history, resumed = await _load_or_create_conversation(
             conversation_store,
@@ -235,6 +291,7 @@ async def _run(args: argparse.Namespace) -> int:
             success, conversation = await _send_message(
                 runtime=runtime,
                 conversation_store=conversation_store,
+                trace_handler=trace_handler,
                 conversation=conversation,
                 provider=provider,
                 history=history,
@@ -245,7 +302,8 @@ async def _run(args: argparse.Namespace) -> int:
 
         print(
             "命令：/new 新建会话，/sessions 查看会话，/use <id> 切换会话，"
-            "/clear 清空当前会话，/help 查看帮助，/exit 退出"
+            "/runs 查看运行，/trace <id> 查看轨迹，/clear 清空当前会话，"
+            "/help 查看帮助，/exit 退出"
         )
         while True:
             try:
@@ -275,6 +333,31 @@ async def _run(args: argparse.Namespace) -> int:
                     await conversation_store.list(),
                     conversation.id,
                 )
+                continue
+            if content == "/runs":
+                _print_runs(
+                    await trace_store.list_runs(),
+                    conversation.id,
+                )
+                continue
+            if content == "/trace" or content.startswith("/trace "):
+                identifier = content.removeprefix("/trace").strip()
+                if not identifier:
+                    print("用法：/trace <Run ID>")
+                    continue
+                try:
+                    run = await trace_store.resolve(identifier)
+                except ValueError as exc:
+                    print(exc)
+                    continue
+                if run is None:
+                    print(f"找不到 Run：{identifier}")
+                    continue
+                print(
+                    f"Run {run.run_id} · {run.status.value} · "
+                    f"{run.event_count} 个事件"
+                )
+                _print_trace(await trace_store.load_events(run.run_id))
                 continue
             if content == "/use" or content.startswith("/use "):
                 identifier = content.removeprefix("/use").strip()
@@ -311,6 +394,8 @@ async def _run(args: argparse.Namespace) -> int:
                     "/new [标题] 新建会话\n"
                     "/sessions 查看最近会话\n"
                     "/use <会话ID> 切换会话\n"
+                    "/runs 查看最近 Agent Run\n"
+                    "/trace <Run ID> 查看完整事件轨迹\n"
                     "/clear 清空当前会话\n"
                     "/exit 退出聊天"
                 )
@@ -319,6 +404,7 @@ async def _run(args: argparse.Namespace) -> int:
             _, conversation = await _send_message(
                 runtime=runtime,
                 conversation_store=conversation_store,
+                trace_handler=trace_handler,
                 conversation=conversation,
                 provider=provider,
                 history=history,

@@ -27,7 +27,9 @@ from app.models.types import (
     ModelUsage,
     ToolCall,
     ToolDefinition,
+    ToolPermission,
 )
+from app.tools.approval import ApprovalDecision, AutoApproveGate, DenyAllGate
 from app.tools.base import BaseTool
 from app.tools.builtin.read_file import ReadFileTool
 from app.tools.builtin.write_file import WriteFileTool
@@ -72,6 +74,19 @@ class CountingTool(BaseTool):
     async def execute(self, arguments: dict[str, object]) -> str:
         self.executions += 1
         return str(arguments["value"])
+
+
+class ApprovalCountingTool(CountingTool):
+    definition = ToolDefinition(
+        name="approval_count",
+        description="Count after approval",
+        parameters={
+            "type": "object",
+            "properties": {"value": {"type": "integer"}},
+            "required": ["value"],
+        },
+        permission=ToolPermission.HUMAN_APPROVAL,
+    )
 
 
 class FailingEventHandler(AgentEventHandler):
@@ -438,12 +453,14 @@ async def test_event_handler_failure_does_not_stop_runtime() -> None:
 async def test_run_stream_returns_events_and_final_result() -> None:
     registry, _ = fake_registry([model_response(content="流式完成")])
     runtime = AgentRuntime(registry, ToolRegistry(), provider="fake")
+    observer = InMemoryEventHandler()
 
     events = [
         event
         async for event in runtime.run_stream(
             "hello",
             conversation_id="conversation-1",
+            event_handler=observer,
         )
     ]
 
@@ -458,6 +475,92 @@ async def test_run_stream_returns_events_and_final_result() -> None:
     assert final_result.content == "流式完成"
     assert final_result.run_id == events[-1].run_id
     assert {event.conversation_id for event in events} == {"conversation-1"}
+    assert observer.events == tuple(events)
+
+
+@pytest.mark.asyncio
+async def test_runtime_emits_approval_required_and_completed_events() -> None:
+    registry, _ = fake_registry(
+        [
+            model_response(
+                tool_calls=(
+                    ToolCall(
+                        id="approval-1",
+                        name="approval_count",
+                        arguments={"value": 1},
+                    ),
+                )
+            ),
+            model_response(content="审批工具执行完成"),
+        ]
+    )
+    tool = ApprovalCountingTool()
+    tools = ToolRegistry()
+    tools.register(tool)
+    handler = InMemoryEventHandler()
+
+    result = await AgentRuntime(
+        registry,
+        tools,
+        provider="fake",
+        approval_gate=AutoApproveGate(),
+    ).run("执行审批工具", event_handler=handler)
+
+    approval_events = [
+        event
+        for event in handler.events
+        if event.type
+        in {
+            AgentEventType.TOOL_APPROVAL_REQUIRED,
+            AgentEventType.TOOL_APPROVAL_COMPLETED,
+        }
+    ]
+    assert [event.type for event in approval_events] == [
+        AgentEventType.TOOL_APPROVAL_REQUIRED,
+        AgentEventType.TOOL_APPROVAL_COMPLETED,
+    ]
+    assert approval_events[0].approval_decision is None
+    assert approval_events[1].approval_decision is ApprovalDecision.APPROVED
+    assert approval_events[0].tool_call == result.tool_calls[0].tool_call
+    assert tool.executions == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_records_denied_approval_without_executing_tool() -> None:
+    registry, _ = fake_registry(
+        [
+            model_response(
+                tool_calls=(
+                    ToolCall(
+                        id="approval-1",
+                        name="approval_count",
+                        arguments={"value": 1},
+                    ),
+                )
+            ),
+            model_response(content="审批被拒绝"),
+        ]
+    )
+    tool = ApprovalCountingTool()
+    tools = ToolRegistry()
+    tools.register(tool)
+    handler = InMemoryEventHandler()
+
+    result = await AgentRuntime(
+        registry,
+        tools,
+        provider="fake",
+        approval_gate=DenyAllGate(),
+    ).run("执行审批工具", event_handler=handler)
+
+    completed = next(
+        event
+        for event in handler.events
+        if event.type is AgentEventType.TOOL_APPROVAL_COMPLETED
+    )
+    assert completed.approval_decision is ApprovalDecision.DENIED
+    assert result.tool_calls[0].result.success is False
+    assert tool.executions == 0
 
 
 @pytest.mark.asyncio

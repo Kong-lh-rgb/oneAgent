@@ -4,11 +4,12 @@ from collections.abc import Sequence
 
 import pytest
 
-from app.agent.events import AgentEvent, AgentEventType
+from app.agent.events import AgentEvent, AgentEventHandler, AgentEventType
 from app.agent.result import AgentResult, AgentStopReason
 from app.conversation import SQLiteConversationStore
 from app.models.chat import _load_or_create_conversation, _send_message
 from app.models.types import Message, MessageRole, ModelProvider
+from app.trace import SQLiteTraceEventHandler, SQLiteTraceStore
 
 
 class StubRuntime:
@@ -35,24 +36,33 @@ class StubRuntime:
         *,
         history: Sequence[Message] = (),
         conversation_id: str | None = None,
+        event_handler: AgentEventHandler | None = None,
     ):
         result = await self.run(
             user_input,
             history=history,
             conversation_id=conversation_id,
         )
-        yield AgentEvent(
-            run_id=result.run_id,
-            conversation_id=conversation_id,
-            type=AgentEventType.AGENT_STARTED,
+        events = (
+            AgentEvent(
+                run_id=result.run_id,
+                conversation_id=conversation_id,
+                type=AgentEventType.AGENT_STARTED,
+            ),
+            AgentEvent(
+                run_id=result.run_id,
+                conversation_id=conversation_id,
+                sequence=1,
+                type=AgentEventType.AGENT_COMPLETED,
+                stop_reason=result.stop_reason,
+                usage=result.usage,
+                result=result,
+            ),
         )
-        yield AgentEvent(
-            run_id=result.run_id,
-            conversation_id=conversation_id,
-            sequence=1,
-            type=AgentEventType.AGENT_COMPLETED,
-            result=result,
-        )
+        for event in events:
+            if event_handler is not None:
+                await event_handler.emit(event)
+            yield event
 
 
 @pytest.mark.asyncio
@@ -121,6 +131,8 @@ async def test_send_message_persists_runtime_history_and_generates_title(
 ) -> None:
     store = SQLiteConversationStore(tmp_path / "oneagent.db")
     await store.initialize()
+    trace_store = SQLiteTraceStore(tmp_path / "oneagent.db")
+    await trace_store.initialize()
     conversation = await store.create(
         messages=(Message(role=MessageRole.SYSTEM, content="系统提示"),)
     )
@@ -129,6 +141,7 @@ async def test_send_message_persists_runtime_history_and_generates_title(
     success, updated = await _send_message(
         runtime=StubRuntime(),  # type: ignore[arg-type]
         conversation_store=store,
+        trace_handler=SQLiteTraceEventHandler(trace_store),
         conversation=conversation,
         provider=ModelProvider.OPENAI,
         history=history,
@@ -148,3 +161,8 @@ async def test_send_message_persists_runtime_history_and_generates_title(
     assert "Agent 开始执行" in output
     assert "Agent 执行完成" in output
     assert "OneAgent> 已完成" in output
+    runs = await trace_store.list_runs()
+    assert len(runs) == 1
+    assert runs[0].run_id == "stub-run"
+    assert runs[0].conversation_id == conversation.id
+    assert runs[0].event_count == 2

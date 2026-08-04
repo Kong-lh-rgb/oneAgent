@@ -15,7 +15,13 @@ from typing import Any
 
 from app.models.types import ToolCall, ToolPermission, ToolResult
 
-from .approval import ApprovalDecision, ApprovalGate, ApprovalRequest, DenyAllGate
+from .approval import (
+    ApprovalCallback,
+    ApprovalDecision,
+    ApprovalGate,
+    ApprovalRequest,
+    DenyAllGate,
+)
 from .base import BaseTool
 from .observability import (
     InMemoryExecutionLogger,
@@ -57,7 +63,12 @@ class ToolExecutor:
             return self.logger.records
         return ()
 
-    async def execute(self, tool_call: ToolCall) -> ToolResult:
+    async def execute(
+        self,
+        tool_call: ToolCall,
+        *,
+        approval_callback: ApprovalCallback | None = None,
+    ) -> ToolResult:
         started_at = perf_counter()
         started_iso = _now_iso()
 
@@ -72,7 +83,11 @@ class ToolExecutor:
             return result
 
         permission = tool.definition.permission
-        denied_reason = await self._authorize(tool, tool_call)
+        denied_reason = await self._authorize(
+            tool,
+            tool_call,
+            approval_callback=approval_callback,
+        )
         if denied_reason is not None:
             result = self._failure(tool_call, denied_reason, started_at)
             self._emit(tool_call, permission, result, started_iso)
@@ -88,7 +103,13 @@ class ToolExecutor:
         except KeyError:
             return None
 
-    async def _authorize(self, tool: BaseTool, tool_call: ToolCall) -> str | None:
+    async def _authorize(
+        self,
+        tool: BaseTool,
+        tool_call: ToolCall,
+        *,
+        approval_callback: ApprovalCallback | None,
+    ) -> str | None:
         """返回被拒绝的原因；允许执行时返回 None。"""
         permission = tool.definition.permission
         if permission is ToolPermission.FORBIDDEN:
@@ -100,7 +121,9 @@ class ToolExecutor:
                 arguments=_safe_arguments(tool_call.arguments),
                 description=tool.definition.description,
             )
+            await _notify_approval(approval_callback, request, None)
             decision = await self._approval_gate.request_approval(request)
+            await _notify_approval(approval_callback, request, decision)
             if decision is not ApprovalDecision.APPROVED:
                 return (
                     f"Tool '{tool_call.name}' execution was denied "
@@ -224,3 +247,17 @@ def _truncate(value: str, limit: int) -> str:
 
 def _duration_ms(started_at: float) -> float:
     return max(0.0, (perf_counter() - started_at) * 1000)
+
+
+async def _notify_approval(
+    callback: ApprovalCallback | None,
+    request: ApprovalRequest,
+    decision: ApprovalDecision | None,
+) -> None:
+    if callback is None:
+        return
+    try:
+        await callback(request, decision)
+    except Exception:
+        # 审批观察者故障不能改变工具的授权结果。
+        return

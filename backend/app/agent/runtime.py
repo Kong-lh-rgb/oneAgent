@@ -19,7 +19,12 @@ from app.models.types import (
     ToolCall,
     ToolResult,
 )
-from app.tools.approval import ApprovalGate
+from app.tools.approval import (
+    ApprovalCallback,
+    ApprovalDecision,
+    ApprovalGate,
+    ApprovalRequest,
+)
 from app.tools.executor import ToolExecutor
 from app.tools.observability import ToolExecutionRecord
 from app.tools.registry import ToolRegistry
@@ -34,6 +39,7 @@ from .events import (
     AgentEvent,
     AgentEventHandler,
     AgentEventType,
+    CompositeEventHandler,
     NullEventHandler,
 )
 from .result import (
@@ -239,7 +245,27 @@ class AgentRuntime:
                     step=step,
                     tool_call=tool_call,
                 )
-                result = await self._execute_tool(tool_call)
+
+                async def approval_callback(
+                    request: ApprovalRequest,
+                    decision: ApprovalDecision | None,
+                ) -> None:
+                    event_type = (
+                        AgentEventType.TOOL_APPROVAL_REQUIRED
+                        if decision is None
+                        else AgentEventType.TOOL_APPROVAL_COMPLETED
+                    )
+                    await emitter.emit(
+                        event_type,
+                        step=step,
+                        tool_call=tool_call,
+                        approval_decision=decision,
+                    )
+
+                result = await self._execute_tool(
+                    tool_call,
+                    approval_callback=approval_callback,
+                )
                 await emitter.emit(
                     AgentEventType.TOOL_COMPLETED,
                     step=step,
@@ -294,10 +320,14 @@ class AgentRuntime:
         *,
         history: Sequence[Message] = (),
         conversation_id: str | None = None,
+        event_handler: AgentEventHandler | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """以事件流方式执行任务，内部复用同一个 ``run()`` 循环。"""
 
-        handler = _QueueEventHandler()
+        queue_handler = _QueueEventHandler()
+        handler: AgentEventHandler = queue_handler
+        if event_handler is not None:
+            handler = CompositeEventHandler(queue_handler, event_handler)
 
         async def execute() -> None:
             try:
@@ -308,12 +338,12 @@ class AgentRuntime:
                     event_handler=handler,
                 )
             finally:
-                await handler.finish()
+                await queue_handler.finish()
 
         task = asyncio.create_task(execute())
         try:
             while True:
-                item = await handler.next()
+                item = await queue_handler.next()
                 if item is _STREAM_FINISHED:
                     break
                 if isinstance(item, AgentEvent):
@@ -325,9 +355,17 @@ class AgentRuntime:
                 with suppress(asyncio.CancelledError):
                     await task
 
-    async def _execute_tool(self, tool_call: ToolCall) -> ToolResult:
+    async def _execute_tool(
+        self,
+        tool_call: ToolCall,
+        *,
+        approval_callback: ApprovalCallback | None = None,
+    ) -> ToolResult:
         try:
-            return await self._tool_executor.execute(tool_call)
+            return await self._tool_executor.execute(
+                tool_call,
+                approval_callback=approval_callback,
+            )
         except Exception as exc:
             return ToolResult(
                 tool_call_id=tool_call.id,
