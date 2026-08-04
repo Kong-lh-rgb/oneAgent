@@ -44,6 +44,26 @@
 - [x] 添加事件 ID、UTC 时间、载荷序列化与非法参数离线测试
 - [x] 全量验证：`pytest` 61 个用例全部通过，`ruff` 无告警
 
+### 完成：AgentRuntime 事件发射
+- [x] 新增 `AgentEventHandler`、`NullEventHandler` 与 `InMemoryEventHandler`
+- [x] 每次 Runtime 运行生成唯一 `run_id`，并写入 `AgentResult`
+- [x] 同一次运行的事件共享 `run_id` 和可选 `conversation_id`
+- [x] 事件使用从 0 开始的连续 `sequence` 保证稳定顺序
+- [x] Runtime 发射 Agent、模型、工具开始/完成及失败生命周期事件
+- [x] CLI 将当前 SQLite 会话 ID 传给 Runtime，事件可关联会话
+- [x] 事件处理器异常与 Agent 核心执行隔离，不会导致任务失败
+- [x] 添加完整工具调用事件顺序、错误事件和处理器故障离线测试
+- [x] 全量验证：`pytest` 62 个用例全部通过，`ruff` 与 CLI 参数检查通过
+
+### 完成：Runtime 事件流与 CLI 实时进度
+- [x] 最终 `AGENT_COMPLETED` / `AGENT_FAILED` 事件携带完整 `AgentResult`
+- [x] 新增 `AgentRuntime.run_stream()`，通过异步队列复用现有 `run()` 循环
+- [x] 调用方提前关闭事件流时自动取消后台模型任务，避免遗留执行
+- [x] CLI 改为消费事件流，实时显示模型请求、工具执行和停止状态
+- [x] 会话持久化继续使用最终事件中的 `AgentResult.messages`
+- [x] 添加事件流顺序、最终结果传递、CLI 进度和取消行为离线测试
+- [x] 全量验证：`pytest` 65 个用例全部通过，`ruff` 与 CLI 参数检查通过
+
 ## 2026-08-03
 
 ### 完成

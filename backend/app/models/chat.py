@@ -13,6 +13,8 @@ import asyncio
 import sys
 from pathlib import Path
 
+from app.agent.events import AgentEvent, AgentEventType
+from app.agent.result import AgentResult
 from app.agent.runtime import AgentRuntime
 from app.conversation import (
     DEFAULT_DATABASE_PATH,
@@ -70,7 +72,18 @@ async def _send_message(
 ) -> tuple[bool, Conversation]:
     print("OneAgent 正在思考...", flush=True)
 
-    result = await runtime.run(content, history=history)
+    result: AgentResult | None = None
+    async for event in runtime.run_stream(
+        content,
+        history=history,
+        conversation_id=conversation.id,
+    ):
+        _print_agent_event(event)
+        if event.result is not None:
+            result = event.result
+
+    if result is None:
+        raise RuntimeError("Agent 事件流结束时缺少最终结果")
     history[:] = result.messages
     conversation = await conversation_store.replace_messages(
         conversation.id,
@@ -95,6 +108,38 @@ async def _send_message(
         )
         print(f"[工具调用：{tools}]")
     return result.ok, conversation
+
+
+def _print_agent_event(event: AgentEvent) -> None:
+    """把 Runtime 事件转换为简洁的终端进度信息。"""
+
+    event_time = event.event_time.astimezone().strftime("%H:%M:%S")
+    prefix = f"[{event_time}]"
+    if event.type is AgentEventType.AGENT_STARTED:
+        print(f"{prefix} Agent 开始执行")
+    elif event.type is AgentEventType.MODEL_STARTED:
+        print(f"{prefix} 第 {event.step} 步：正在请求模型")
+    elif event.type is AgentEventType.MODEL_COMPLETED:
+        tool_count = len(event.message.tool_calls) if event.message else 0
+        if tool_count:
+            print(f"{prefix} 模型请求调用 {tool_count} 个工具")
+        else:
+            print(f"{prefix} 模型已返回回复")
+    elif event.type is AgentEventType.TOOL_STARTED and event.tool_call:
+        print(f"{prefix} 开始执行工具：{event.tool_call.name}")
+    elif event.type is AgentEventType.TOOL_COMPLETED and event.tool_result:
+        status = "成功" if event.tool_result.success else "失败"
+        print(
+            f"{prefix} 工具 {event.tool_result.tool_name} {status} "
+            f"({event.tool_result.duration_ms:.1f}ms)"
+        )
+    elif event.type is AgentEventType.TOOL_APPROVAL_REQUIRED and event.tool_call:
+        print(f"{prefix} 工具等待人工审批：{event.tool_call.name}")
+    elif event.type is AgentEventType.AGENT_COMPLETED:
+        print(f"{prefix} Agent 执行完成")
+    elif event.type is AgentEventType.AGENT_FAILED:
+        reason = event.stop_reason.value if event.stop_reason else "unknown"
+        print(f"{prefix} Agent 执行停止：{reason}")
 
 
 async def _load_or_create_conversation(

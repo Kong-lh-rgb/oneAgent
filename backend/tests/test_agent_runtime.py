@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Sequence
 
 import pytest
 from pydantic import SecretStr
 
+from app.agent.events import (
+    AgentEvent,
+    AgentEventHandler,
+    AgentEventType,
+    InMemoryEventHandler,
+)
 from app.agent.result import AgentStopReason
 from app.agent.runtime import AgentRuntime
 from app.models.adapter import ModelAdapter
@@ -65,6 +72,30 @@ class CountingTool(BaseTool):
     async def execute(self, arguments: dict[str, object]) -> str:
         self.executions += 1
         return str(arguments["value"])
+
+
+class FailingEventHandler(AgentEventHandler):
+    async def emit(self, event: AgentEvent) -> None:
+        raise RuntimeError("event sink unavailable")
+
+
+class BlockingModelAdapter(ModelAdapter):
+    def __init__(self, config: ProviderConfig) -> None:
+        super().__init__(config)
+        self.started = asyncio.Event()
+        self.cancelled = False
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        raise AssertionError("阻塞模型不应正常完成")
+
+    async def close(self) -> None:
+        pass
 
 
 def model_response(
@@ -154,6 +185,7 @@ async def test_runtime_reads_then_writes_and_returns_final_text(tmp_path) -> Non
     tools = ToolRegistry()
     tools.register(ReadFileTool(tmp_path))
     tools.register(WriteFileTool(tmp_path))
+    event_handler = InMemoryEventHandler()
     initial_history = (
         Message(role=MessageRole.SYSTEM, content="你是本地文件助理。"),
     )
@@ -166,9 +198,12 @@ async def test_runtime_reads_then_writes_and_returns_final_text(tmp_path) -> Non
     ).run(
         "读取 input.txt，生成摘要并写入 output.md",
         history=initial_history,
+        conversation_id="conversation-1",
+        event_handler=event_handler,
     )
 
     assert result.content == "摘要已写入 output.md"
+    assert len(result.run_id) == 32
     assert result.ok is True
     assert result.steps == 3
     assert result.stop_reason is AgentStopReason.FINAL_ANSWER
@@ -199,6 +234,33 @@ async def test_runtime_reads_then_writes_and_returns_final_text(tmp_path) -> Non
     assert result.tool_rounds[0].records == (result.tool_calls[0],)
     assert result.tool_rounds[1].round_index == 1
     assert result.tool_rounds[1].records == (result.tool_calls[1],)
+    events = event_handler.events
+    assert [event.type for event in events] == [
+        AgentEventType.AGENT_STARTED,
+        AgentEventType.MODEL_STARTED,
+        AgentEventType.MODEL_COMPLETED,
+        AgentEventType.TOOL_STARTED,
+        AgentEventType.TOOL_COMPLETED,
+        AgentEventType.MODEL_STARTED,
+        AgentEventType.MODEL_COMPLETED,
+        AgentEventType.TOOL_STARTED,
+        AgentEventType.TOOL_COMPLETED,
+        AgentEventType.MODEL_STARTED,
+        AgentEventType.MODEL_COMPLETED,
+        AgentEventType.AGENT_COMPLETED,
+    ]
+    assert [event.sequence for event in events] == list(range(len(events)))
+    assert {event.run_id for event in events} == {result.run_id}
+    assert {event.conversation_id for event in events} == {"conversation-1"}
+    assert events[-1].message == result.final_message
+    assert events[-1].usage == result.usage
+    completed_tools = [
+        event for event in events if event.type is AgentEventType.TOOL_COMPLETED
+    ]
+    assert [event.tool_result for event in completed_tools] == [
+        result.tool_calls[0].result,
+        result.tool_calls[1].result,
+    ]
     assert (tmp_path / "output.md").read_text(encoding="utf-8") == (
         "# 摘要\nOneAgent 能调用本地文件工具。"
     )
@@ -224,12 +286,13 @@ async def test_runtime_reads_then_writes_and_returns_final_text(tmp_path) -> Non
 @pytest.mark.asyncio
 async def test_model_error_returns_assistant_message() -> None:
     registry, _ = fake_registry([RuntimeError("model unavailable")])
+    event_handler = InMemoryEventHandler()
 
     result = await AgentRuntime(
         registry,
         ToolRegistry(),
         provider="fake",
-    ).run("hello")
+    ).run("hello", event_handler=event_handler)
 
     assert result.role == MessageRole.ASSISTANT
     assert result.ok is False
@@ -239,6 +302,13 @@ async def test_model_error_returns_assistant_message() -> None:
     assert result.error.type == "ModelInvocationError"
     assert result.messages[-1] == result.final_message
     assert result.usage == ModelUsage()
+    assert [event.type for event in event_handler.events] == [
+        AgentEventType.AGENT_STARTED,
+        AgentEventType.MODEL_STARTED,
+        AgentEventType.AGENT_FAILED,
+    ]
+    assert event_handler.events[-1].error == result.error
+    assert event_handler.events[-1].stop_reason == result.stop_reason
     assert "model invocation failed" in (result.content or "")
     assert "model unavailable" in (result.content or "")
 
@@ -348,3 +418,65 @@ async def test_max_steps_stops_the_loop() -> None:
     assert len(result.tool_rounds) == 2
     assert len(result.tool_calls) == 2
     assert "maximum step limit (2) reached" in (result.content or "")
+
+
+@pytest.mark.asyncio
+async def test_event_handler_failure_does_not_stop_runtime() -> None:
+    registry, _ = fake_registry([model_response(content="正常完成")])
+
+    result = await AgentRuntime(
+        registry,
+        ToolRegistry(),
+        provider="fake",
+    ).run("hello", event_handler=FailingEventHandler())
+
+    assert result.ok is True
+    assert result.content == "正常完成"
+
+
+@pytest.mark.asyncio
+async def test_run_stream_returns_events_and_final_result() -> None:
+    registry, _ = fake_registry([model_response(content="流式完成")])
+    runtime = AgentRuntime(registry, ToolRegistry(), provider="fake")
+
+    events = [
+        event
+        async for event in runtime.run_stream(
+            "hello",
+            conversation_id="conversation-1",
+        )
+    ]
+
+    assert [event.type for event in events] == [
+        AgentEventType.AGENT_STARTED,
+        AgentEventType.MODEL_STARTED,
+        AgentEventType.MODEL_COMPLETED,
+        AgentEventType.AGENT_COMPLETED,
+    ]
+    final_result = events[-1].result
+    assert final_result is not None
+    assert final_result.content == "流式完成"
+    assert final_result.run_id == events[-1].run_id
+    assert {event.conversation_id for event in events} == {"conversation-1"}
+
+
+@pytest.mark.asyncio
+async def test_closing_run_stream_cancels_background_model_request() -> None:
+    config = ProviderConfig(
+        provider="blocking",
+        model="blocking-model",
+        api_key=SecretStr("offline-test-key"),
+        api_style=ApiStyle.CHAT_COMPLETIONS,
+    )
+    adapter = BlockingModelAdapter(config)
+    registry = ModelAdapterRegistry(ModelSettings(_env_file=None))
+    registry.register("blocking", lambda _: adapter, config=config)
+    runtime = AgentRuntime(registry, ToolRegistry(), provider="blocking")
+    stream = runtime.run_stream("hello")
+
+    first_event = await anext(stream)
+    await adapter.started.wait()
+    await stream.aclose()
+
+    assert first_event.type is AgentEventType.AGENT_STARTED
+    assert adapter.cancelled is True

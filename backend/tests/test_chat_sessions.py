@@ -4,6 +4,7 @@ from collections.abc import Sequence
 
 import pytest
 
+from app.agent.events import AgentEvent, AgentEventType
 from app.agent.result import AgentResult, AgentStopReason
 from app.conversation import SQLiteConversationStore
 from app.models.chat import _load_or_create_conversation, _send_message
@@ -16,14 +17,41 @@ class StubRuntime:
         user_input: str,
         *,
         history: Sequence[Message] = (),
+        conversation_id: str | None = None,
     ) -> AgentResult:
         user_message = Message(role=MessageRole.USER, content=user_input)
         final_message = Message(role=MessageRole.ASSISTANT, content="已完成")
         return AgentResult(
+            run_id="stub-run",
             final_message=final_message,
             messages=(*history, user_message, final_message),
             steps=1,
             stop_reason=AgentStopReason.FINAL_ANSWER,
+        )
+
+    async def run_stream(
+        self,
+        user_input: str,
+        *,
+        history: Sequence[Message] = (),
+        conversation_id: str | None = None,
+    ):
+        result = await self.run(
+            user_input,
+            history=history,
+            conversation_id=conversation_id,
+        )
+        yield AgentEvent(
+            run_id=result.run_id,
+            conversation_id=conversation_id,
+            type=AgentEventType.AGENT_STARTED,
+        )
+        yield AgentEvent(
+            run_id=result.run_id,
+            conversation_id=conversation_id,
+            sequence=1,
+            type=AgentEventType.AGENT_COMPLETED,
+            result=result,
         )
 
 
@@ -116,4 +144,7 @@ async def test_send_message_persists_runtime_history_and_generates_title(
         MessageRole.USER,
         MessageRole.ASSISTANT,
     ]
-    assert "OneAgent> 已完成" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Agent 开始执行" in output
+    assert "Agent 执行完成" in output
+    assert "OneAgent> 已完成" in output

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import uuid4
@@ -10,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.types import Message, ModelUsage, ToolCall, ToolResult
 
-from .result import AgentError, AgentStopReason
+from .result import AgentError, AgentResult, AgentStopReason
 
 
 class AgentEventType(StrEnum):
@@ -46,6 +47,7 @@ class AgentEvent(BaseModel):
     usage: ModelUsage | None = None
     stop_reason: AgentStopReason | None = None
     error: AgentError | None = None
+    result: AgentResult | None = None
 
     @field_validator("run_id")
     @classmethod
@@ -67,4 +69,42 @@ class AgentEvent(BaseModel):
         return value.astimezone(UTC)
 
 
-__all__ = ["AgentEvent", "AgentEventType"]
+class AgentEventHandler(ABC):
+    """接收 Agent 运行事件的异步处理器。"""
+
+    @abstractmethod
+    async def emit(self, event: AgentEvent) -> None:
+        """接收一个已经完成编号的事件。"""
+
+
+class NullEventHandler(AgentEventHandler):
+    """忽略全部事件的默认处理器。"""
+
+    async def emit(self, event: AgentEvent) -> None:
+        pass
+
+
+class InMemoryEventHandler(AgentEventHandler):
+    """在内存中按发射顺序保存事件，主要用于测试和调试。"""
+
+    def __init__(self) -> None:
+        self._events: list[AgentEvent] = []
+
+    async def emit(self, event: AgentEvent) -> None:
+        self._events.append(event)
+
+    @property
+    def events(self) -> tuple[AgentEvent, ...]:
+        return tuple(self._events)
+
+    def clear(self) -> None:
+        self._events.clear()
+
+
+__all__ = [
+    "AgentEvent",
+    "AgentEventHandler",
+    "AgentEventType",
+    "InMemoryEventHandler",
+    "NullEventHandler",
+]

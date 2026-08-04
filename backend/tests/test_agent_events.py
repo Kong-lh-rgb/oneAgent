@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.agent.events import AgentEvent, AgentEventType
-from app.agent.result import AgentError, AgentStopReason
+from app.agent.result import AgentError, AgentResult, AgentStopReason
 from app.models.types import Message, MessageRole, ModelUsage, ToolCall, ToolResult
 
 
@@ -64,6 +64,26 @@ def test_event_reuses_existing_payload_models() -> None:
     assert restored.tool_call == tool_call
     assert restored.tool_result == tool_result
     assert restored.conversation_id == "conversation-1"
+
+
+def test_completed_event_can_carry_final_agent_result() -> None:
+    final_message = Message(role=MessageRole.ASSISTANT, content="完成")
+    result = AgentResult(
+        run_id="run-1",
+        final_message=final_message,
+        messages=(final_message,),
+        steps=1,
+        stop_reason=AgentStopReason.FINAL_ANSWER,
+    )
+    event = AgentEvent(
+        run_id=result.run_id,
+        type=AgentEventType.AGENT_COMPLETED,
+        result=result,
+    )
+
+    restored = AgentEvent.model_validate_json(event.model_dump_json())
+
+    assert restored.result == result
 
 
 @pytest.mark.parametrize(
