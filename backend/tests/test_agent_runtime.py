@@ -436,6 +436,50 @@ async def test_max_steps_stops_the_loop() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tool_round_budget_forces_final_answer_without_more_tools() -> None:
+    registry, adapter = fake_registry(
+        [
+            model_response(
+                tool_calls=(
+                    ToolCall(
+                        id=f"count-{index}",
+                        name="count",
+                        arguments={"value": index},
+                    ),
+                )
+            )
+            for index in range(3)
+        ]
+        + [model_response(content="根据已有结果完成回答")]
+    )
+    tools = ToolRegistry()
+    tools.register(CountingTool())
+
+    result = await AgentRuntime(
+        registry,
+        tools,
+        provider="fake",
+        max_steps=10,
+        max_tool_rounds=3,
+    ).run("连续收集信息")
+
+    assert result.ok is True
+    assert result.steps == 4
+    assert result.content == "根据已有结果完成回答"
+    assert len(result.tool_rounds) == 3
+    final_request = adapter.requests[-1]
+    assert final_request.tools == ()
+    assert final_request.tool_choice is None
+    assert final_request.messages[-1].role is MessageRole.SYSTEM
+    assert "停止调用工具" in (final_request.messages[-1].content or "")
+    assert result.messages[-1] == result.final_message
+    assert all(
+        "工具调用轮次已用完" not in (message.content or "")
+        for message in result.messages
+    )
+
+
+@pytest.mark.asyncio
 async def test_event_handler_failure_does_not_stop_runtime() -> None:
     registry, _ = fake_registry([model_response(content="正常完成")])
 

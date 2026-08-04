@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from app.agent.events import AgentEvent, AgentEventType
@@ -22,6 +23,8 @@ from app.conversation import (
     SQLiteConversationStore,
 )
 from app.tools import ConsoleApprovalGate, build_builtin_tool_registry
+from app.tools.builtin import WebSearchTool
+from app.tools.search import SearchError
 from app.trace import (
     AgentRunTrace,
     SQLiteTraceEventHandler,
@@ -65,6 +68,26 @@ def _initial_history(system_prompt: str | None) -> list[Message]:
     return [Message(role=MessageRole.SYSTEM, content=system_prompt)]
 
 
+def _compact_conversation_history(
+    messages: tuple[Message, ...] | list[Message],
+) -> list[Message]:
+    """移除历史工具协议消息，只保留跨轮对话真正需要的内容。
+
+    完整工具过程已经保存在 Trace 和 AgentResult 中；把原始工具输出继续放入
+    下一轮模型请求会重复计费，并让长网页正文持续占用上下文。
+    """
+
+    return [
+        message
+        for message in messages
+        if message.role is not MessageRole.TOOL
+        and not (
+            message.role is MessageRole.ASSISTANT
+            and bool(message.tool_calls)
+        )
+    ]
+
+
 async def _send_message(
     *,
     runtime: AgentRuntime,
@@ -91,7 +114,7 @@ async def _send_message(
 
     if result is None:
         raise RuntimeError("Agent 事件流结束时缺少最终结果")
-    history[:] = result.messages
+    history[:] = _compact_conversation_history(result.messages)
     conversation = await conversation_store.replace_messages(
         conversation.id,
         history,
@@ -180,7 +203,9 @@ async def _load_or_create_conversation(
         conversation = await store.create(messages=_initial_history(system_prompt))
         return conversation, list(await store.load_messages(conversation.id)), False
 
-    history = list(await store.load_messages(conversation.id))
+    history = _compact_conversation_history(
+        list(await store.load_messages(conversation.id))
+    )
     return conversation, history, True
 
 
@@ -276,13 +301,26 @@ async def _run(args: argparse.Namespace) -> int:
         f"{action}会话：{conversation.id[:8]} · "
         f"{conversation.title} · {conversation.message_count} 条消息"
     )
+    try:
+        tool_registry = build_builtin_tool_registry()
+    except SearchError as exc:
+        print(f"搜索配置错误：{exc}", file=sys.stderr)
+        return 2
+    search_tool = tool_registry.get("web_search")
+    if isinstance(search_tool, WebSearchTool):
+        if search_tool.provider_name == "tavily":
+            print("联网搜索：Tavily（服务异常时自动回退 DuckDuckGo）")
+        else:
+            print("联网搜索：DuckDuckGo（配置 TAVILY_API_KEY 可启用 Tavily）")
+
     registry = ModelAdapterRegistry(settings)
     runtime = AgentRuntime(
         registry,
-        build_builtin_tool_registry(),
+        tool_registry,
         provider=provider,
         model=args.model,
         max_steps=args.max_steps,
+        max_tool_rounds=args.max_tool_rounds,
         max_output_tokens=args.max_output_tokens,
         approval_gate=ConsoleApprovalGate(),
     )
@@ -323,8 +361,8 @@ async def _run(args: argparse.Namespace) -> int:
                     title=title,
                     messages=_initial_history(args.system),
                 )
-                history = list(
-                    await conversation_store.load_messages(conversation.id)
+                history = _compact_conversation_history(
+                    list(await conversation_store.load_messages(conversation.id))
                 )
                 print(f"已创建会话：{conversation.id[:8]} · {conversation.title}")
                 continue
@@ -373,8 +411,8 @@ async def _run(args: argparse.Namespace) -> int:
                     print(f"找不到会话：{identifier}")
                     continue
                 conversation = selected
-                history = list(
-                    await conversation_store.load_messages(conversation.id)
+                history = _compact_conversation_history(
+                    list(await conversation_store.load_messages(conversation.id))
                 )
                 print(
                     f"已切换会话：{conversation.id[:8]} · "
@@ -431,7 +469,12 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--system",
-        default="你是 OneAgent，一个本地运行的智能助理。请使用用户的语言回答。",
+        default=(
+            "你是 OneAgent，一个本地运行的智能助理。请使用用户的语言回答。"
+            f"当前日期是 {datetime.now().astimezone().date().isoformat()}。"
+            "调用工具时优先使用已有结果；网页搜索通常只需一到两次，获得可用结果后"
+            "立即整理回答，不要为了追求完美而反复改写相同查询。"
+        ),
         help="System prompt for this conversation.",
     )
     parser.add_argument(
@@ -445,6 +488,12 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=10,
         help="Maximum model/tool loop steps for each message.",
+    )
+    parser.add_argument(
+        "--max-tool-rounds",
+        type=int,
+        default=3,
+        help="Maximum tool-calling rounds before forcing a final answer.",
     )
     parser.add_argument(
         "--database",
@@ -466,6 +515,8 @@ def _parse_args() -> argparse.Namespace:
         parser.error("--max-output-tokens must be greater than zero")
     if args.max_steps <= 0:
         parser.error("--max-steps must be greater than zero")
+    if args.max_tool_rounds <= 0:
+        parser.error("--max-tool-rounds must be greater than zero")
     if args.conversation and args.new_conversation:
         parser.error("--conversation and --new-conversation cannot be used together")
     return args

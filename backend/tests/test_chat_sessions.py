@@ -7,8 +7,12 @@ import pytest
 from app.agent.events import AgentEvent, AgentEventHandler, AgentEventType
 from app.agent.result import AgentResult, AgentStopReason
 from app.conversation import SQLiteConversationStore
-from app.models.chat import _load_or_create_conversation, _send_message
-from app.models.types import Message, MessageRole, ModelProvider
+from app.models.chat import (
+    _compact_conversation_history,
+    _load_or_create_conversation,
+    _send_message,
+)
+from app.models.types import Message, MessageRole, ModelProvider, ToolCall
 from app.trace import SQLiteTraceEventHandler, SQLiteTraceStore
 
 
@@ -63,6 +67,31 @@ class StubRuntime:
             if event_handler is not None:
                 await event_handler.emit(event)
             yield event
+
+
+def test_compact_conversation_history_removes_tool_protocol_messages() -> None:
+    call = ToolCall(id="search-1", name="web_search", arguments={"query": "AI"})
+    messages = (
+        Message(role=MessageRole.SYSTEM, content="系统提示"),
+        Message(role=MessageRole.USER, content="搜索新闻"),
+        Message(role=MessageRole.ASSISTANT, tool_calls=(call,)),
+        Message(
+            role=MessageRole.TOOL,
+            tool_call_id=call.id,
+            name=call.name,
+            content="很长的搜索结果",
+        ),
+        Message(role=MessageRole.ASSISTANT, content="新闻摘要"),
+    )
+
+    compacted = _compact_conversation_history(messages)
+
+    assert [message.role for message in compacted] == [
+        MessageRole.SYSTEM,
+        MessageRole.USER,
+        MessageRole.ASSISTANT,
+    ]
+    assert compacted[-1].content == "新闻摘要"
 
 
 @pytest.mark.asyncio

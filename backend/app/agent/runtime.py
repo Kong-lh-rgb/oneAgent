@@ -59,6 +59,7 @@ class AgentRuntime:
         provider: ModelProvider | str | None = None,
         model: str | None = None,
         max_steps: int = 10,
+        max_tool_rounds: int | None = None,
         max_output_tokens: int | None = None,
         tool_executor: ToolExecutor | None = None,
         approval_gate: ApprovalGate | None = None,
@@ -67,12 +68,15 @@ class AgentRuntime:
             raise ValueError("max_steps must be at least 1")
         if max_output_tokens is not None and max_output_tokens < 1:
             raise ValueError("max_output_tokens must be at least 1")
+        if max_tool_rounds is not None and max_tool_rounds < 1:
+            raise ValueError("max_tool_rounds must be at least 1")
 
         self._model_registry = model_registry
         self._tool_registry = tool_registry
         self._provider = provider
         self._model = model
         self._max_steps = max_steps
+        self._max_tool_rounds = max_tool_rounds
         self._max_output_tokens = max_output_tokens
         self._tool_executor = tool_executor or ToolExecutor(
             tool_registry,
@@ -125,6 +129,22 @@ class AgentRuntime:
         )
 
         for step in range(1, self._max_steps + 1):
+            force_final_answer = (
+                self._max_tool_rounds is not None
+                and len(tool_rounds) >= self._max_tool_rounds
+            )
+            request_messages = tuple(messages)
+            if force_final_answer:
+                request_messages = (
+                    *request_messages,
+                    Message(
+                        role=MessageRole.SYSTEM,
+                        content=(
+                            "工具调用轮次已用完。请停止调用工具，直接根据已经获得的"
+                            "信息回答用户；如果信息有限，请明确说明，不要继续搜索。"
+                        ),
+                    ),
+                )
             await emitter.emit(
                 AgentEventType.MODEL_STARTED,
                 step=step,
@@ -135,9 +155,13 @@ class AgentRuntime:
                 adapter = self._model_registry.get(self._provider)
                 response = await adapter.complete(
                     ModelRequest(
-                        messages=tuple(messages),
+                        messages=request_messages,
                         model=self._model,
-                        tools=self._tool_registry.definitions(),
+                        tools=(
+                            ()
+                            if force_final_answer
+                            else self._tool_registry.definitions()
+                        ),
                         max_output_tokens=self._max_output_tokens,
                     )
                 )

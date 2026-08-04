@@ -100,6 +100,63 @@
 - [x] 新增 Hook 上下文、执行顺序、故障隔离、权限不可绕过和审批失败关闭测试
 - [x] 全量验证：`pytest` 77 个用例全部通过，`ruff` 无告警
 
+### 完成：网页搜索审批、循环失控与 Token 放大修复
+
+#### Bad Case 与现场证据
+- [x] `web_search` 被配置为 `HUMAN_APPROVAL`，一次新闻任务中的每次只读搜索都要求人工确认，交互体验差
+- [x] 搜索工具实际返回成功，但 Bing 结果相关性不稳定；模型把“结果质量不足”误处理为继续改写查询
+- [x] Runtime 只检测参数完全相同的连续调用，模型通过不断修改关键词连续搜索 10 步，最终触发 `max_steps`
+- [x] 失败 Run 共执行 16 次工具调用，模型累计报告 `125003 tokens`，但没有形成最终回答
+- [x] `http_request` 返回的原始网页结果单次约 2 万字符，并在后续每轮模型请求中重复发送
+- [x] CLI 把工具协议消息和完整工具输出写入会话历史，下一次普通追问仍消耗 `44343 tokens`
+- [x] 恢复旧会话时缺少当前日期提示，模型在 2026 年仍持续搜索 2025 年新闻
+
+#### 修复结果
+- [x] 将受控、只读的 `web_search` 调整为 `ALLOWED`，搜索不再请求人工审批
+- [x] `http_request` 和 `run_shell_command` 继续保留人工审批，避免任意网络请求和本地命令失去安全边界
+- [x] 搜索结果上限调整为 5 条，标题、摘要和查询长度均设置明确上限
+- [x] 工具说明加入当前日期、聚焦查询和禁止重复宽泛搜索的提示
+- [x] AgentRuntime 新增 `max_tool_rounds`；CLI 默认最多 3 个工具轮次，之后隐藏工具并要求模型基于已有结果收尾
+- [x] CLI 默认系统提示加入当前日期和工具节制策略
+- [x] 跨轮会话历史移除中间 assistant tool-call 与 tool result 消息，避免原始网页内容持续重复计费
+- [x] 完整工具过程仍保留在 `AgentResult` 和 SQLite Trace，不影响运行审计
+- [x] 新增工具轮次收尾、历史压缩、免审批权限和搜索摘要截断离线测试
+- [x] 全量验证：`pytest` 81 个用例全部通过，`ruff` 无告警
+
+#### 二次验证：默认搜索源本身失效（阶段性方案，已由统一搜索层替代）
+- [x] 最新 Trace 显示“谷歌新闻”错误返回 Ticketmaster，“石家庄天气”错误返回 Microsoft Community，确认不是模型误判
+- [x] 直接联网测试确认 Bing HTML 与 RSS 在当前中国区出口返回低相关或错误结果，Bing News 端点被重定向到首页
+- [x] DuckDuckGo、Google、Brave、Yahoo 在当前网络环境超时，继续切换免费网页解析端点无法保证稳定性
+- [x] 验证 Open-Meteo 结构化天气接口可用，后续可独立实现 WeatherTool，不再让天气依赖通用网页搜索
+- [x] 根据 Qwen 官方能力，为 `ModelRequest` 增加 Provider 原生工具字段，并由 Responses Adapter 合并原生工具与自定义函数工具
+- [x] CLI 检测到 Qwen 3.7 系列时自动切换 Responses API，启用官方 `web_search` 并移除本地 Bing 搜索工具
+- [x] Qwen 官方搜索在服务端完成检索与内容整合，不再进入本地 Bing HTML 解析和多轮 ToolCall 循环
+- [x] 其他模型暂时保留本地搜索降级路径，后续按 Provider 接入对应的正式搜索 API
+- [x] 新增 Responses 原生工具合并、Runtime 透传和 Qwen 3.7 能力选择离线测试
+- [x] 全量验证：`pytest` 82 个用例全部通过，`ruff` 无告警
+
+### 完成：Tavily 主搜索与 DuckDuckGo 无密钥降级
+
+#### Bad Case
+- [x] 依赖 Bing HTML/RSS 页面解析，当前网络出口会返回低相关结果、错误跳转或搜索首页，但工具仍可能被模型理解为搜索成功
+- [x] Qwen 原生搜索只能覆盖单个模型系列，切换 GPT、Claude 或 DeepSeek 后搜索能力和结果结构不一致
+- [x] 为每个模型分别适配服务端搜索会把 Provider 特例带入 Runtime，增加耦合和维护成本
+- [x] 免费搜索端点被限流、反爬或返回空页面时，旧实现缺少明确的“提供商不可用”错误语义
+- [x] 搜索结果未经统一去重和长度限制，容易把重复网页与过长摘要反复送入模型，放大 Token 消耗
+
+#### 修复结果
+- [x] 新增与模型无关的 `SearchProvider`、`SearchService`、请求/响应模型和统一错误体系
+- [x] 配置 `TAVILY_API_KEY` 时以 Tavily REST API 为主搜索源，使用异步 `httpx`，不增加 SDK 依赖
+- [x] 未配置 Key 时使用 DuckDuckGo Lite；Tavily 网络、限流或空结果时自动回退 DuckDuckGo
+- [x] Tavily 鉴权错误不静默回退，避免错误 Key 长期被掩盖；两个来源均失败时返回明确的搜索不可用错误
+- [x] WebSearchTool 对所有模型暴露相同工具协议，并保持只读 `ALLOWED` 权限，不触发人工审批
+- [x] 统一限制查询长度、结果数、标题与摘要长度，并按规范化 URL 去重，减少无效上下文和 Token 消耗
+- [x] 支持 `general/news/finance`、时间范围及包含/排除域名参数；CLI 启动时显示当前搜索源和降级策略
+- [x] 新增 `backend/.env.example`，记录搜索配置项且不包含真实密钥
+- [x] 新增 Tavily 请求映射、DuckDuckGo 解析、自动选择、降级、鉴权、双源失败和工具输出离线测试
+- [x] 移除 Qwen 原生搜索特殊分支，Runtime 与 Provider Adapter 恢复模型无关边界
+- [x] 全量验证：`pytest` 84 个用例全部通过，`ruff`、编译、CLI 参数检查和 Diff 格式检查通过
+
 ## 2026-08-03
 
 ### 完成
