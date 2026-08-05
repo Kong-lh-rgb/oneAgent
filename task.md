@@ -80,7 +80,14 @@
 - [x] `.env.example` 补充上下文预算与模型能力覆盖配置
 - [x] 测试：新增 `test_context_capabilities.py`、`test_context_budget.py`，重写 `test_context_config.py`
 - [x] 全量验证：`pytest` 148 个用例全部通过，`ruff`、编译、CLI 参数与 Diff 格式检查通过
-- [ ] 待办：真正的消息压缩（在 prepare 内超 trigger 后裁剪）、历史滚动摘要、可观测占比记录写回
+
+### 完成：消息块划分
+- [x] 新增 `app/context/blocks.py`：`MessageBlock` 基类 + `SystemBlock` / `ConversationBlock` / `ToolRoundBlock` 三类块 + `BlockType` 枚举
+- [x] `partition_messages()`：连续 SYSTEM 合并为 SystemBlock；assistant(tool_calls)+紧随 TOOL 结果为 ToolRoundBlock；其余 user/无工具 assistant 按轮合并为 ConversationBlock
+- [x] 块划分保持消息顺序，不修改原消息；供后续压缩以块为最小单元保留/丢弃
+- [x] 新增 `tests/test_context_blocks.py`（系统+对话、工具轮、连续 system 合并、多工具轮独立、对话轮拆分、空序列、顺序保持）
+- [x] 全量验证：`pytest` 158 个用例全部通过，`ruff` 无告警
+- [ ] 待办：基于块做压缩（超 trigger 后按块丢弃/摘要）、把块划分接入 ContextManager、历史滚动摘要、可观测占比记录写回
 
 ### 完成：原始会话历史与模型请求上下文分离
 
