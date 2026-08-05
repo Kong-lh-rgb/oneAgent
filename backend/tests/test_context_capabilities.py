@@ -315,6 +315,15 @@ async def test_runtime_blocks_request_that_exceeds_input_budget() -> None:
     )
     assert started.exceeds_input_budget is True
     assert started.requires_compaction is True
+    assert started.original_estimated_input_tokens is not None
+    assert started.prepared_input_tokens == started.estimated_input_tokens
+    assert started.original_usage_ratio is not None
+    assert started.prepared_usage_ratio is not None
+    assert started.compaction_stage == "none"
+    assert started.compacted_tool_results == 0
+    assert started.removed_tool_rounds == 0
+    assert started.reached_target is False
+    assert started.needs_next_compaction_stage is True
 
 
 @pytest.mark.asyncio

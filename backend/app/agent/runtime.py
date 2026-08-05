@@ -261,6 +261,10 @@ class AgentRuntime:
                 step=step,
                 provider=resolved_provider,
                 model=resolved_model,
+                original_estimated_input_tokens=(
+                    context_decision.original_estimated_input_tokens
+                ),
+                prepared_input_tokens=context_decision.prepared_input_tokens,
                 estimated_input_tokens=context_decision.estimated_input_tokens,
                 context_trimmed=context_decision.trimmed,
                 context_window=context_decision.context_window,
@@ -271,6 +275,15 @@ class AgentRuntime:
                 requires_compaction=context_decision.requires_compaction,
                 exceeds_input_budget=context_decision.exceeds_input_budget,
                 capability_source=context_decision.capability_source,
+                original_usage_ratio=context_decision.original_usage_ratio,
+                prepared_usage_ratio=context_decision.prepared_usage_ratio,
+                compaction_stage=context_decision.compaction_stage.value,
+                compacted_tool_results=context_decision.compacted_tool_results,
+                removed_tool_rounds=context_decision.removed_tool_rounds,
+                reached_target=context_decision.reached_target,
+                needs_next_compaction_stage=(
+                    context_decision.needs_next_compaction_stage
+                ),
             )
             if context_decision.exceeds_input_budget:
                 return await stop_with_error(

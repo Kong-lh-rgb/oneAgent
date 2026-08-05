@@ -130,8 +130,8 @@ def test_keep_more_than_available_keeps_all_rounds() -> None:
     assert compacted == history
 
 
-def test_orphan_tool_message_removed() -> None:
-    """不在任何工具轮内的孤立 TOOL 结果仍会被移除。"""
+def test_orphan_tool_message_is_conservatively_preserved() -> None:
+    """异常工具协议不能被历史整理误删。"""
 
     call = _call("c1", "q1")
     messages = (
@@ -141,11 +141,11 @@ def test_orphan_tool_message_removed() -> None:
 
     compacted = compact_model_history(messages, keep_recent_tool_rounds=5)
 
-    assert compacted == messages[:1]
+    assert compacted == messages
 
 
 @pytest.mark.asyncio
-async def test_context_manager_keeps_recent_tool_rounds() -> None:
+async def test_context_manager_below_trigger_does_not_run_history_compaction() -> None:
     manager = ContextManager()
     old_call = _call("old", "旧查询")
     recent_call = _call("recent", "新查询")
@@ -161,14 +161,13 @@ async def test_context_manager_keeps_recent_tool_rounds() -> None:
     decision = await manager.prepare(
         history,
         history_count=len(history),
-        keep_recent_tool_rounds=1,
         model="qwen3.7-plus",
         provider="qwen",
     )
 
-    # 旧轮被降级移除，最近一轮完整保留。
-    assert decision.messages[0] == history[0]
-    assert decision.messages[1] == history[3]
-    assert decision.messages[2].tool_calls == (recent_call,)
-    assert decision.messages[3].tool_call_id == recent_call.id
-    assert decision.trimmed is True
+    assert manager.keep_recent_tool_rounds == 2
+    assert decision.messages == history
+    assert decision.trimmed is False
+    assert decision.requires_compaction is False
+    assert decision.compacted_tool_results == 0
+    assert decision.removed_tool_rounds == 0

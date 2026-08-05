@@ -15,6 +15,12 @@ from app.agent.events import (
 )
 from app.agent.result import AgentStopReason
 from app.agent.runtime import AgentRuntime
+from app.context import (
+    ContextBudgetPolicy,
+    ContextManager,
+    ContextSettings,
+    ModelCapabilityRegistry,
+)
 from app.models.adapter import ModelAdapter
 from app.models.config import ModelSettings, ProviderConfig
 from app.models.registry import ModelAdapterRegistry
@@ -318,22 +324,36 @@ async def test_runtime_reads_then_writes_and_returns_final_text(tmp_path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_runtime_keeps_raw_history_but_sends_processed_model_context() -> None:
-    old_call = ToolCall(
-        id="old-count",
+async def test_runtime_below_trigger_sends_complete_history_to_model() -> None:
+    older_call = ToolCall(
+        id="older-count",
         name="count",
         arguments={"value": 1},
     )
+    recent_call = ToolCall(
+        id="recent-count",
+        name="count",
+        arguments={"value": 2},
+    )
     history = (
-        Message(role=MessageRole.USER, content="上一轮"),
-        Message(role=MessageRole.ASSISTANT, tool_calls=(old_call,)),
+        Message(role=MessageRole.USER, content="较旧一轮"),
+        Message(role=MessageRole.ASSISTANT, tool_calls=(older_call,)),
         Message(
             role=MessageRole.TOOL,
-            tool_call_id=old_call.id,
-            name=old_call.name,
+            tool_call_id=older_call.id,
+            name=older_call.name,
             content="1",
         ),
-        Message(role=MessageRole.ASSISTANT, content="上一轮完成"),
+        Message(role=MessageRole.ASSISTANT, content="较旧一轮完成"),
+        Message(role=MessageRole.USER, content="最近一轮"),
+        Message(role=MessageRole.ASSISTANT, tool_calls=(recent_call,)),
+        Message(
+            role=MessageRole.TOOL,
+            tool_call_id=recent_call.id,
+            name=recent_call.name,
+            content="2",
+        ),
+        Message(role=MessageRole.ASSISTANT, content="最近一轮完成"),
     )
     current_call = ToolCall(
         id="current-count",
@@ -355,21 +375,108 @@ async def test_runtime_keeps_raw_history_but_sends_processed_model_context() -> 
     )
 
     assert result.messages[: len(history)] == history
-    assert result.messages[1].tool_calls == (old_call,)
+    assert result.messages[1].tool_calls == (older_call,)
     assert result.messages[2].role is MessageRole.TOOL
-    assert [message.content for message in adapter.requests[0].messages] == [
-        "上一轮",
-        "上一轮完成",
-        "这一轮",
-    ]
+    first_request = adapter.requests[0].messages
+    assert first_request == (
+        *history,
+        Message(role=MessageRole.USER, content="这一轮"),
+    )
     second_request = adapter.requests[1].messages
-    assert all(
-        old_call not in message.tool_calls
+    assert any(older_call in message.tool_calls for message in second_request)
+    assert any(
+        recent_call in message.tool_calls
         for message in second_request
     )
     assert second_request[-2].tool_calls == (current_call,)
     assert second_request[-1].role is MessageRole.TOOL
     assert second_request[-1].tool_call_id == current_call.id
+
+
+@pytest.mark.asyncio
+async def test_runtime_sends_compressed_copy_but_returns_complete_raw_history() -> None:
+    older_call = ToolCall(
+        id="older-search",
+        name="count",
+        arguments={"value": 1},
+    )
+    recent_calls = (
+        ToolCall(id="recent-1", name="count", arguments={"value": 2}),
+        ToolCall(id="recent-2", name="count", arguments={"value": 3}),
+    )
+    long_result = "x" * 4_000
+    history = (
+        Message(role=MessageRole.USER, content="旧问题"),
+        Message(role=MessageRole.ASSISTANT, tool_calls=(older_call,)),
+        Message(
+            role=MessageRole.TOOL,
+            name=older_call.name,
+            tool_call_id=older_call.id,
+            content=long_result,
+        ),
+        Message(role=MessageRole.ASSISTANT, content="旧回答"),
+        Message(role=MessageRole.ASSISTANT, tool_calls=(recent_calls[0],)),
+        Message(
+            role=MessageRole.TOOL,
+            name=recent_calls[0].name,
+            tool_call_id=recent_calls[0].id,
+            content="最近结果一",
+        ),
+        Message(role=MessageRole.ASSISTANT, tool_calls=(recent_calls[1],)),
+        Message(
+            role=MessageRole.TOOL,
+            name=recent_calls[1].name,
+            tool_call_id=recent_calls[1].id,
+            content="最近结果二",
+        ),
+    )
+    registry, adapter = fake_registry([model_response(content="压缩后回答")])
+    capability_registry = ModelCapabilityRegistry()
+    capability_registry.register_override(
+        "fake",
+        "fake-model",
+        context_window=600,
+        max_output_tokens=100,
+    )
+    context_manager = ContextManager(
+        registry=capability_registry,
+        budget_policy=ContextBudgetPolicy(safety_margin_tokens=0),
+        context_settings=ContextSettings(
+            _env_file=None,
+            context_keep_recent_tool_rounds=2,
+            context_max_tool_result_chars=100,
+            context_tool_result_head_chars=20,
+            context_tool_result_tail_chars=20,
+        ),
+    )
+
+    result = await AgentRuntime(
+        registry,
+        ToolRegistry(),
+        provider="fake",
+        max_output_tokens=100,
+        context_manager=context_manager,
+    ).run("当前问题", history=history)
+
+    assert result.ok is True
+    assert result.messages[: len(history)] == history
+    assert result.messages[2].content == long_result
+    request_messages = adapter.requests[0].messages
+    prepared_old_result = next(
+        message
+        for message in request_messages
+        if message.tool_call_id == older_call.id
+    )
+    assert prepared_old_result.content != long_result
+    assert "tool result compacted" in (prepared_old_result.content or "")
+    assert all(
+        any(
+            call.id == recent_call.id
+            for message in request_messages
+            for call in message.tool_calls
+        )
+        for recent_call in recent_calls
+    )
 
 
 @pytest.mark.asyncio

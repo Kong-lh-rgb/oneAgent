@@ -110,8 +110,8 @@ def test_compact_model_history_only_removes_tool_protocol() -> None:
 
 
 @pytest.mark.asyncio
-async def test_context_manager_compacts_only_persisted_history_prefix() -> None:
-    manager = ContextManager()
+async def test_context_manager_below_trigger_preserves_complete_protocol() -> None:
+    manager = ContextManager(keep_recent_tool_rounds=0)
     old_call = ToolCall(
         id="old-search",
         name="web_search",
@@ -151,12 +151,11 @@ async def test_context_manager_compacts_only_persisted_history_prefix() -> None:
         provider="qwen",
     )
 
-    assert decision.messages == (
-        history[0],
-        history[3],
-        *current_run,
-    )
-    assert decision.trimmed is True
+    assert decision.messages == (*history, *current_run)
+    assert decision.trimmed is False
+    assert decision.requires_compaction is False
+    assert decision.compacted_tool_results == 0
+    assert decision.removed_tool_rounds == 0
     assert history[1].tool_calls == (old_call,)
     assert history[2].content == "旧工具输出"
 

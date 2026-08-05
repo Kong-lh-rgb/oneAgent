@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
@@ -36,12 +36,31 @@ class ContextSettings(BaseSettings):
     context_safety_margin_tokens: int = Field(default=4_096, ge=0)
     context_trigger_ratio: float = Field(default=0.80, gt=0.0, lt=1.0)
     context_target_ratio: float = Field(default=0.60, gt=0.0, lt=1.0)
+    context_keep_recent_tool_rounds: int = Field(default=2, ge=0)
+    context_max_tool_result_chars: int = Field(default=8_000, gt=0)
+    context_tool_result_head_chars: int = Field(default=4_000, ge=0)
+    context_tool_result_tail_chars: int = Field(default=2_000, ge=0)
 
     # 覆盖配置：作用于当前使用的模型（context_override_model 未指定时用默认模型）
     context_override_provider: str | None = None
     context_override_model: str | None = None
     context_window_override: int | None = Field(default=None, gt=0)
     max_output_tokens_override: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_tool_result_segments(self) -> ContextSettings:
+        """工具结果首尾保留长度不能超过压缩后的内容预算。"""
+
+        retained = (
+            self.context_tool_result_head_chars
+            + self.context_tool_result_tail_chars
+        )
+        if retained > self.context_max_tool_result_chars:
+            raise ValueError(
+                "context tool result head/tail chars cannot exceed "
+                "context_max_tool_result_chars"
+            )
+        return self
 
 
 __all__ = ["ContextSettings"]

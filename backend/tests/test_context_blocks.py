@@ -5,6 +5,7 @@ from __future__ import annotations
 from app.context import (
     BlockType,
     ConversationBlock,
+    MalformedToolBlock,
     MessageBlock,
     SystemBlock,
     ToolRoundBlock,
@@ -99,6 +100,58 @@ def test_multiple_tool_rounds_are_separate_blocks() -> None:
     assert _types(blocks) == [BlockType.TOOL_ROUND, BlockType.TOOL_ROUND]
     assert len(blocks[0]) == 2
     assert len(blocks[1]) == 2
+
+
+def test_multi_tool_round_requires_all_matching_results() -> None:
+    call1 = ToolCall(id="c1", name="first", arguments={})
+    call2 = ToolCall(id="c2", name="second", arguments={})
+    messages = (
+        _assistant(tool_calls=(call1, call2)),
+        _tool("c2"),
+        _tool("c1"),
+    )
+
+    blocks = partition_messages(messages)
+
+    assert len(blocks) == 1
+    assert isinstance(blocks[0], ToolRoundBlock)
+    assert blocks[0].messages == messages
+
+
+def test_mismatched_tool_result_becomes_malformed_block() -> None:
+    call = ToolCall(id="expected", name="search", arguments={})
+    messages = (_assistant(tool_calls=(call,)), _tool("unexpected"))
+
+    blocks = partition_messages(messages)
+
+    assert len(blocks) == 1
+    assert isinstance(blocks[0], MalformedToolBlock)
+    assert blocks[0].messages == messages
+    assert "exactly match" in blocks[0].reason
+
+
+def test_incomplete_tool_round_becomes_malformed_block() -> None:
+    call = ToolCall(id="missing-result", name="search", arguments={})
+    message = _assistant(tool_calls=(call,))
+
+    blocks = partition_messages((message,))
+
+    assert isinstance(blocks[0], MalformedToolBlock)
+    assert blocks[0].messages == (message,)
+
+
+def test_orphan_tool_result_becomes_malformed_block() -> None:
+    message = _tool("orphan")
+
+    blocks = partition_messages((_user(), message, _assistant()))
+
+    assert _types(blocks) == [
+        BlockType.CONVERSATION,
+        BlockType.MALFORMED_TOOL,
+        BlockType.CONVERSATION,
+    ]
+    assert isinstance(blocks[1], MalformedToolBlock)
+    assert blocks[1].messages == (message,)
 
 
 def test_conversation_turns_split_on_new_user() -> None:

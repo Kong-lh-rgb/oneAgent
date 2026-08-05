@@ -114,6 +114,28 @@
 - [x] 新增 SQLite 完整工具协议恢复、ContextManager 边界保护和 Runtime 请求/结果分离测试
 - [x] 全量验证：`pytest` 151 个用例全部通过，`ruff`、编译、CLI 参数与 Diff 格式检查通过
 
+### 完成：上下文第一层工具消息压缩
+
+#### Bad Case
+- [x] ContextManager 在 Token 判断前就整理历史，导致低于 80% 时也丢失完整 ToolCall / ToolResult
+- [x] 达到 trigger 后只记录 `requires_compaction`，没有真正压缩到 target
+- [x] 工具轮缺少 ID 对应关系校验，孤立、缺失或错配的 ToolResult 可能被当成普通对话或安全工具轮处理
+- [x] 按单条消息删除容易拆散 assistant ToolCall 与对应 ToolResult，形成 Provider 无法理解的不完整协议
+- [x] 缺少压缩前后 Token、压缩阶段、缩短结果数、移除工具轮数和下一层需求等观测字段
+
+#### 修复结果
+- [x] ContextManager 先对完整候选上下文估算；低于 trigger 时不划块、不调用 Reducer，消息对象与顺序原样返回
+- [x] 新增 `ToolReducer`：达到 trigger 后先逐条缩短未保护的长 ToolResult，仍高于 target 时按最旧优先整体移除已完成 ToolRoundBlock
+- [x] 每缩短一个 ToolResult、每移除一个 ToolRoundBlock 后重新估算，达到 target 立即停止
+- [x] `partition_messages()` 成为唯一工具轮识别入口；ToolRoundBlock 强校验 ToolCall/ToolResult ID 集合完整匹配
+- [x] 新增 `MalformedToolBlock`，对孤立、未完成、重复 ID 或错配工具协议保守完整保留
+- [x] 默认保护最近 2 个历史工具轮；当前 Run、SystemBlock、ConversationBlock 和异常工具块永不由本层压缩
+- [x] 新增配置：工具轮保护数、工具结果长度阈值、首部/尾部保留字符数，并验证首尾长度总和不超过阈值
+- [x] ContextDecision 与 MODEL_STARTED 事件记录压缩前/后 Token 和占比、阶段、修改数、目标状态及下一层压缩需求
+- [x] 最终超过 input_budget 时继续由 Runtime 返回 CONTEXT_ERROR，Provider 不会被调用
+- [x] Runtime 集成验证 Adapter 收到压缩副本，而 AgentResult 和 SQLite 会话边界继续保存完整原始历史
+- [x] 全量验证：`pytest` 179 个用例全部通过，`ruff`、编译、CLI 参数与 Diff 格式检查通过
+
 ---
 
 ## 2026-08-04

@@ -53,6 +53,8 @@ class AgentEvent(BaseModel):
     approval_decision: ApprovalDecision | None = None
     rule_id: str | None = None
     rule_description: str | None = None
+    original_estimated_input_tokens: int | None = Field(default=None, ge=0)
+    prepared_input_tokens: int | None = Field(default=None, ge=0)
     estimated_input_tokens: int | None = Field(default=None, ge=0)
     context_trimmed: bool | None = None
     context_window: int | None = Field(default=None, ge=0)
@@ -63,6 +65,13 @@ class AgentEvent(BaseModel):
     requires_compaction: bool | None = None
     exceeds_input_budget: bool | None = None
     capability_source: str | None = None
+    original_usage_ratio: float | None = Field(default=None, ge=0.0)
+    prepared_usage_ratio: float | None = Field(default=None, ge=0.0)
+    compaction_stage: str | None = None
+    compacted_tool_results: int | None = Field(default=None, ge=0)
+    removed_tool_rounds: int | None = Field(default=None, ge=0)
+    reached_target: bool | None = None
+    needs_next_compaction_stage: bool | None = None
 
     @field_validator("run_id")
     @classmethod

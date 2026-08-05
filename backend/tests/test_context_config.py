@@ -34,6 +34,19 @@ def test_context_settings_defaults() -> None:
     assert settings.context_trigger_ratio == 0.80
     assert settings.context_target_ratio == 0.60
     assert settings.context_safety_margin_tokens == 4_096
+    assert settings.context_keep_recent_tool_rounds == 2
+    assert settings.context_max_tool_result_chars == 8_000
+    assert settings.context_tool_result_head_chars == 4_000
+    assert settings.context_tool_result_tail_chars == 2_000
+
+
+def test_tool_result_segment_config_must_fit_maximum() -> None:
+    with pytest.raises(ValueError, match="head/tail"):
+        _settings(
+            context_max_tool_result_chars=100,
+            context_tool_result_head_chars=80,
+            context_tool_result_tail_chars=30,
+        )
 
 
 def test_builtin_lookup_uses_exact_model() -> None:
