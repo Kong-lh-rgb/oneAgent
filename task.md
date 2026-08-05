@@ -50,7 +50,24 @@
 - [x] `AgentRuntime` 改用 `context_manager` 参数（替代 `token_estimator`），每轮模型调用前经 `ContextManager.prepare` 取上下文与估算；`AgentEvent` 增加 `context_trimmed` 字段（当前恒 False）
 - [x] CLI 传入 `ContextManager()` 启用
 - [x] 全量验证：`pytest` 121 个用例全部通过，`ruff` 无告警
-- [ ] 待办：窗口预算配置与超限裁剪（在 `ContextManager.prepare` 内实现）、历史滚动摘要、可观测占比记录
+- [x] 新增 `app/context/config.py`：`ContextSettings`（.env 可配窗口/预留输出/安全余量）+ `ContextWindowRegistry`（按模型族解析窗口）+ `ContextBudget`（输入预算 = 窗口 - 预留输出 - 安全余量）
+- [x] 模型族识别抽为公共 `model_family(provider, model)`（估算系数与窗口注册表共用）
+- [x] `ContextManager.prepare` 计算并返回 `budget`；`AgentEvent` 增加 `context_window` / `input_budget` 随 `MODEL_STARTED` 发射
+- [x] 验收达成：切换模型（qwen=131072 / openai=200000 / anthropic=200000 / other=128000）后输入预算不同
+- [x] 全量验证：`pytest` 127 个用例全部通过，`ruff` 无告警
+### 完成：模型能力注册与动态上下文预算
+
+- [x] 新增 `app/context/capabilities.py`：`ModelCapabilities`（provider/model/context_window/max_output_tokens/source）+ `ModelCapabilityRegistry`（查找优先级：用户覆盖 > 内置精确模型 > Provider 默认 > 保守兜底 32K）
+- [x] 内置精确模型表登记 ModelSettings 默认模型（gpt-5.4-mini / gpt-4o-mini / qwen3.7-plus / deepseek-v4-flash / claude-sonnet-4-6），同 Provider 不同模型可不同窗口
+- [x] 未知模型使用保守兜底（32K），记录 warning，不崩溃
+- [x] 新增 `app/context/budget.py`：`ContextBudgetPolicy`（trigger=0.80 / target=0.60 / safety_margin=4096），`input_budget = window - reserved_output - safety_margin`；显式 max_output_tokens 优先；非法配置抛清晰错误
+- [x] 配置覆盖：`ContextSettings` 新增 `context_override_provider/model`、`context_window_override`、`max_output_tokens_override`（作用于当前配置模型，不全局应用）
+- [x] `ContextDecision` 展开预算状态字段（context_window/input_budget/trigger_tokens/target_tokens/usage_ratio/requires_compaction/capability_source 等）；estimated >= trigger 时 requires_compaction=True；消息原样返回
+- [x] Runtime 修正模型解析顺序：先取 adapter → resolved_model/provider → prepare → complete（force_final_answer 同一流程）
+- [x] `AgentEvent` 增加 usage_ratio/trigger_tokens/target_tokens/requires_compaction/capability_source
+- [x] 测试：新增 `test_context_capabilities.py`、`test_context_budget.py`，重写 `test_context_config.py`
+- [x] 全量验证：`pytest` 141 个用例全部通过，`ruff` 无告警
+- [ ] 待办：真正的消息压缩（在 prepare 内超 trigger 后裁剪）、历史滚动摘要、可观测占比记录写回
 
 ---
 

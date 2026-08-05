@@ -180,28 +180,41 @@ class AgentRuntime:
             request_tools = (
                 () if force_final_answer else self._tool_registry.definitions()
             )
-            context_decision = await self._context_manager.prepare(
-                request_messages,
-                tools=request_tools,
-                model=self._model,
-                provider=_provider_name(self._provider),
-            )
-            request_messages = context_decision.messages
-            request_tools = context_decision.tools
-            await emitter.emit(
-                AgentEventType.MODEL_STARTED,
-                step=step,
-                provider=_provider_name(self._provider),
-                model=self._model,
-                estimated_input_tokens=context_decision.estimated_input_tokens,
-                context_trimmed=context_decision.trimmed,
-            )
             try:
+                # 先解析实际使用的模型，确保上下文预算与真实请求一致
                 adapter = self._model_registry.get(self._provider)
+                resolved_model = self._model or adapter.default_model
+                resolved_provider = adapter.provider
+                context_decision = await self._context_manager.prepare(
+                    request_messages,
+                    tools=request_tools,
+                    model=resolved_model,
+                    provider=resolved_provider,
+                    max_output_tokens=self._max_output_tokens,
+                )
+                request_messages = context_decision.messages
+                request_tools = context_decision.tools
+                await emitter.emit(
+                    AgentEventType.MODEL_STARTED,
+                    step=step,
+                    provider=resolved_provider,
+                    model=resolved_model,
+                    estimated_input_tokens=(
+                        context_decision.estimated_input_tokens
+                    ),
+                    context_trimmed=context_decision.trimmed,
+                    context_window=context_decision.context_window,
+                    input_budget=context_decision.input_budget,
+                    usage_ratio=context_decision.usage_ratio,
+                    trigger_tokens=context_decision.trigger_tokens,
+                    target_tokens=context_decision.target_tokens,
+                    requires_compaction=context_decision.requires_compaction,
+                    capability_source=context_decision.capability_source,
+                )
                 response = await adapter.complete(
                     ModelRequest(
                         messages=request_messages,
-                        model=self._model,
+                        model=resolved_model,
                         tools=request_tools,
                         max_output_tokens=self._max_output_tokens,
                     )

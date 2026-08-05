@@ -55,6 +55,13 @@ class AgentEvent(BaseModel):
     rule_description: str | None = None
     estimated_input_tokens: int | None = Field(default=None, ge=0)
     context_trimmed: bool | None = None
+    context_window: int | None = Field(default=None, ge=0)
+    input_budget: int | None = Field(default=None, ge=0)
+    usage_ratio: float | None = Field(default=None, ge=0.0)
+    trigger_tokens: int | None = Field(default=None, ge=0)
+    target_tokens: int | None = Field(default=None, ge=0)
+    requires_compaction: bool | None = None
+    capability_source: str | None = None
 
     @field_validator("run_id")
     @classmethod

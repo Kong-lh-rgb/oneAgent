@@ -168,31 +168,8 @@ class TokenEstimator:
     def factor_for(self, provider: str | None, model: str | None) -> float:
         """返回指定模型族适用的保守系数。"""
 
-        family = self._family(provider, model)
+        family = model_family(provider, model)
         return self._factors.get(family, self._factors["other"])
-
-    @staticmethod
-    def _family(provider: str | None, model: str | None) -> str:
-        if provider:
-            name = provider.strip().lower()
-            if name == "openai":
-                return "openai"
-            if name == "qwen":
-                return "qwen"
-            if name == "deepseek":
-                return "deepseek"
-            if name == "anthropic":
-                return "anthropic"
-        lowered = (model or "").lower()
-        if lowered.startswith(("gpt-", "o1", "o3", "o4")) or "openai" in lowered:
-            return "openai"
-        if "qwen" in lowered:
-            return "qwen"
-        if "deepseek" in lowered:
-            return "deepseek"
-        if "claude" in lowered or "anthropic" in lowered:
-            return "anthropic"
-        return "other"
 
     def _encoding(self, model: str | None) -> Encoding:
         cache_key = model or self._default_encoding
@@ -209,6 +186,34 @@ class TokenEstimator:
         return tiktoken.get_encoding(self._default_encoding)
 
 
+def model_family(provider: str | None, model: str | None) -> str:
+    """识别模型族（openai / qwen / deepseek / anthropic / other）。
+
+    优先按 provider 判断，其次按模型名判断。
+    """
+
+    if provider:
+        name = provider.strip().lower()
+        if name == "openai":
+            return "openai"
+        if name == "qwen":
+            return "qwen"
+        if name == "deepseek":
+            return "deepseek"
+        if name == "anthropic":
+            return "anthropic"
+    lowered = (model or "").lower()
+    if lowered.startswith(("gpt-", "o1", "o3", "o4")) or "openai" in lowered:
+        return "openai"
+    if "qwen" in lowered:
+        return "qwen"
+    if "deepseek" in lowered:
+        return "deepseek"
+    if "claude" in lowered or "anthropic" in lowered:
+        return "anthropic"
+    return "other"
+
+
 _DEFAULT = TokenEstimator()
 
 
@@ -223,4 +228,5 @@ __all__ = [
     "DEFAULT_FAMILY_FACTORS",
     "TokenEstimator",
     "default_token_estimator",
+    "model_family",
 ]

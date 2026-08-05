@@ -183,6 +183,10 @@ async def test_runtime_emits_estimated_input_tokens_before_model_call() -> None:
     )
     assert started.estimated_input_tokens is not None
     assert started.estimated_input_tokens > 0
+    assert started.context_window is not None
+    assert started.context_window > 0
+    assert started.input_budget is not None
+    assert started.input_budget > 0
     assert started.step == 1
 
 
@@ -194,6 +198,7 @@ class _EmptyContextManager(ContextManager):
         tools=(),
         model=None,
         provider=None,
+        max_output_tokens=None,
     ):
         return ContextDecision(
             messages=tuple(messages),
