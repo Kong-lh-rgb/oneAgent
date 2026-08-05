@@ -53,6 +53,8 @@ class AgentEvent(BaseModel):
     approval_decision: ApprovalDecision | None = None
     rule_id: str | None = None
     rule_description: str | None = None
+    estimated_input_tokens: int | None = Field(default=None, ge=0)
+    context_trimmed: bool | None = None
 
     @field_validator("run_id")
     @classmethod

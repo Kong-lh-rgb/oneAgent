@@ -14,6 +14,9 @@ python-dotenv==1.2.2
 # Network tools
 httpx==0.28.1
 
+# Context management
+tiktoken==0.13.0
+
 # Persistence, scheduling, and logging
 aiosqlite==0.22.1
 APScheduler==3.11.3

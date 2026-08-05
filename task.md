@@ -35,6 +35,22 @@
 - [x] CLI 新增 `/permissions`、`/permission remove <规则ID>` 和 `/permissions clear`，支持查看与撤销当前会话规则
 - [x] 新增命令拼接、HTTP 权限扩大、空作用域、DENY 优先、旧规则迁移、RUN 清理和 CLI 撤销测试
 - [x] 全量验证：`pytest` 107 个用例全部通过，`ruff`、编译、CLI 参数与 Diff 格式检查通过
+- [x] 重构：`_compact_conversation_history` 从 CLI（`app/models/chat.py`）移入会话层 `app/conversation/history.py`，以 `compact_conversation_history` 公开导出，chat.py 与测试改用新位置
+
+### 进行中：上下文管理（第一步：token 估算）
+- [x] 安装依赖 `tiktoken==0.13.0`，加入 requirements.txt（Context management 段）
+- [x] 新增 `app/context/` 包：`TokenEstimator`（估算文本/消息序列/工具定义/完整请求 token 数）
+- [x] 精度策略：OpenAI 模型用 tiktoken 精确编码；**非 OpenAI 模型（qwen/deepseek/anthropic/其他）用 cl100k_base 近似 + 保守系数**（默认 qwen/deepseek=1.2、anthropic=1.15、other=1.25，向上取整，可自定义覆盖），避免低估导致上下文溢出
+- [x] `TokenEstimator.factor_for(provider, model)` 暴露模型族识别与系数；runtime 传入 provider 使系数生效
+- [x] `AgentEvent` 新增 `estimated_input_tokens` 字段
+- [x] `AgentRuntime` 新增 `token_estimator` 参数；每次模型调用前估算 `request_messages + tools`，随 `MODEL_STARTED` 事件发射（Trace 自动持久化）
+- [x] CLI 传入 `TokenEstimator()` 启用估算
+- [x] 新增 `test_token_estimator.py`（估算器单测 + 保守系数 + Runtime 事件带估算）
+- [x] 新增 `ContextManager`（`app/context/manager.py`）：`prepare(messages, tools, model, provider) -> ContextDecision`（当前不压缩、原样返回 + 估算），作为上下文策略层入口
+- [x] `AgentRuntime` 改用 `context_manager` 参数（替代 `token_estimator`），每轮模型调用前经 `ContextManager.prepare` 取上下文与估算；`AgentEvent` 增加 `context_trimmed` 字段（当前恒 False）
+- [x] CLI 传入 `ContextManager()` 启用
+- [x] 全量验证：`pytest` 121 个用例全部通过，`ruff` 无告警
+- [ ] 待办：窗口预算配置与超限裁剪（在 `ContextManager.prepare` 内实现）、历史滚动摘要、可观测占比记录
 
 ---
 

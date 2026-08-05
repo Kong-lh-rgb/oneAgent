@@ -17,10 +17,12 @@ from pathlib import Path
 from app.agent.events import AgentEvent, AgentEventType
 from app.agent.result import AgentResult
 from app.agent.runtime import AgentRuntime
+from app.context import ContextManager
 from app.conversation import (
     DEFAULT_DATABASE_PATH,
     Conversation,
     SQLiteConversationStore,
+    compact_conversation_history,
 )
 from app.tools import (
     ApprovalScope,
@@ -76,26 +78,6 @@ def _initial_history(system_prompt: str | None) -> list[Message]:
     return [Message(role=MessageRole.SYSTEM, content=system_prompt)]
 
 
-def _compact_conversation_history(
-    messages: tuple[Message, ...] | list[Message],
-) -> list[Message]:
-    """移除历史工具协议消息，只保留跨轮对话真正需要的内容。
-
-    完整工具过程已经保存在 Trace 和 AgentResult 中；把原始工具输出继续放入
-    下一轮模型请求会重复计费，并让长网页正文持续占用上下文。
-    """
-
-    return [
-        message
-        for message in messages
-        if message.role is not MessageRole.TOOL
-        and not (
-            message.role is MessageRole.ASSISTANT
-            and bool(message.tool_calls)
-        )
-    ]
-
-
 async def _send_message(
     *,
     runtime: AgentRuntime,
@@ -122,7 +104,7 @@ async def _send_message(
 
     if result is None:
         raise RuntimeError("Agent 事件流结束时缺少最终结果")
-    history[:] = _compact_conversation_history(result.messages)
+    history[:] = compact_conversation_history(result.messages)
     conversation = await conversation_store.replace_messages(
         conversation.id,
         history,
@@ -219,7 +201,7 @@ async def _load_or_create_conversation(
         conversation = await store.create(messages=_initial_history(system_prompt))
         return conversation, list(await store.load_messages(conversation.id)), False
 
-    history = _compact_conversation_history(
+    history = compact_conversation_history(
         list(await store.load_messages(conversation.id))
     )
     return conversation, history, True
@@ -381,6 +363,7 @@ async def _run(args: argparse.Namespace) -> int:
         ),
         policy_engine=policy_engine,
         rule_store=rule_store,
+        context_manager=ContextManager(),
     )
     try:
         if args.message is not None:
@@ -419,7 +402,7 @@ async def _run(args: argparse.Namespace) -> int:
                     title=title,
                     messages=_initial_history(args.system),
                 )
-                history = _compact_conversation_history(
+                history = compact_conversation_history(
                     list(await conversation_store.load_messages(conversation.id))
                 )
                 print(f"已创建会话：{conversation.id[:8]} · {conversation.title}")
@@ -501,7 +484,7 @@ async def _run(args: argparse.Namespace) -> int:
                     print(f"找不到会话：{identifier}")
                     continue
                 conversation = selected
-                history = _compact_conversation_history(
+                history = compact_conversation_history(
                     list(await conversation_store.load_messages(conversation.id))
                 )
                 print(

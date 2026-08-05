@@ -9,6 +9,7 @@ from contextlib import suppress
 from typing import Any
 from uuid import uuid4
 
+from app.context import ContextManager
 from app.models.registry import ModelAdapterRegistry
 from app.models.types import (
     Message,
@@ -67,6 +68,7 @@ class AgentRuntime:
         approval_gate: ApprovalGate | None = None,
         policy_engine: PermissionPolicyEngine | None = None,
         rule_store: PermissionRuleStore | None = None,
+        context_manager: ContextManager | None = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -82,6 +84,7 @@ class AgentRuntime:
         self._max_steps = max_steps
         self._max_tool_rounds = max_tool_rounds
         self._max_output_tokens = max_output_tokens
+        self._context_manager = context_manager or ContextManager()
         self._tool_executor = tool_executor or ToolExecutor(
             tool_registry,
             approval_gate=approval_gate,
@@ -174,11 +177,24 @@ class AgentRuntime:
                         ),
                     ),
                 )
+            request_tools = (
+                () if force_final_answer else self._tool_registry.definitions()
+            )
+            context_decision = await self._context_manager.prepare(
+                request_messages,
+                tools=request_tools,
+                model=self._model,
+                provider=_provider_name(self._provider),
+            )
+            request_messages = context_decision.messages
+            request_tools = context_decision.tools
             await emitter.emit(
                 AgentEventType.MODEL_STARTED,
                 step=step,
                 provider=_provider_name(self._provider),
                 model=self._model,
+                estimated_input_tokens=context_decision.estimated_input_tokens,
+                context_trimmed=context_decision.trimmed,
             )
             try:
                 adapter = self._model_registry.get(self._provider)
@@ -186,11 +202,7 @@ class AgentRuntime:
                     ModelRequest(
                         messages=request_messages,
                         model=self._model,
-                        tools=(
-                            ()
-                            if force_final_answer
-                            else self._tool_registry.definitions()
-                        ),
+                        tools=request_tools,
                         max_output_tokens=self._max_output_tokens,
                     )
                 )

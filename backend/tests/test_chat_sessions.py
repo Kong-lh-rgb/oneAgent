@@ -6,9 +6,8 @@ import pytest
 
 from app.agent.events import AgentEvent, AgentEventHandler, AgentEventType
 from app.agent.result import AgentResult, AgentStopReason
-from app.conversation import SQLiteConversationStore
+from app.conversation import SQLiteConversationStore, compact_conversation_history
 from app.models.chat import (
-    _compact_conversation_history,
     _load_or_create_conversation,
     _print_permission_rules,
     _remove_permission_rule,
@@ -87,7 +86,7 @@ def test_compact_conversation_history_removes_tool_protocol_messages() -> None:
         Message(role=MessageRole.ASSISTANT, content="新闻摘要"),
     )
 
-    compacted = _compact_conversation_history(messages)
+    compacted = compact_conversation_history(messages)
 
     assert [message.role for message in compacted] == [
         MessageRole.SYSTEM,
