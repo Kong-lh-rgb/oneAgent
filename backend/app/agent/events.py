@@ -51,6 +51,8 @@ class AgentEvent(BaseModel):
     error: AgentError | None = None
     result: AgentResult | None = None
     approval_decision: ApprovalDecision | None = None
+    rule_id: str | None = None
+    rule_description: str | None = None
 
     @field_validator("run_id")
     @classmethod

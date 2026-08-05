@@ -17,7 +17,7 @@ from typing import Any
 
 from app.models.types import ToolCall, ToolResult
 
-from .approval import ApprovalGate, DenyAllGate
+from .approval import ApprovalDecision, ApprovalGate, DenyAllGate
 from .base import BaseTool
 from .hooks import ToolExecutionContext, ToolHook, ToolHookDecision, ToolHookRunner
 from .observability import (
@@ -28,6 +28,9 @@ from .observability import (
     _now_iso,
 )
 from .permission_hook import PermissionHook
+from .permissions.policy import PermissionPolicyEngine
+from .permissions.rule_factory import build_safe_rule
+from .permissions.store import PermissionRuleStore
 from .registry import ToolRegistry
 
 MAX_TOOL_OUTPUT_CHARS = 20_000
@@ -43,6 +46,9 @@ class ToolExecutor:
         approval_gate: ApprovalGate | None = None,
         logger: ToolExecutionLogger | None = None,
         hooks: Sequence[ToolHook] = (),
+        policy_engine: PermissionPolicyEngine | None = None,
+        rule_store: PermissionRuleStore | None = None,
+        rule_factory: Any = build_safe_rule,
     ) -> None:
         if timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be greater than zero")
@@ -50,11 +56,30 @@ class ToolExecutor:
             raise ValueError("max_output_chars must be greater than zero")
         if max_output_chars > MAX_TOOL_OUTPUT_CHARS:
             raise ValueError(f"max_output_chars cannot exceed {MAX_TOOL_OUTPUT_CHARS}")
+        if (
+            policy_engine is not None
+            and rule_store is not None
+            and policy_engine.store is not rule_store
+        ):
+            raise ValueError("policy_engine and rule_store must use the same store")
+        resolved_store = rule_store or (
+            policy_engine.store if policy_engine is not None else None
+        )
+        resolved_policy = policy_engine or (
+            PermissionPolicyEngine(resolved_store)
+            if resolved_store is not None
+            else None
+        )
         self._registry = registry
         self._timeout_seconds = timeout_seconds
         self._max_output_chars = max_output_chars
         self.logger = logger or InMemoryExecutionLogger()
-        self._permission_hook = PermissionHook(approval_gate or DenyAllGate())
+        self._permission_hook = PermissionHook(
+            approval_gate or DenyAllGate(),
+            policy=resolved_policy,
+            rule_store=resolved_store,
+            rule_factory=rule_factory,
+        )
         self._hooks = (
             self._permission_hook,
             ObservabilityHook(self.logger),
@@ -67,6 +92,11 @@ class ToolExecutor:
         if isinstance(self.logger, InMemoryExecutionLogger):
             return self.logger.records
         return ()
+
+    async def clear_run_rules(self, run_id: str) -> int:
+        """清理一次 Agent Run 创建的临时审批规则。"""
+
+        return await self._permission_hook.clear_run_rules(run_id)
 
     async def execute(
         self,
@@ -133,10 +163,32 @@ class ToolExecutor:
                 return None
 
             request = check.approval_request
+
+            # 规则命中：无需询问用户，直接放行并记录命中事实。
+            if check.matched_rule is not None:
+                await hook_runner.on_approval_completed(
+                    context,
+                    request,
+                    ApprovalDecision.APPROVED,
+                    rule=check.matched_rule,
+                )
+                return None
+
             await hook_runner.on_approval_required(context, request)
-            decision = await self._permission_hook.request_approval(request)
-            await hook_runner.on_approval_completed(context, request, decision)
-            return self._permission_hook.denied_reason(context, decision)
+            outcome = await self._permission_hook.request_approval(
+                request,
+                context=context,
+            )
+            await hook_runner.on_approval_completed(
+                context,
+                request,
+                outcome.response.decision,
+                rule=outcome.rule,
+            )
+            return self._permission_hook.denied_reason(
+                context,
+                outcome.response.decision,
+            )
         except Exception as exc:
             return f"Permission check failed: {type(exc).__name__}: {exc}"
 

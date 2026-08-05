@@ -22,7 +22,15 @@ from app.conversation import (
     Conversation,
     SQLiteConversationStore,
 )
-from app.tools import ConsoleApprovalGate, build_builtin_tool_registry
+from app.tools import (
+    ApprovalScope,
+    ConsoleApprovalGate,
+    PermissionPolicyEngine,
+    PermissionRule,
+    SQLitePermissionRuleStore,
+    build_builtin_tool_registry,
+    describe_safe_rule,
+)
 from app.tools.builtin import WebSearchTool
 from app.tools.search import SearchError
 from app.trace import (
@@ -171,7 +179,15 @@ def _print_agent_event(event: AgentEvent) -> None:
             if event.approval_decision is not None
             else "unknown"
         )
-        print(f"{prefix} 工具审批完成：{event.tool_call.name} · {decision}")
+        rule_text = (
+            f" · 规则：{event.rule_description}"
+            if event.rule_description is not None
+            else ""
+        )
+        print(
+            f"{prefix} 工具权限检查完成：{event.tool_call.name} · "
+            f"{decision}{rule_text}"
+        )
     elif event.type is AgentEventType.AGENT_COMPLETED:
         print(f"{prefix} Agent 执行完成")
     elif event.type is AgentEventType.AGENT_FAILED:
@@ -257,6 +273,8 @@ def _print_trace(events: tuple[AgentEvent, ...]) -> None:
             details.append(f"tool={event.tool_call.name}")
         if event.approval_decision is not None:
             details.append(f"decision={event.approval_decision.value}")
+        if event.rule_id is not None:
+            details.append(f"rule={event.rule_id[:8]}")
         if event.tool_result is not None:
             details.append(
                 f"success={'true' if event.tool_result.success else 'false'}"
@@ -266,6 +284,39 @@ def _print_trace(events: tuple[AgentEvent, ...]) -> None:
             f"{event.sequence:03d}  {event_time}  "
             f"{event.type.value}{detail_text}"
         )
+
+
+def _print_permission_rules(rules: tuple[PermissionRule, ...]) -> None:
+    """显示当前会话记住的工具审批规则。"""
+
+    if not rules:
+        print("当前会话没有已记住的审批规则。")
+        return
+    for rule in rules:
+        created_at = rule.created_at.astimezone().strftime("%m-%d %H:%M:%S")
+        print(
+            f"{rule.id[:8]}  {created_at}  {rule.tool_name}  "
+            f"{rule.description}"
+        )
+
+
+async def _remove_permission_rule(
+    store: SQLitePermissionRuleStore,
+    conversation_id: str,
+    identifier: str,
+) -> bool:
+    """按当前会话中的完整 ID 或唯一前缀删除规则。"""
+
+    normalized = identifier.strip()
+    if not normalized:
+        return False
+    rules = await store.list(scope_ids=(conversation_id,))
+    matched = [rule for rule in rules if rule.id.startswith(normalized)]
+    if len(matched) > 1:
+        raise ValueError(f"规则 ID 前缀不唯一：{identifier}")
+    if not matched:
+        return False
+    return await store.remove(matched[0].id)
 
 
 async def _run(args: argparse.Namespace) -> int:
@@ -285,6 +336,9 @@ async def _run(args: argparse.Namespace) -> int:
     trace_store = SQLiteTraceStore(args.database)
     await trace_store.initialize()
     trace_handler = SQLiteTraceEventHandler(trace_store)
+    rule_store = SQLitePermissionRuleStore(args.database)
+    await rule_store.initialize()
+    policy_engine = PermissionPolicyEngine(rule_store)
     try:
         conversation, history, resumed = await _load_or_create_conversation(
             conversation_store,
@@ -322,7 +376,11 @@ async def _run(args: argparse.Namespace) -> int:
         max_steps=args.max_steps,
         max_tool_rounds=args.max_tool_rounds,
         max_output_tokens=args.max_output_tokens,
-        approval_gate=ConsoleApprovalGate(),
+        approval_gate=ConsoleApprovalGate(
+            rule_label_factory=describe_safe_rule,
+        ),
+        policy_engine=policy_engine,
+        rule_store=rule_store,
     )
     try:
         if args.message is not None:
@@ -340,8 +398,8 @@ async def _run(args: argparse.Namespace) -> int:
 
         print(
             "命令：/new 新建会话，/sessions 查看会话，/use <id> 切换会话，"
-            "/runs 查看运行，/trace <id> 查看轨迹，/clear 清空当前会话，"
-            "/help 查看帮助，/exit 退出"
+            "/runs 查看运行，/trace <id> 查看轨迹，/permissions 查看审批规则，"
+            "/clear 清空当前会话，/help 查看帮助，/exit 退出"
         )
         while True:
             try:
@@ -371,6 +429,38 @@ async def _run(args: argparse.Namespace) -> int:
                     await conversation_store.list(),
                     conversation.id,
                 )
+                continue
+            if content == "/permissions":
+                rules = await rule_store.list(scope_ids=(conversation.id,))
+                _print_permission_rules(rules)
+                continue
+            if content == "/permissions clear":
+                removed = await rule_store.remove_scope(
+                    ApprovalScope.CONVERSATION,
+                    conversation.id,
+                )
+                print(f"已清除当前会话的 {removed} 条审批规则。")
+                continue
+            if content == "/permission remove" or content.startswith(
+                "/permission remove "
+            ):
+                identifier = content.removeprefix("/permission remove").strip()
+                if not identifier:
+                    print("用法：/permission remove <规则ID>")
+                    continue
+                try:
+                    removed = await _remove_permission_rule(
+                        rule_store,
+                        conversation.id,
+                        identifier,
+                    )
+                except ValueError as exc:
+                    print(exc)
+                    continue
+                if removed:
+                    print(f"已删除审批规则：{identifier}")
+                else:
+                    print(f"当前会话找不到审批规则：{identifier}")
                 continue
             if content == "/runs":
                 _print_runs(
@@ -434,6 +524,9 @@ async def _run(args: argparse.Namespace) -> int:
                     "/use <会话ID> 切换会话\n"
                     "/runs 查看最近 Agent Run\n"
                     "/trace <Run ID> 查看完整事件轨迹\n"
+                    "/permissions 查看当前会话的审批规则\n"
+                    "/permission remove <规则ID> 删除一条审批规则\n"
+                    "/permissions clear 清除当前会话的全部审批规则\n"
                     "/clear 清空当前会话\n"
                     "/exit 退出聊天"
                 )

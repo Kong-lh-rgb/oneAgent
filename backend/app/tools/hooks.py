@@ -8,6 +8,7 @@ from typing import Any
 from app.models.types import ToolCall, ToolDefinition, ToolResult
 
 from .approval import ApprovalDecision, ApprovalRequest
+from .permissions.models import PermissionRule
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,6 +30,7 @@ class ToolHookDecision:
 
     denied_reason: str | None = None
     approval_request: ApprovalRequest | None = None
+    matched_rule: PermissionRule | None = None
 
 
 class ToolHook:
@@ -56,8 +58,9 @@ class ToolHook:
         context: ToolExecutionContext,
         request: ApprovalRequest,
         decision: ApprovalDecision,
+        rule: PermissionRule | None = None,
     ) -> None:
-        """在人工审批完成后调用。"""
+        """在人工审批完成后调用；rule 表示本次审批创建或命中的规则。"""
 
     async def after_execute(
         self,
@@ -110,10 +113,11 @@ class ToolHookRunner:
         context: ToolExecutionContext,
         request: ApprovalRequest,
         decision: ApprovalDecision,
+        rule: PermissionRule | None = None,
     ) -> None:
         for hook in self._hooks:
             try:
-                await hook.on_approval_completed(context, request, decision)
+                await hook.on_approval_completed(context, request, decision, rule)
             except Exception:
                 continue
 

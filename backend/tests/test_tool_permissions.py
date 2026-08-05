@@ -11,6 +11,7 @@ from app.tools import (
     ApprovalDecision,
     ApprovalGate,
     ApprovalRequest,
+    ApprovalResponse,
     AutoApproveGate,
     BaseTool,
     ToolExecutor,
@@ -42,9 +43,9 @@ class RecordingGate(ApprovalGate):
         self.decision = decision
         self.requests: list[ApprovalRequest] = []
 
-    async def request_approval(self, request: ApprovalRequest) -> ApprovalDecision:
+    async def request_approval(self, request: ApprovalRequest) -> ApprovalResponse:
         self.requests.append(request)
-        return self.decision
+        return ApprovalResponse(decision=self.decision)
 
 
 def build(*tools: StubTool) -> ToolRegistry:

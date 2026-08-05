@@ -29,10 +29,19 @@ from app.models.types import (
     ToolDefinition,
     ToolPermission,
 )
-from app.tools.approval import ApprovalDecision, AutoApproveGate, DenyAllGate
+from app.tools.approval import (
+    ApprovalDecision,
+    ApprovalGate,
+    ApprovalRequest,
+    ApprovalResponse,
+    ApprovalScope,
+    AutoApproveGate,
+    DenyAllGate,
+)
 from app.tools.base import BaseTool
 from app.tools.builtin.read_file import ReadFileTool
 from app.tools.builtin.write_file import WriteFileTool
+from app.tools.permissions.store import InMemoryPermissionRuleStore
 from app.tools.registry import ToolRegistry
 
 
@@ -87,6 +96,16 @@ class ApprovalCountingTool(CountingTool):
         },
         permission=ToolPermission.HUMAN_APPROVAL,
     )
+
+
+class RememberRunGate(ApprovalGate):
+    """批准并只在当前 Run 内记住操作。"""
+
+    async def request_approval(self, request: ApprovalRequest) -> ApprovalResponse:
+        return ApprovalResponse(
+            decision=ApprovalDecision.APPROVED,
+            scope=ApprovalScope.RUN,
+        )
 
 
 class FailingEventHandler(AgentEventHandler):
@@ -605,6 +624,37 @@ async def test_runtime_records_denied_approval_without_executing_tool() -> None:
     assert completed.approval_decision is ApprovalDecision.DENIED
     assert result.tool_calls[0].result.success is False
     assert tool.executions == 0
+
+
+@pytest.mark.asyncio
+async def test_runtime_cleans_run_scoped_permission_rules() -> None:
+    registry, _ = fake_registry(
+        [
+            model_response(
+                tool_calls=(
+                    ToolCall(
+                        id="approval-1",
+                        name="approval_count",
+                        arguments={"value": 1},
+                    ),
+                )
+            ),
+            model_response(content="完成"),
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(ApprovalCountingTool())
+    store = InMemoryPermissionRuleStore()
+
+    await AgentRuntime(
+        registry,
+        tools,
+        provider="fake",
+        approval_gate=RememberRunGate(),
+        rule_store=store,
+    ).run("执行审批工具", conversation_id="conversation-1")
+
+    assert await store.list() == ()
 
 
 @pytest.mark.asyncio

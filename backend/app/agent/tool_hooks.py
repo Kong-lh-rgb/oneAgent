@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from app.models.types import ToolResult
 from app.tools.approval import ApprovalDecision, ApprovalRequest
 from app.tools.hooks import ToolExecutionContext, ToolHook
+from app.tools.permissions.models import PermissionRule
 
 from .events import AgentEventType
 
@@ -47,12 +48,15 @@ class AgentEventHook(ToolHook):
         context: ToolExecutionContext,
         request: ApprovalRequest,
         decision: ApprovalDecision,
+        rule: PermissionRule | None = None,
     ) -> None:
         await self._emitter.emit(
             AgentEventType.TOOL_APPROVAL_COMPLETED,
             step=context.step,
             tool_call=context.tool_call,
             approval_decision=decision,
+            rule_id=rule.id if rule is not None else None,
+            rule_description=rule.description if rule is not None else None,
         )
 
     async def after_execute(

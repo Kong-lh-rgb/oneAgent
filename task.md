@@ -6,6 +6,38 @@
 
 ---
 
+## 2026-08-05
+
+### 完成：可记忆的人工审批规则与安全加固
+
+#### Bad Case
+- [x] HUMAN_APPROVAL 工具每次执行都要求用户重复输入，同一 Run 内相同的 shell/http 操作反复询问
+- [x] 审批门只返回 approved/denied，没有"记住安全规则"的能力，也没有规则匹配
+- [x] 初版 Shell 前缀规则会错误放行 `pytest x; rm ...`、`&&` 和 `$()` 等命令拼接
+- [x] 初版 HTTP 主机规则会把一次 GET 扩大为同主机任意方法、路径、端口和请求体
+- [x] SQLite Store 在空作用域 `()` 下错误返回全部规则，直接调用 Executor 时可能跨会话授权
+- [x] RUN 规则永久残留在 SQLite，且 CLI 没有查看和撤销已记住规则的入口
+- [x] 多条 ALLOW / ASK / DENY 规则同时命中时依赖数据库返回顺序，没有安全优先级
+
+#### 修复结果
+- [x] 新增 `app/tools/permissions/` 包：`models` / `matchers` / `policy` / `store` / `rule_factory`
+- [x] `ApprovalGate` 返回 `ApprovalResponse`（decision + scope：ONCE / RUN / CONVERSATION）
+- [x] `ConsoleApprovalGate` 提供 4 选项菜单：仅此一次 / 本 Run 相同操作 / 记住安全规则 / 拒绝
+- [x] `PermissionPolicyEngine` 匹配已存规则 → ALLOW / ASK / DENY；`PermissionRuleStore`（内存 + SQLite 持久化）
+- [x] RUN 与 CONVERSATION 都只记住完整参数完全相同的操作，不再用 Shell 前缀或 HTTP 主机扩大权限
+- [x] SQLite 初始化时使旧 `command_prefix` / `command_contains` / `host_exact` 宽泛规则失效，并迁移旧会话作用域名称
+- [x] 空作用域严格返回空结果；规则冲突固定为 DENY 优先，其次 ASK、ALLOW，并优先更具体的 RUN 规则
+- [x] `PermissionHook` 集成策略引擎 + 规则存储 + 规则工厂；`ToolExecutor`/`AgentRuntime` 透传 `policy_engine`/`rule_store`
+- [x] Executor 自动从 Store 构造 Policy，并拒绝 Policy 与 Store 指向不同实例的错误接线
+- [x] Agent Run 在正常完成、失败和取消时清理 RUN 临时规则，不在 SQLite 中永久累积
+- [x] `AgentEvent` 增加 `rule_id`/`rule_description`，Trace 记录"审批创建规则"与"规则命中放行"事实
+- [x] CLI 接入 SQLite 规则存储（与会话/Trace 共用 oneagent.db），审批菜单第 3 项由 `describe_safe_rule` 生成
+- [x] CLI 新增 `/permissions`、`/permission remove <规则ID>` 和 `/permissions clear`，支持查看与撤销当前会话规则
+- [x] 新增命令拼接、HTTP 权限扩大、空作用域、DENY 优先、旧规则迁移、RUN 清理和 CLI 撤销测试
+- [x] 全量验证：`pytest` 107 个用例全部通过，`ruff`、编译、CLI 参数与 Diff 格式检查通过
+
+---
+
 ## 2026-08-04
 
 ### 完成：AgentRuntime 返回完整运行过程

@@ -10,9 +10,12 @@ from app.conversation import SQLiteConversationStore
 from app.models.chat import (
     _compact_conversation_history,
     _load_or_create_conversation,
+    _print_permission_rules,
+    _remove_permission_rule,
     _send_message,
 )
 from app.models.types import Message, MessageRole, ModelProvider, ToolCall
+from app.tools import ApprovalScope, SQLitePermissionRuleStore, build_safe_rule
 from app.trace import SQLiteTraceEventHandler, SQLiteTraceStore
 
 
@@ -195,3 +198,31 @@ async def test_send_message_persists_runtime_history_and_generates_title(
     assert runs[0].run_id == "stub-run"
     assert runs[0].conversation_id == conversation.id
     assert runs[0].event_count == 2
+
+
+@pytest.mark.asyncio
+async def test_cli_lists_and_removes_conversation_permission_rules(
+    tmp_path,
+    capsys,
+) -> None:
+    store = SQLitePermissionRuleStore(tmp_path / "oneagent.db")
+    await store.initialize()
+    rule = build_safe_rule(
+        tool_name="run_shell_command",
+        arguments={"command": "pytest x"},
+        scope=ApprovalScope.CONVERSATION,
+        scope_id="conversation-1",
+    )
+    await store.add(rule)
+
+    _print_permission_rules(await store.list(scope_ids=("conversation-1",)))
+    output = capsys.readouterr().out
+    assert rule.id[:8] in output
+    assert rule.description in output
+
+    assert await _remove_permission_rule(
+        store,
+        "conversation-1",
+        rule.id[:8],
+    ) is True
+    assert await store.list(scope_ids=("conversation-1",)) == ()

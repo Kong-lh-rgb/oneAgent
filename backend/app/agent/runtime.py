@@ -23,6 +23,8 @@ from app.tools.approval import ApprovalGate
 from app.tools.executor import ToolExecutor
 from app.tools.hooks import ToolExecutionContext, ToolHook
 from app.tools.observability import ToolExecutionRecord
+from app.tools.permissions.policy import PermissionPolicyEngine
+from app.tools.permissions.store import PermissionRuleStore
 from app.tools.registry import ToolRegistry
 
 from .errors import (
@@ -63,6 +65,8 @@ class AgentRuntime:
         max_output_tokens: int | None = None,
         tool_executor: ToolExecutor | None = None,
         approval_gate: ApprovalGate | None = None,
+        policy_engine: PermissionPolicyEngine | None = None,
+        rule_store: PermissionRuleStore | None = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -81,6 +85,8 @@ class AgentRuntime:
         self._tool_executor = tool_executor or ToolExecutor(
             tool_registry,
             approval_gate=approval_gate,
+            policy_engine=policy_engine,
+            rule_store=rule_store,
         )
 
     @property
@@ -107,6 +113,29 @@ class AgentRuntime:
         """
 
         run_id = uuid4().hex
+        try:
+            return await self._run_once(
+                run_id,
+                user_input,
+                history=history,
+                conversation_id=conversation_id,
+                event_handler=event_handler,
+            )
+        finally:
+            with suppress(Exception):
+                await self._tool_executor.clear_run_rules(run_id)
+
+    async def _run_once(
+        self,
+        run_id: str,
+        user_input: str,
+        *,
+        history: Sequence[Message],
+        conversation_id: str | None,
+        event_handler: AgentEventHandler | None,
+    ) -> AgentResult:
+        """执行一次已分配 Run ID 的 Agent 循环。"""
+
         emitter = _EventEmitter(
             handler=event_handler or NullEventHandler(),
             run_id=run_id,

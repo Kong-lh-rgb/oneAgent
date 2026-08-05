@@ -11,6 +11,7 @@ from app.tools import (
     ApprovalDecision,
     ApprovalGate,
     ApprovalRequest,
+    ApprovalResponse,
     BaseTool,
     ToolExecutionContext,
     ToolExecutor,
@@ -59,8 +60,10 @@ class RecordingHook(ToolHook):
         context: ToolExecutionContext,
         request: ApprovalRequest,
         decision: ApprovalDecision,
+        rule: Any = None,
     ) -> None:
-        self.events.append(f"approval_completed:{decision.value}")
+        suffix = f":{rule.id}" if rule is not None else ""
+        self.events.append(f"approval_completed:{decision.value}{suffix}")
 
     async def after_execute(
         self,
@@ -94,12 +97,12 @@ class FixedGate(ApprovalGate):
     def __init__(self, decision: ApprovalDecision) -> None:
         self._decision = decision
 
-    async def request_approval(self, request: ApprovalRequest) -> ApprovalDecision:
-        return self._decision
+    async def request_approval(self, request: ApprovalRequest) -> ApprovalResponse:
+        return ApprovalResponse(decision=self._decision)
 
 
 class FailingGate(ApprovalGate):
-    async def request_approval(self, request: ApprovalRequest) -> ApprovalDecision:
+    async def request_approval(self, request: ApprovalRequest) -> ApprovalResponse:
         raise RuntimeError("approval service unavailable")
 
 
