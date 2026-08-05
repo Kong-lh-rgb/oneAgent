@@ -37,6 +37,8 @@ class ContextSettings(BaseSettings):
     context_trigger_ratio: float = Field(default=0.80, gt=0.0, lt=1.0)
     context_target_ratio: float = Field(default=0.60, gt=0.0, lt=1.0)
     context_keep_recent_tool_rounds: int = Field(default=2, ge=0)
+    context_keep_recent_conversation_blocks: int = Field(default=4, ge=0)
+    context_summary_max_output_tokens: int = Field(default=1_024, gt=0)
     context_max_tool_result_chars: int = Field(default=8_000, gt=0)
     context_tool_result_head_chars: int = Field(default=4_000, ge=0)
     context_tool_result_tail_chars: int = Field(default=2_000, ge=0)
@@ -52,8 +54,7 @@ class ContextSettings(BaseSettings):
         """工具结果首尾保留长度不能超过压缩后的内容预算。"""
 
         retained = (
-            self.context_tool_result_head_chars
-            + self.context_tool_result_tail_chars
+            self.context_tool_result_head_chars + self.context_tool_result_tail_chars
         )
         if retained > self.context_max_tool_result_chars:
             raise ValueError(

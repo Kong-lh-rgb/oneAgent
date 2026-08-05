@@ -111,6 +111,7 @@ def test_unknown_model_uses_conservative_fallback(caplog) -> None:
 
 # ---- Runtime 模型解析集成 ----
 
+
 class _ScriptedAdapter(ModelAdapter):
     def __init__(
         self,
@@ -151,6 +152,7 @@ class _FailingContextManager(ContextManager):
         provider: str | None = None,
         max_output_tokens: int | None = None,
         history_count: int | None = None,
+        summary_state=None,
     ) -> ContextDecision:
         raise RuntimeError("context estimator unavailable")
 
@@ -196,7 +198,8 @@ def _make_runtime(
         provider="qwen",
         model=model,
         max_tool_rounds=max_tool_rounds,
-        context_manager=context_manager or ContextManager(
+        context_manager=context_manager
+        or ContextManager(
             registry=_default_registry(),
             budget_policy=build_budget_policy(_settings()),
         ),
@@ -212,9 +215,7 @@ async def test_runtime_resolves_model_from_adapter_when_self_model_none() -> Non
     await runtime.run("hi", event_handler=handler)
 
     started = next(
-        event
-        for event in handler.events
-        if event.type is AgentEventType.MODEL_STARTED
+        event for event in handler.events if event.type is AgentEventType.MODEL_STARTED
     )
     # self._model 为 None → 使用 adapter.default_model
     assert started.model == "qwen3.7-plus"
@@ -272,9 +273,7 @@ async def test_force_final_answer_still_computes_budget() -> None:
     await runtime.run("go", event_handler=handler)
 
     started = [
-        event
-        for event in handler.events
-        if event.type is AgentEventType.MODEL_STARTED
+        event for event in handler.events if event.type is AgentEventType.MODEL_STARTED
     ]
     assert len(started) == 2  # 第一轮正常，第二轮 force_final_answer
     for event in started:
@@ -309,9 +308,7 @@ async def test_runtime_blocks_request_that_exceeds_input_budget() -> None:
     assert result.error.type == "ContextWindowExceededError"
     assert adapter.requests == []
     started = next(
-        event
-        for event in handler.events
-        if event.type is AgentEventType.MODEL_STARTED
+        event for event in handler.events if event.type is AgentEventType.MODEL_STARTED
     )
     assert started.exceeds_input_budget is True
     assert started.requires_compaction is True

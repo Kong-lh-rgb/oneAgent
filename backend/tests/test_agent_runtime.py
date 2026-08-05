@@ -19,7 +19,11 @@ from app.context import (
     ContextBudgetPolicy,
     ContextManager,
     ContextSettings,
+    ContextSummarizer,
+    ConversationReducer,
     ModelCapabilityRegistry,
+    RollingConversationSummary,
+    SummaryGenerationResult,
 )
 from app.models.adapter import ModelAdapter
 from app.models.config import ModelSettings, ProviderConfig
@@ -70,6 +74,20 @@ class FakeModelAdapter(ModelAdapter):
 
     async def close(self) -> None:
         pass
+
+
+class FixedContextSummarizer(ContextSummarizer):
+    """返回固定短摘要，避免离线测试调用真实模型。"""
+
+    async def summarize(
+        self,
+        previous_summary: RollingConversationSummary | None,
+        messages: Sequence[Message],
+    ) -> SummaryGenerationResult:
+        return SummaryGenerationResult(
+            summary=RollingConversationSummary(current_objective="保留当前目标"),
+            usage=ModelUsage(input_tokens=7, output_tokens=3, total_tokens=10),
+        )
 
 
 class CountingTool(BaseTool):
@@ -226,9 +244,7 @@ async def test_runtime_reads_then_writes_and_returns_final_text(tmp_path) -> Non
     tools.register(ReadFileTool(tmp_path))
     tools.register(WriteFileTool(tmp_path))
     event_handler = InMemoryEventHandler()
-    initial_history = (
-        Message(role=MessageRole.SYSTEM, content="你是本地文件助理。"),
-    )
+    initial_history = (Message(role=MessageRole.SYSTEM, content="你是本地文件助理。"),)
 
     result = await AgentRuntime(
         registry,
@@ -384,10 +400,7 @@ async def test_runtime_below_trigger_sends_complete_history_to_model() -> None:
     )
     second_request = adapter.requests[1].messages
     assert any(older_call in message.tool_calls for message in second_request)
-    assert any(
-        recent_call in message.tool_calls
-        for message in second_request
-    )
+    assert any(recent_call in message.tool_calls for message in second_request)
     assert second_request[-2].tool_calls == (current_call,)
     assert second_request[-1].role is MessageRole.TOOL
     assert second_request[-1].tool_call_id == current_call.id
@@ -463,9 +476,7 @@ async def test_runtime_sends_compressed_copy_but_returns_complete_raw_history() 
     assert result.messages[2].content == long_result
     request_messages = adapter.requests[0].messages
     prepared_old_result = next(
-        message
-        for message in request_messages
-        if message.tool_call_id == older_call.id
+        message for message in request_messages if message.tool_call_id == older_call.id
     )
     assert prepared_old_result.content != long_result
     assert "tool result compacted" in (prepared_old_result.content or "")
@@ -476,6 +487,70 @@ async def test_runtime_sends_compressed_copy_but_returns_complete_raw_history() 
             for call in message.tool_calls
         )
         for recent_call in recent_calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_runtime_uses_rolling_summary_but_returns_complete_history() -> None:
+    history_messages = [Message(role=MessageRole.SYSTEM, content="系统提示")]
+    for index in range(8):
+        history_messages.extend(
+            (
+                Message(
+                    role=MessageRole.USER,
+                    content=f"旧问题 {index} " + "问" * 150,
+                ),
+                Message(
+                    role=MessageRole.ASSISTANT,
+                    content=f"旧回答 {index} " + "答" * 150,
+                ),
+            )
+        )
+    history = tuple(history_messages)
+    registry, adapter = fake_registry(
+        [
+            model_response(
+                content="最终回答",
+                usage=ModelUsage(input_tokens=5, output_tokens=2, total_tokens=7),
+            )
+        ]
+    )
+    capability_registry = ModelCapabilityRegistry()
+    capability_registry.register_override(
+        "fake",
+        "fake-model",
+        context_window=2_000,
+        max_output_tokens=100,
+    )
+    context_manager = ContextManager(
+        registry=capability_registry,
+        budget_policy=ContextBudgetPolicy(safety_margin_tokens=0),
+        conversation_reducer=ConversationReducer(
+            FixedContextSummarizer(),
+            keep_recent_conversation_blocks=2,
+            keep_recent_tool_rounds=0,
+        ),
+    )
+
+    result = await AgentRuntime(
+        registry,
+        ToolRegistry(),
+        provider="fake",
+        max_output_tokens=100,
+        context_manager=context_manager,
+    ).run("当前问题", history=history)
+
+    assert result.ok is True
+    assert result.messages[: len(history)] == history
+    assert result.summary_state is not None
+    assert result.usage.total_tokens == 17
+    request = adapter.requests[0]
+    assert any(
+        message.name == "oneagent_rolling_summary" for message in request.messages
+    )
+    assert not any(
+        message.content and "旧问题 0" in message.content
+        for message in request.messages
     )
 
 

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
-from app.models.types import Message, ToolDefinition
+from app.models.types import Message, ModelUsage, ToolDefinition
 
 from .blocks import partition_messages
 from .budget import ContextBudgetPolicy, build_budget_policy
@@ -15,7 +15,8 @@ from .capabilities import (
     build_model_capability_registry,
 )
 from .config import ContextSettings
-from .reducers import ToolReducer
+from .reducers import ConversationReducer, ToolReducer, build_summary_candidate
+from .summary import ConversationSummaryState
 from .tokens import TokenEstimator, default_token_estimator
 
 
@@ -26,6 +27,8 @@ class ContextCompactionStage(StrEnum):
     TOOL_RESULTS = "tool_results"
     TOOL_ROUNDS = "tool_rounds"
     TOOL_RESULTS_AND_ROUNDS = "tool_results_and_rounds"
+    ROLLING_SUMMARY = "rolling_summary"
+    TOOL_AND_ROLLING_SUMMARY = "tool_and_rolling_summary"
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,11 @@ class ContextDecision:
     needs_next_compaction_stage: bool = False
     compacted_tool_results: int = 0
     removed_tool_rounds: int = 0
+    summary_state: ConversationSummaryState | None = None
+    summary_updated: bool = False
+    summarized_conversation_blocks: int = 0
+    summary_usage: ModelUsage = field(default_factory=ModelUsage)
+    summary_error: str | None = None
     reason: str | None = None
 
 
@@ -72,6 +80,7 @@ class ContextManager:
         context_settings: ContextSettings | None = None,
         keep_recent_tool_rounds: int | None = None,
         tool_reducer: ToolReducer | None = None,
+        conversation_reducer: ConversationReducer | None = None,
     ) -> None:
         settings = context_settings or ContextSettings()
         resolved_keep_recent_tool_rounds = (
@@ -92,6 +101,7 @@ class ContextManager:
             tool_result_head_chars=settings.context_tool_result_head_chars,
             tool_result_tail_chars=settings.context_tool_result_tail_chars,
         )
+        self._conversation_reducer = conversation_reducer
 
     @property
     def estimator(self) -> TokenEstimator:
@@ -117,6 +127,7 @@ class ContextManager:
         max_output_tokens: int | None = None,
         history_count: int | None = None,
         keep_recent_tool_rounds: int | None = None,
+        summary_state: ConversationSummaryState | None = None,
     ) -> ContextDecision:
         """返回模型请求上下文、估算与预算状态。
 
@@ -140,7 +151,20 @@ class ContextManager:
         if resolved_keep_recent_tool_rounds < 0:
             raise ValueError("keep_recent_tool_rounds cannot be negative")
 
-        original_messages = tuple(messages)
+        raw_messages = tuple(messages)
+        raw_history = raw_messages[:history_count]
+        current_messages = raw_messages[history_count:]
+        valid_summary_state = (
+            summary_state
+            if summary_state is None
+            or summary_state.covered_message_count <= len(raw_history)
+            else None
+        )
+        original_messages, effective_history_count = build_summary_candidate(
+            raw_history,
+            current_messages,
+            valid_summary_state,
+        )
 
         capabilities = self._registry.lookup(provider, model)
         budget = self._budget_policy.compute(
@@ -164,14 +188,19 @@ class ContextManager:
         prepared_input_tokens = original_estimated
         compacted_tool_results = 0
         removed_tool_rounds = 0
+        current_summary_state = valid_summary_state
+        summary_updated = False
+        summarized_conversation_blocks = 0
+        summary_usage = ModelUsage()
+        summary_error: str | None = None
         compaction_stage = ContextCompactionStage.NONE
         reached_target = original_estimated <= budget.target_tokens
 
         if requires_compaction:
             history_blocks = partition_messages(
-                original_messages[:history_count]
+                original_messages[:effective_history_count]
             )
-            current_messages = original_messages[history_count:]
+            prepared_current_messages = original_messages[effective_history_count:]
 
             def estimate(candidate: tuple[Message, ...]) -> int:
                 return self._estimator.estimate_request(
@@ -183,7 +212,7 @@ class ContextManager:
 
             reduction = self._tool_reducer.reduce(
                 history_blocks,
-                current_messages=current_messages,
+                current_messages=prepared_current_messages,
                 initial_estimated_input_tokens=original_estimated,
                 target_tokens=budget.target_tokens,
                 estimate=estimate,
@@ -201,12 +230,40 @@ class ContextManager:
             elif compacted_tool_results:
                 compaction_stage = ContextCompactionStage.TOOL_RESULTS
 
+            if not reached_target and self._conversation_reducer is not None:
+                conversation_reduction = await self._conversation_reducer.reduce(
+                    raw_history=raw_history,
+                    prepared_messages=request_messages,
+                    current_messages=current_messages,
+                    previous_state=valid_summary_state,
+                    initial_estimated_input_tokens=prepared_input_tokens,
+                    target_tokens=budget.target_tokens,
+                    estimate=estimate,
+                )
+                request_messages = conversation_reduction.messages
+                prepared_input_tokens = conversation_reduction.estimated_input_tokens
+                current_summary_state = conversation_reduction.summary_state
+                summarized_conversation_blocks = (
+                    conversation_reduction.summarized_conversation_blocks
+                )
+                summary_updated = summarized_conversation_blocks > 0
+                summary_usage = conversation_reduction.summary_usage
+                summary_error = conversation_reduction.error
+                reached_target = conversation_reduction.reached_target
+                if summary_updated:
+                    if compaction_stage is ContextCompactionStage.NONE:
+                        compaction_stage = ContextCompactionStage.ROLLING_SUMMARY
+                    else:
+                        compaction_stage = (
+                            ContextCompactionStage.TOOL_AND_ROLLING_SUMMARY
+                        )
+
         prepared_usage_ratio = (
             prepared_input_tokens / budget.input_budget
             if budget.input_budget > 0
             else None
         )
-        trimmed = request_messages != original_messages
+        trimmed = request_messages != raw_messages
         needs_next_compaction_stage = requires_compaction and not reached_target
         exceeds_input_budget = prepared_input_tokens > budget.input_budget
         reason = (
@@ -219,6 +276,9 @@ class ContextManager:
             f"compaction_stage={compaction_stage.value};"
             f"compacted_tool_results={compacted_tool_results};"
             f"removed_tool_rounds={removed_tool_rounds};"
+            f"summary_updated={summary_updated};"
+            f"summarized_conversation_blocks="
+            f"{summarized_conversation_blocks};"
             f"reached_target={reached_target};"
             f"needs_next_compaction_stage={needs_next_compaction_stage}"
         )
@@ -248,6 +308,11 @@ class ContextManager:
             needs_next_compaction_stage=needs_next_compaction_stage,
             compacted_tool_results=compacted_tool_results,
             removed_tool_rounds=removed_tool_rounds,
+            summary_state=current_summary_state,
+            summary_updated=summary_updated,
+            summarized_conversation_blocks=summarized_conversation_blocks,
+            summary_usage=summary_usage,
+            summary_error=summary_error,
             reason=reason,
         )
 

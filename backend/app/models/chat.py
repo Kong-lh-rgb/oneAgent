@@ -17,7 +17,13 @@ from pathlib import Path
 from app.agent.events import AgentEvent, AgentEventType
 from app.agent.result import AgentResult
 from app.agent.runtime import AgentRuntime
-from app.context import ContextManager
+from app.context import (
+    ContextManager,
+    ContextSettings,
+    ConversationReducer,
+    ModelContextSummarizer,
+    SQLiteConversationSummaryStore,
+)
 from app.conversation import (
     DEFAULT_DATABASE_PATH,
     Conversation,
@@ -87,15 +93,20 @@ async def _send_message(
     history: list[Message],
     content: str,
     model: str,
+    summary_store: SQLiteConversationSummaryStore | None = None,
 ) -> tuple[bool, Conversation]:
     print("OneAgent 正在思考...", flush=True)
 
     result: AgentResult | None = None
+    summary_state = (
+        await summary_store.load(conversation.id) if summary_store is not None else None
+    )
     async for event in runtime.run_stream(
         content,
         history=history,
         conversation_id=conversation.id,
         event_handler=trace_handler,
+        summary_state=summary_state,
     ):
         _print_agent_event(event)
         if event.result is not None:
@@ -109,6 +120,8 @@ async def _send_message(
         conversation.id,
         history,
     )
+    if summary_store is not None and result.summary_state is not None:
+        await summary_store.save(conversation.id, result.summary_state)
     if conversation.title == "新会话":
         conversation = await conversation_store.rename(
             conversation.id,
@@ -122,8 +135,7 @@ async def _send_message(
     )
     if result.tool_calls:
         tools = ", ".join(
-            f"{record.tool_call.name}"
-            f"({'成功' if record.result.success else '失败'})"
+            f"{record.tool_call.name}({'成功' if record.result.success else '失败'})"
             for record in result.tool_calls
         )
         print(f"[工具调用：{tools}]")
@@ -167,8 +179,7 @@ def _print_agent_event(event: AgentEvent) -> None:
             else ""
         )
         print(
-            f"{prefix} 工具权限检查完成：{event.tool_call.name} · "
-            f"{decision}{rule_text}"
+            f"{prefix} 工具权限检查完成：{event.tool_call.name} · {decision}{rule_text}"
         )
     elif event.type is AgentEventType.AGENT_COMPLETED:
         print(f"{prefix} Agent 执行完成")
@@ -260,10 +271,7 @@ def _print_trace(events: tuple[AgentEvent, ...]) -> None:
                 f"success={'true' if event.tool_result.success else 'false'}"
             )
         detail_text = f"  {' '.join(details)}" if details else ""
-        print(
-            f"{event.sequence:03d}  {event_time}  "
-            f"{event.type.value}{detail_text}"
-        )
+        print(f"{event.sequence:03d}  {event_time}  {event.type.value}{detail_text}")
 
 
 def _print_permission_rules(rules: tuple[PermissionRule, ...]) -> None:
@@ -274,10 +282,7 @@ def _print_permission_rules(rules: tuple[PermissionRule, ...]) -> None:
         return
     for rule in rules:
         created_at = rule.created_at.astimezone().strftime("%m-%d %H:%M:%S")
-        print(
-            f"{rule.id[:8]}  {created_at}  {rule.tool_name}  "
-            f"{rule.description}"
-        )
+        print(f"{rule.id[:8]}  {created_at}  {rule.tool_name}  {rule.description}")
 
 
 async def _remove_permission_rule(
@@ -313,6 +318,8 @@ async def _run(args: argparse.Namespace) -> int:
 
     conversation_store = SQLiteConversationStore(args.database)
     await conversation_store.initialize()
+    summary_store = SQLiteConversationSummaryStore(args.database)
+    await summary_store.initialize()
     trace_store = SQLiteTraceStore(args.database)
     await trace_store.initialize()
     trace_handler = SQLiteTraceEventHandler(trace_store)
@@ -348,6 +355,13 @@ async def _run(args: argparse.Namespace) -> int:
             print("联网搜索：DuckDuckGo（配置 TAVILY_API_KEY 可启用 Tavily）")
 
     registry = ModelAdapterRegistry(settings)
+    context_settings = ContextSettings()
+    context_summarizer = ModelContextSummarizer(
+        registry,
+        provider=provider,
+        model=args.model,
+        max_output_tokens=context_settings.context_summary_max_output_tokens,
+    )
     runtime = AgentRuntime(
         registry,
         tool_registry,
@@ -361,7 +375,18 @@ async def _run(args: argparse.Namespace) -> int:
         ),
         policy_engine=policy_engine,
         rule_store=rule_store,
-        context_manager=ContextManager(),
+        context_manager=ContextManager(
+            context_settings=context_settings,
+            conversation_reducer=ConversationReducer(
+                context_summarizer,
+                keep_recent_conversation_blocks=(
+                    context_settings.context_keep_recent_conversation_blocks
+                ),
+                keep_recent_tool_rounds=(
+                    context_settings.context_keep_recent_tool_rounds
+                ),
+            ),
+        ),
     )
     try:
         if args.message is not None:
@@ -374,6 +399,7 @@ async def _run(args: argparse.Namespace) -> int:
                 history=history,
                 content=args.message,
                 model=model,
+                summary_store=summary_store,
             )
             return 0 if success else 1
 
@@ -385,7 +411,7 @@ async def _run(args: argparse.Namespace) -> int:
         while True:
             try:
                 content = input("\n你> ").strip()
-            except (EOFError, KeyboardInterrupt):
+            except EOFError, KeyboardInterrupt:
                 print("\n聊天已结束。")
                 return 0
 
@@ -400,9 +426,7 @@ async def _run(args: argparse.Namespace) -> int:
                     title=title,
                     messages=_initial_history(args.system),
                 )
-                history = list(
-                    await conversation_store.load_messages(conversation.id)
-                )
+                history = list(await conversation_store.load_messages(conversation.id))
                 print(f"已创建会话：{conversation.id[:8]} · {conversation.title}")
                 continue
             if content == "/sessions":
@@ -463,8 +487,7 @@ async def _run(args: argparse.Namespace) -> int:
                     print(f"找不到 Run：{identifier}")
                     continue
                 print(
-                    f"Run {run.run_id} · {run.status.value} · "
-                    f"{run.event_count} 个事件"
+                    f"Run {run.run_id} · {run.status.value} · {run.event_count} 个事件"
                 )
                 _print_trace(await trace_store.load_events(run.run_id))
                 continue
@@ -482,9 +505,7 @@ async def _run(args: argparse.Namespace) -> int:
                     print(f"找不到会话：{identifier}")
                     continue
                 conversation = selected
-                history = list(
-                    await conversation_store.load_messages(conversation.id)
-                )
+                history = list(await conversation_store.load_messages(conversation.id))
                 print(
                     f"已切换会话：{conversation.id[:8]} · "
                     f"{conversation.title} · {conversation.message_count} 条消息"
@@ -496,6 +517,7 @@ async def _run(args: argparse.Namespace) -> int:
                     conversation.id,
                     history,
                 )
+                await summary_store.delete(conversation.id)
                 print("上下文已清空。")
                 continue
             if content == "/help":
@@ -522,6 +544,7 @@ async def _run(args: argparse.Namespace) -> int:
                 history=history,
                 content=content,
                 model=model,
+                summary_store=summary_store,
             )
     finally:
         await registry.close()

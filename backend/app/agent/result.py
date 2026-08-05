@@ -10,6 +10,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.context.summary import ConversationSummaryState
 from app.models.types import Message, ModelUsage, ToolCall, ToolResult
 
 
@@ -66,6 +67,7 @@ class AgentResult(BaseModel):
     tool_calls: tuple[ToolCallRecord, ...] = ()
     usage: ModelUsage = Field(default_factory=ModelUsage)
     error: AgentError | None = None
+    summary_state: ConversationSummaryState | None = None
 
     @property
     def ok(self) -> bool:

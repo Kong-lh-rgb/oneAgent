@@ -177,9 +177,7 @@ async def test_runtime_emits_estimated_input_tokens_before_model_call() -> None:
     await runtime.run("hello world", event_handler=handler)
 
     started = next(
-        event
-        for event in handler.events
-        if event.type is AgentEventType.MODEL_STARTED
+        event for event in handler.events if event.type is AgentEventType.MODEL_STARTED
     )
     assert started.estimated_input_tokens is not None
     assert started.estimated_input_tokens > 0
@@ -200,6 +198,7 @@ class _EmptyContextManager(ContextManager):
         provider=None,
         max_output_tokens=None,
         history_count=None,
+        summary_state=None,
     ):
         return ContextDecision(
             messages=tuple(messages),
@@ -217,9 +216,7 @@ async def test_runtime_respects_context_manager_decision() -> None:
     await runtime.run("hi", event_handler=handler)
 
     started = next(
-        event
-        for event in handler.events
-        if event.type is AgentEventType.MODEL_STARTED
+        event for event in handler.events if event.type is AgentEventType.MODEL_STARTED
     )
     assert started.estimated_input_tokens is None
     assert started.context_trimmed is False

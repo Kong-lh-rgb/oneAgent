@@ -6,6 +6,11 @@ import pytest
 
 from app.agent.events import AgentEvent, AgentEventHandler, AgentEventType
 from app.agent.result import AgentResult, AgentStopReason
+from app.context import (
+    ConversationSummaryState,
+    RollingConversationSummary,
+    SQLiteConversationSummaryStore,
+)
 from app.conversation import SQLiteConversationStore
 from app.models.chat import (
     _load_or_create_conversation,
@@ -19,13 +24,18 @@ from app.trace import SQLiteTraceEventHandler, SQLiteTraceStore
 
 
 class StubRuntime:
+    def __init__(self) -> None:
+        self.seen_summary_state: ConversationSummaryState | None = None
+
     async def run(
         self,
         user_input: str,
         *,
         history: Sequence[Message] = (),
         conversation_id: str | None = None,
+        summary_state: ConversationSummaryState | None = None,
     ) -> AgentResult:
+        self.seen_summary_state = summary_state
         user_message = Message(role=MessageRole.USER, content=user_input)
         final_message = Message(role=MessageRole.ASSISTANT, content="已完成")
         return AgentResult(
@@ -34,6 +44,7 @@ class StubRuntime:
             messages=(*history, user_message, final_message),
             steps=1,
             stop_reason=AgentStopReason.FINAL_ANSWER,
+            summary_state=summary_state,
         )
 
     async def run_stream(
@@ -43,11 +54,13 @@ class StubRuntime:
         history: Sequence[Message] = (),
         conversation_id: str | None = None,
         event_handler: AgentEventHandler | None = None,
+        summary_state: ConversationSummaryState | None = None,
     ):
         result = await self.run(
             user_input,
             history=history,
             conversation_id=conversation_id,
+            summary_state=summary_state,
         )
         events = (
             AgentEvent(
@@ -175,6 +188,40 @@ async def test_send_message_persists_runtime_history_and_generates_title(
 
 
 @pytest.mark.asyncio
+async def test_send_message_restores_and_persists_summary_state(tmp_path) -> None:
+    database_path = tmp_path / "oneagent.db"
+    conversation_store = SQLiteConversationStore(database_path)
+    await conversation_store.initialize()
+    summary_store = SQLiteConversationSummaryStore(database_path)
+    await summary_store.initialize()
+    trace_store = SQLiteTraceStore(database_path)
+    await trace_store.initialize()
+    conversation = await conversation_store.create()
+    state = ConversationSummaryState(
+        summary=RollingConversationSummary(current_objective="继续测试"),
+        covered_message_count=0,
+    )
+    await summary_store.save(conversation.id, state)
+    runtime = StubRuntime()
+    history: list[Message] = []
+
+    await _send_message(
+        runtime=runtime,  # type: ignore[arg-type]
+        conversation_store=conversation_store,
+        trace_handler=SQLiteTraceEventHandler(trace_store),
+        conversation=conversation,
+        provider=ModelProvider.OPENAI,
+        history=history,
+        content="继续",
+        model="fake-model",
+        summary_store=summary_store,
+    )
+
+    assert runtime.seen_summary_state == state
+    assert await summary_store.load(conversation.id) == state
+
+
+@pytest.mark.asyncio
 async def test_cli_persists_and_restores_complete_tool_protocol_history(
     tmp_path,
     capsys,
@@ -194,6 +241,7 @@ async def test_cli_persists_and_restores_complete_tool_protocol_history(
             *,
             history: Sequence[Message] = (),
             conversation_id: str | None = None,
+            summary_state: ConversationSummaryState | None = None,
         ) -> AgentResult:
             user_message = Message(role=MessageRole.USER, content=user_input)
             tool_call_message = Message(
@@ -219,6 +267,7 @@ async def test_cli_persists_and_restores_complete_tool_protocol_history(
                 ),
                 steps=2,
                 stop_reason=AgentStopReason.FINAL_ANSWER,
+                summary_state=summary_state,
             )
 
     await _send_message(
@@ -271,9 +320,12 @@ async def test_cli_lists_and_removes_conversation_permission_rules(
     assert rule.id[:8] in output
     assert rule.description in output
 
-    assert await _remove_permission_rule(
-        store,
-        "conversation-1",
-        rule.id[:8],
-    ) is True
+    assert (
+        await _remove_permission_rule(
+            store,
+            "conversation-1",
+            rule.id[:8],
+        )
+        is True
+    )
     assert await store.list(scope_ids=("conversation-1",)) == ()

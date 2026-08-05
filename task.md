@@ -94,7 +94,7 @@
 - [x] `ContextManager.prepare` 新增 `keep_recent_tool_rounds` 参数透传，仅作用于历史前缀，当前 Run 工具协议不受影响；`reason` 中记录该参数
 - [x] 新增 `tests/test_context_history.py`（默认回归、保留最近 1/2 轮、带文本降级、保留轮数超上限、孤立 TOOL 移除、ContextManager 透传）
 - [x] 全量验证：`pytest` 165 个用例全部通过，`ruff` 无告警
-- [ ] 待办：基于块做压缩（超 trigger 后按块丢弃/摘要）、把块划分接入 ContextManager、历史滚动摘要、可观测占比记录写回
+- [x] 后续完成：基于块的工具压缩、ContextManager 接入、历史滚动摘要与压缩可观测字段
 
 ### 完成：原始会话历史与模型请求上下文分离
 
@@ -135,6 +135,35 @@
 - [x] 最终超过 input_budget 时继续由 Runtime 返回 CONTEXT_ERROR，Provider 不会被调用
 - [x] Runtime 集成验证 Adapter 收到压缩副本，而 AgentResult 和 SQLite 会话边界继续保存完整原始历史
 - [x] 全量验证：`pytest` 179 个用例全部通过，`ruff`、编译、CLI 参数与 Diff 格式检查通过
+
+### 完成：项目学习记录
+
+- [x] 新增 `docs/learning-notes.md`，区分每日任务日志与长期架构知识
+- [x] 记录交互、编排、领域策略和基础设施四层结构及完整请求数据流
+- [x] 记录 Runtime、模型适配、上下文预算、MessageBlock、ToolReducer、工具 Hook、权限审批、SQLite 与 Trace 的职责边界
+- [x] 记录原始历史与模型请求视图分离、工具协议完整性、异常协议保守处理等关键设计原则
+- [x] 记录当前未实现层次、后续上下文压缩方向、工程教训、代码阅读顺序和离线验证命令
+
+### 完成：第二层滚动结构化摘要
+
+#### Bad Case
+- [x] WorkingContextLedger 需要维护额外工作状态、更新规则和事实来源，对当前上下文压缩目标过度设计
+- [x] 工具层压缩后仍可能高于 target，Runtime 只能报 CONTEXT_ERROR，无法继续压缩普通历史
+- [x] 如果直接覆盖 SQLite 消息，会破坏完整历史、会话恢复和审计能力
+- [x] 摘要模型失败或生成内容反而更长时，不能继续有损删除原消息
+
+#### 修复结果
+- [x] 移除 WorkingContextLedger 方案，明确把稳定事实记忆推迟到未来 Memory 层实现
+- [x] 新增 `RollingConversationSummary` 与 `ConversationSummaryState`，只保存结构化摘要和已覆盖的原始消息数
+- [x] 新增模型无关 `ContextSummarizer` 接口及 `ModelContextSummarizer`，要求模型返回严格 JSON，摘要请求不携带工具定义
+- [x] 新增 `ConversationReducer`：工具层仍未达到 target 时，摘要最旧普通对话并保护系统提示、当前 Run、最近普通对话、最近工具轮和异常工具协议
+- [x] 摘要失败、覆盖位置失效或新摘要未缩短请求时保持原上下文，不删除任何消息
+- [x] `ContextManager` 按“已持久化摘要复用 → ToolReducer → ConversationReducer”顺序准备实际模型请求
+- [x] `AgentResult` 返回摘要状态；摘要调用 Token 纳入总用量，`AgentEvent` 记录摘要更新、块数、Token 和错误
+- [x] 新增 SQLite 摘要存储；CLI 自动恢复和保存摘要，`/clear` 同时清除摘要缓存
+- [x] SQLite `messages` 与 `AgentResult.messages` 继续保存完整原始历史，滚动摘要仅是模型请求缓存
+- [x] 新增配置：最近普通对话保护数和摘要最大输出 Token；补充模型摘要、滚动更新、失败回退、SQLite、Runtime/CLI 离线测试
+- [x] 全量验证：`pytest` 187 个用例全部通过，`ruff`、编译、CLI 参数与 Diff 格式检查通过
 
 ---
 

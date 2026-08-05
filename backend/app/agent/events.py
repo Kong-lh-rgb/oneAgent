@@ -72,6 +72,10 @@ class AgentEvent(BaseModel):
     removed_tool_rounds: int | None = Field(default=None, ge=0)
     reached_target: bool | None = None
     needs_next_compaction_stage: bool | None = None
+    summary_updated: bool | None = None
+    summarized_conversation_blocks: int | None = Field(default=None, ge=0)
+    summary_usage: ModelUsage | None = None
+    summary_error: str | None = None
 
     @field_validator("run_id")
     @classmethod
