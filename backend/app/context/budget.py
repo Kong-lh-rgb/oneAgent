@@ -70,8 +70,13 @@ class ContextBudgetPolicy:
             if max_output_tokens is not None
             else capabilities.max_output_tokens
         )
-        if reserved_output < 0:
-            raise ValueError("max_output_tokens cannot be negative")
+        if reserved_output <= 0:
+            raise ValueError("max_output_tokens must be greater than zero")
+        if reserved_output > capabilities.max_output_tokens:
+            raise ValueError(
+                f"max_output_tokens ({reserved_output}) exceed model maximum "
+                f"({capabilities.max_output_tokens})"
+            )
 
         input_budget = (
             context_window - reserved_output - self._safety_margin_tokens

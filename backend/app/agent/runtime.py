@@ -30,6 +30,8 @@ from app.tools.registry import ToolRegistry
 
 from .errors import (
     AgentRuntimeError,
+    ContextPreparationError,
+    ContextWindowExceededError,
     MaxStepsExceededError,
     ModelInvocationError,
     RepeatedToolCallError,
@@ -146,6 +148,8 @@ class AgentRuntime:
         )
         tool_event_hook = AgentEventHook(emitter)
         user_message = Message(role=MessageRole.USER, content=user_input)
+        # 原始消息用于 AgentResult 和数据库持久化，始终保留完整工具协议。
+        historical_message_count = len(history)
         messages = [*history, user_message]
         previous_signature: str | None = None
         repeated_count = 0
@@ -159,6 +163,40 @@ class AgentRuntime:
             provider=_provider_name(self._provider),
             model=self._model,
         )
+
+        async def stop_with_error(
+            error: AgentRuntimeError,
+            stop_reason: AgentStopReason,
+            *,
+            step: int,
+            provider: str | None,
+            model: str | None,
+        ) -> AgentResult:
+            """构造失败结果并发射统一的 Agent 失败事件。"""
+
+            result = self._result(
+                run_id=run_id,
+                final_message=self._error_message(error),
+                messages=messages,
+                steps=step,
+                stop_reason=stop_reason,
+                tool_rounds=tool_rounds,
+                tool_calls=tool_calls,
+                usage=usage,
+                error=error,
+            )
+            await emitter.emit(
+                AgentEventType.AGENT_FAILED,
+                step=step,
+                provider=provider,
+                model=model,
+                message=result.final_message,
+                usage=usage,
+                stop_reason=result.stop_reason,
+                error=result.error,
+                result=result,
+            )
+            return result
 
         for step in range(1, self._max_steps + 1):
             force_final_answer = (
@@ -180,70 +218,89 @@ class AgentRuntime:
             request_tools = (
                 () if force_final_answer else self._tool_registry.definitions()
             )
+            # 先解析实际使用的模型和输出上限，确保预算与请求完全一致。
             try:
-                # 先解析实际使用的模型，确保上下文预算与真实请求一致
                 adapter = self._model_registry.get(self._provider)
                 resolved_model = self._model or adapter.default_model
                 resolved_provider = adapter.provider
+                effective_max_output_tokens = (
+                    self._max_output_tokens
+                    or adapter.config.default_max_output_tokens
+                )
+            except Exception as exc:
+                return await stop_with_error(
+                    ModelInvocationError(f"{type(exc).__name__}: {exc}"),
+                    AgentStopReason.MODEL_ERROR,
+                    step=step,
+                    provider=_provider_name(self._provider),
+                    model=self._model,
+                )
+
+            try:
                 context_decision = await self._context_manager.prepare(
                     request_messages,
                     tools=request_tools,
                     model=resolved_model,
                     provider=resolved_provider,
-                    max_output_tokens=self._max_output_tokens,
+                    max_output_tokens=effective_max_output_tokens,
+                    history_count=historical_message_count,
                 )
-                request_messages = context_decision.messages
-                request_tools = context_decision.tools
-                await emitter.emit(
-                    AgentEventType.MODEL_STARTED,
+            except Exception as exc:
+                return await stop_with_error(
+                    ContextPreparationError(f"{type(exc).__name__}: {exc}"),
+                    AgentStopReason.CONTEXT_ERROR,
                     step=step,
                     provider=resolved_provider,
                     model=resolved_model,
-                    estimated_input_tokens=(
-                        context_decision.estimated_input_tokens
-                    ),
-                    context_trimmed=context_decision.trimmed,
-                    context_window=context_decision.context_window,
-                    input_budget=context_decision.input_budget,
-                    usage_ratio=context_decision.usage_ratio,
-                    trigger_tokens=context_decision.trigger_tokens,
-                    target_tokens=context_decision.target_tokens,
-                    requires_compaction=context_decision.requires_compaction,
-                    capability_source=context_decision.capability_source,
                 )
+
+            request_messages = context_decision.messages
+            request_tools = context_decision.tools
+            await emitter.emit(
+                AgentEventType.MODEL_STARTED,
+                step=step,
+                provider=resolved_provider,
+                model=resolved_model,
+                estimated_input_tokens=context_decision.estimated_input_tokens,
+                context_trimmed=context_decision.trimmed,
+                context_window=context_decision.context_window,
+                input_budget=context_decision.input_budget,
+                usage_ratio=context_decision.usage_ratio,
+                trigger_tokens=context_decision.trigger_tokens,
+                target_tokens=context_decision.target_tokens,
+                requires_compaction=context_decision.requires_compaction,
+                exceeds_input_budget=context_decision.exceeds_input_budget,
+                capability_source=context_decision.capability_source,
+            )
+            if context_decision.exceeds_input_budget:
+                return await stop_with_error(
+                    ContextWindowExceededError(
+                        context_decision.estimated_input_tokens or 0,
+                        context_decision.input_budget or 0,
+                    ),
+                    AgentStopReason.CONTEXT_ERROR,
+                    step=step,
+                    provider=resolved_provider,
+                    model=resolved_model,
+                )
+
+            try:
                 response = await adapter.complete(
                     ModelRequest(
                         messages=request_messages,
                         model=resolved_model,
                         tools=request_tools,
-                        max_output_tokens=self._max_output_tokens,
+                        max_output_tokens=effective_max_output_tokens,
                     )
                 )
             except Exception as exc:
-                error = ModelInvocationError(f"{type(exc).__name__}: {exc}")
-                result = self._result(
-                    run_id=run_id,
-                    final_message=self._error_message(error),
-                    messages=messages,
-                    steps=step,
-                    stop_reason=AgentStopReason.MODEL_ERROR,
-                    tool_rounds=tool_rounds,
-                    tool_calls=tool_calls,
-                    usage=usage,
-                    error=error,
-                )
-                await emitter.emit(
-                    AgentEventType.AGENT_FAILED,
+                return await stop_with_error(
+                    ModelInvocationError(f"{type(exc).__name__}: {exc}"),
+                    AgentStopReason.MODEL_ERROR,
                     step=step,
-                    provider=_provider_name(self._provider),
-                    model=self._model,
-                    message=result.final_message,
-                    usage=usage,
-                    stop_reason=result.stop_reason,
-                    error=result.error,
-                    result=result,
+                    provider=resolved_provider,
+                    model=resolved_model,
                 )
-                return result
 
             usage = _add_usage(usage, response.usage)
             assistant_message = response.message

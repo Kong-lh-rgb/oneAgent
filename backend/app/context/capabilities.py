@@ -16,7 +16,6 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from app.models.config import ModelSettings
-from app.models.errors import ProviderNotConfiguredError
 from app.models.types import ModelProvider
 
 from .config import ContextSettings
@@ -43,22 +42,32 @@ class ModelCapabilities:
     max_output_tokens: int
     source: CapabilitySource
 
+    def __post_init__(self) -> None:
+        if not self.provider.strip():
+            raise ValueError("provider cannot be empty")
+        if not self.model.strip():
+            raise ValueError("model cannot be empty")
+        if self.context_window <= 0:
+            raise ValueError("context_window must be greater than zero")
+        if self.max_output_tokens <= 0:
+            raise ValueError("max_output_tokens must be greater than zero")
+
 
 # 内置精确模型：(provider, model) -> (context_window, max_output_tokens)
 # 与 ModelSettings 默认支持的模型对齐；同 provider 不同模型可拥有不同窗口。
 _BUILTIN_MODELS: dict[tuple[str, str], tuple[int, int]] = {
     ("openai", "gpt-5.4-mini"): (200_000, 16_384),
     ("openai", "gpt-4o-mini"): (128_000, 16_384),
-    ("qwen", "qwen3.7-plus"): (131_072, 8_192),
-    ("deepseek", "deepseek-v4-flash"): (131_072, 8_192),
+    ("qwen", "qwen3.7-plus"): (1_000_000, 65_536),
+    ("deepseek", "deepseek-v4-flash"): (1_048_576, 393_216),
     ("anthropic", "claude-sonnet-4-6"): (200_000, 16_384),
 }
 
 # Provider 默认能力（内置模型之外的同 provider 模型）的最大输出
 _PROVIDER_DEFAULT_MAX_OUTPUT: dict[str, int] = {
     "openai": 16_384,
-    "qwen": 8_192,
-    "deepseek": 8_192,
+    "qwen": 65_536,
+    "deepseek": 393_216,
     "anthropic": 16_384,
 }
 
@@ -217,11 +226,9 @@ def _resolve_override_target(
         )
     except ValueError:
         return None
-    try:
-        config = resolved_settings.provider_config(provider)
-    except ProviderNotConfiguredError:
-        return None
-    model = settings.context_override_model or config.model
+    model = settings.context_override_model or str(
+        getattr(resolved_settings, f"{provider.value}_model")
+    )
     return provider.value, model
 
 

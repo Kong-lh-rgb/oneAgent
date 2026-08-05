@@ -8,11 +8,15 @@ import pytest
 from pydantic import SecretStr
 
 from app.agent.events import AgentEventType, InMemoryEventHandler
+from app.agent.result import AgentStopReason
 from app.agent.runtime import AgentRuntime
 from app.context import (
     CapabilitySource,
+    ContextBudgetPolicy,
+    ContextDecision,
     ContextManager,
     ContextSettings,
+    ModelCapabilities,
     build_budget_policy,
     build_model_capability_registry,
 )
@@ -48,8 +52,26 @@ def test_lookup_known_provider_and_model() -> None:
 
     assert cap.provider == "qwen"
     assert cap.model == "qwen3.7-plus"
-    assert cap.context_window == 131_072
+    assert cap.context_window == 1_000_000
     assert cap.source is CapabilitySource.BUILTIN
+
+
+def test_deepseek_builtin_matches_current_official_capacity() -> None:
+    cap = _default_registry().lookup("deepseek", "deepseek-v4-flash")
+
+    assert cap.context_window == 1_048_576
+    assert cap.max_output_tokens == 393_216
+
+
+def test_model_capabilities_reject_invalid_limits() -> None:
+    with pytest.raises(ValueError, match="context_window"):
+        ModelCapabilities(
+            provider="qwen",
+            model="bad",
+            context_window=0,
+            max_output_tokens=1,
+            source=CapabilitySource.OVERRIDE,
+        )
 
 
 def test_same_provider_different_models_have_different_windows() -> None:
@@ -115,6 +137,22 @@ class _NoopTool(BaseTool):
 
     async def execute(self, arguments: dict) -> str:
         return "ok"
+
+
+class _FailingContextManager(ContextManager):
+    """模拟上下文准备阶段自身故障。"""
+
+    async def prepare(
+        self,
+        messages: Sequence[Message],
+        *,
+        tools: Sequence[ToolDefinition] = (),
+        model: str | None = None,
+        provider: str | None = None,
+        max_output_tokens: int | None = None,
+        history_count: int | None = None,
+    ) -> ContextDecision:
+        raise RuntimeError("context estimator unavailable")
 
 
 def _qwen_adapter(responses: Sequence[ModelResponse | Exception]) -> _ScriptedAdapter:
@@ -183,6 +221,11 @@ async def test_runtime_resolves_model_from_adapter_when_self_model_none() -> Non
     assert started.provider == "qwen"
     assert adapter.requests[0].model == "qwen3.7-plus"
     assert adapter.requests[0].model == started.model
+    assert (
+        adapter.requests[0].max_output_tokens
+        == adapter.config.default_max_output_tokens
+    )
+    assert started.input_budget == 1_000_000 - 4_096 - 4_096
 
 
 @pytest.mark.asyncio
@@ -235,8 +278,56 @@ async def test_force_final_answer_still_computes_budget() -> None:
     ]
     assert len(started) == 2  # 第一轮正常，第二轮 force_final_answer
     for event in started:
-        assert event.context_window == 131_072
+        assert event.context_window == 1_000_000
         assert event.input_budget is not None
         assert event.input_budget > 0
         assert event.capability_source == CapabilitySource.BUILTIN.value
         assert event.requires_compaction is False
+
+
+@pytest.mark.asyncio
+async def test_runtime_blocks_request_that_exceeds_input_budget() -> None:
+    adapter = _qwen_adapter([_final_response("不应调用")])
+    registry = _default_registry()
+    registry.register_override(
+        "qwen",
+        "qwen3.7-plus",
+        context_window=5_000,
+        max_output_tokens=4_096,
+    )
+    manager = ContextManager(
+        registry=registry,
+        budget_policy=ContextBudgetPolicy(safety_margin_tokens=0),
+    )
+    runtime, adapter = _make_runtime(adapter, context_manager=manager)
+    handler = InMemoryEventHandler()
+
+    result = await runtime.run("x" * 20_000, event_handler=handler)
+
+    assert result.stop_reason is AgentStopReason.CONTEXT_ERROR
+    assert result.error is not None
+    assert result.error.type == "ContextWindowExceededError"
+    assert adapter.requests == []
+    started = next(
+        event
+        for event in handler.events
+        if event.type is AgentEventType.MODEL_STARTED
+    )
+    assert started.exceeds_input_budget is True
+    assert started.requires_compaction is True
+
+
+@pytest.mark.asyncio
+async def test_context_preparation_failure_is_not_model_error() -> None:
+    adapter = _qwen_adapter([_final_response("不应调用")])
+    runtime, adapter = _make_runtime(
+        adapter,
+        context_manager=_FailingContextManager(),
+    )
+
+    result = await runtime.run("hello")
+
+    assert result.stop_reason is AgentStopReason.CONTEXT_ERROR
+    assert result.error is not None
+    assert result.error.type == "ContextPreparationError"
+    assert adapter.requests == []

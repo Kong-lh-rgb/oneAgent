@@ -22,7 +22,6 @@ from app.conversation import (
     DEFAULT_DATABASE_PATH,
     Conversation,
     SQLiteConversationStore,
-    compact_conversation_history,
 )
 from app.tools import (
     ApprovalScope,
@@ -104,7 +103,8 @@ async def _send_message(
 
     if result is None:
         raise RuntimeError("Agent 事件流结束时缺少最终结果")
-    history[:] = compact_conversation_history(result.messages)
+    # 会话存储保存完整原始历史；模型请求压缩由 ContextManager 单独负责。
+    history[:] = result.messages
     conversation = await conversation_store.replace_messages(
         conversation.id,
         history,
@@ -201,9 +201,7 @@ async def _load_or_create_conversation(
         conversation = await store.create(messages=_initial_history(system_prompt))
         return conversation, list(await store.load_messages(conversation.id)), False
 
-    history = compact_conversation_history(
-        list(await store.load_messages(conversation.id))
-    )
+    history = list(await store.load_messages(conversation.id))
     return conversation, history, True
 
 
@@ -402,8 +400,8 @@ async def _run(args: argparse.Namespace) -> int:
                     title=title,
                     messages=_initial_history(args.system),
                 )
-                history = compact_conversation_history(
-                    list(await conversation_store.load_messages(conversation.id))
+                history = list(
+                    await conversation_store.load_messages(conversation.id)
                 )
                 print(f"已创建会话：{conversation.id[:8]} · {conversation.title}")
                 continue
@@ -484,8 +482,8 @@ async def _run(args: argparse.Namespace) -> int:
                     print(f"找不到会话：{identifier}")
                     continue
                 conversation = selected
-                history = compact_conversation_history(
-                    list(await conversation_store.load_messages(conversation.id))
+                history = list(
+                    await conversation_store.load_messages(conversation.id)
                 )
                 print(
                     f"已切换会话：{conversation.id[:8]} · "

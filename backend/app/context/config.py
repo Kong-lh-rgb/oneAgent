@@ -28,8 +28,8 @@ class ContextSettings(BaseSettings):
     # Provider 默认上下文窗口（用于 Provider 默认能力）
     context_window_default: int = Field(default=128_000, gt=0)
     context_window_openai: int = Field(default=200_000, gt=0)
-    context_window_qwen: int = Field(default=131_072, gt=0)
-    context_window_deepseek: int = Field(default=131_072, gt=0)
+    context_window_qwen: int = Field(default=1_000_000, gt=0)
+    context_window_deepseek: int = Field(default=1_048_576, gt=0)
     context_window_anthropic: int = Field(default=200_000, gt=0)
 
     # 预算策略
@@ -41,7 +41,7 @@ class ContextSettings(BaseSettings):
     context_override_provider: str | None = None
     context_override_model: str | None = None
     context_window_override: int | None = Field(default=None, gt=0)
-    max_output_tokens_override: int | None = Field(default=None, ge=0)
+    max_output_tokens_override: int | None = Field(default=None, gt=0)
 
 
 __all__ = ["ContextSettings"]

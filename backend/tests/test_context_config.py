@@ -30,7 +30,7 @@ def _qwen_model_settings() -> ModelSettings:
 def test_context_settings_defaults() -> None:
     settings = _settings()
 
-    assert settings.context_window_qwen == 131_072
+    assert settings.context_window_qwen == 1_000_000
     assert settings.context_trigger_ratio == 0.80
     assert settings.context_target_ratio == 0.60
     assert settings.context_safety_margin_tokens == 4_096
@@ -44,7 +44,7 @@ def test_builtin_lookup_uses_exact_model() -> None:
 
     cap = registry.lookup("qwen", "qwen3.7-plus")
 
-    assert cap.context_window == 131_072
+    assert cap.context_window == 1_000_000
     assert cap.source is CapabilitySource.BUILTIN
 
 
@@ -92,6 +92,27 @@ def test_override_with_explicit_provider_model() -> None:
     assert cap.source is CapabilitySource.OVERRIDE
 
 
+def test_explicit_override_does_not_require_provider_api_key() -> None:
+    registry = build_model_capability_registry(
+        model_settings=ModelSettings(_env_file=None),
+        context_settings=_settings(
+            context_override_provider="qwen",
+            context_override_model="qwen3.7-plus",
+            context_window_override=55_555,
+        ),
+    )
+
+    cap = registry.lookup("qwen", "qwen3.7-plus")
+
+    assert cap.context_window == 55_555
+    assert cap.source is CapabilitySource.OVERRIDE
+
+
+def test_zero_max_output_override_is_rejected() -> None:
+    with pytest.raises(ValueError, match="greater than 0"):
+        _settings(max_output_tokens_override=0)
+
+
 @pytest.mark.asyncio
 async def test_context_manager_decision_fields() -> None:
     settings = _settings()
@@ -113,8 +134,8 @@ async def test_context_manager_decision_fields() -> None:
 
     assert decision.provider == "qwen"
     assert decision.model == "qwen3.7-plus"
-    assert decision.context_window == 131_072
-    assert decision.input_budget == 131_072 - 8_192 - 4_096
+    assert decision.context_window == 1_000_000
+    assert decision.input_budget == 1_000_000 - 65_536 - 4_096
     assert decision.trigger_tokens == int(decision.input_budget * 0.8)
     assert decision.target_tokens == int(decision.input_budget * 0.6)
     assert decision.usage_ratio is not None
@@ -123,4 +144,3 @@ async def test_context_manager_decision_fields() -> None:
     assert decision.trimmed is False
     assert decision.messages == messages
     assert "estimated=" in (decision.reason or "")
-

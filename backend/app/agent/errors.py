@@ -12,6 +12,23 @@ class ModelInvocationError(AgentRuntimeError):
         super().__init__(f"model invocation failed: {detail}")
 
 
+class ContextPreparationError(AgentRuntimeError):
+    """模型请求上下文无法完成准备时抛出。"""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(f"context preparation failed: {detail}")
+
+
+class ContextWindowExceededError(ContextPreparationError):
+    """估算输入超过可用输入预算时抛出。"""
+
+    def __init__(self, estimated_tokens: int, input_budget: int) -> None:
+        super().__init__(
+            f"estimated input tokens ({estimated_tokens}) exceed "
+            f"input budget ({input_budget})"
+        )
+
+
 class MaxStepsExceededError(AgentRuntimeError):
     """运行时达到配置的最大步数时抛出。"""
 

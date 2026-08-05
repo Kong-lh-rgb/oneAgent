@@ -199,6 +199,7 @@ class _EmptyContextManager(ContextManager):
         model=None,
         provider=None,
         max_output_tokens=None,
+        history_count=None,
     ):
         return ContextDecision(
             messages=tuple(messages),

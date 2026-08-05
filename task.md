@@ -50,12 +50,19 @@
 - [x] `AgentRuntime` 改用 `context_manager` 参数（替代 `token_estimator`），每轮模型调用前经 `ContextManager.prepare` 取上下文与估算；`AgentEvent` 增加 `context_trimmed` 字段（当前恒 False）
 - [x] CLI 传入 `ContextManager()` 启用
 - [x] 全量验证：`pytest` 121 个用例全部通过，`ruff` 无告警
-- [x] 新增 `app/context/config.py`：`ContextSettings`（.env 可配窗口/预留输出/安全余量）+ `ContextWindowRegistry`（按模型族解析窗口）+ `ContextBudget`（输入预算 = 窗口 - 预留输出 - 安全余量）
+- [x] 阶段性窗口预算实现随后收敛为 `ModelCapabilityRegistry` + `ContextBudgetPolicy`
 - [x] 模型族识别抽为公共 `model_family(provider, model)`（估算系数与窗口注册表共用）
 - [x] `ContextManager.prepare` 计算并返回 `budget`；`AgentEvent` 增加 `context_window` / `input_budget` 随 `MODEL_STARTED` 发射
-- [x] 验收达成：切换模型（qwen=131072 / openai=200000 / anthropic=200000 / other=128000）后输入预算不同
+- [x] 验收达成：切换模型后按实际 Provider / Model 使用不同输入预算
 - [x] 全量验证：`pytest` 127 个用例全部通过，`ruff` 无告警
 ### 完成：模型能力注册与动态上下文预算
+
+#### Bad Case
+- [x] 初版只设置 `requires_compaction=True`，即使估算输入已超过预算仍原样调用 Provider
+- [x] Qwen 3.7 Plus 与 DeepSeek V4 Flash 的内置窗口仍按 128K 记录，与当前官方 1M 能力不符
+- [x] Runtime 未显式配置输出上限时，预算预留值与 Adapter 实际发送值可能不一致
+- [x] 显式能力覆盖仍调用 `provider_config()`，没有 API Key 时会被静默忽略
+- [x] 上下文准备异常被归类成 `ModelInvocationError`，无法区分预算错误与模型 API 错误
 
 - [x] 新增 `app/context/capabilities.py`：`ModelCapabilities`（provider/model/context_window/max_output_tokens/source）+ `ModelCapabilityRegistry`（查找优先级：用户覆盖 > 内置精确模型 > Provider 默认 > 保守兜底 32K）
 - [x] 内置精确模型表登记 ModelSettings 默认模型（gpt-5.4-mini / gpt-4o-mini / qwen3.7-plus / deepseek-v4-flash / claude-sonnet-4-6），同 Provider 不同模型可不同窗口
@@ -65,9 +72,33 @@
 - [x] `ContextDecision` 展开预算状态字段（context_window/input_budget/trigger_tokens/target_tokens/usage_ratio/requires_compaction/capability_source 等）；estimated >= trigger 时 requires_compaction=True；消息原样返回
 - [x] Runtime 修正模型解析顺序：先取 adapter → resolved_model/provider → prepare → complete（force_final_answer 同一流程）
 - [x] `AgentEvent` 增加 usage_ratio/trigger_tokens/target_tokens/requires_compaction/capability_source
+- [x] 修正 Qwen 3.7 Plus 为 1M/64K、DeepSeek V4 Flash 为 1M/384K，并验证能力值必须为正数
+- [x] Runtime 统一解析 `effective_max_output_tokens`，预算与实际 ModelRequest 使用同一个值
+- [x] 输入达到 trigger 时继续记录压缩需求；真正超过 input_budget 时停止 API 请求并返回 `CONTEXT_ERROR`
+- [x] 新增 `ContextPreparationError` / `ContextWindowExceededError`，不再把上下文问题误报为模型错误
+- [x] 显式模型能力覆盖不再依赖 API Key；请求输出不得超过模型能力上限
+- [x] `.env.example` 补充上下文预算与模型能力覆盖配置
 - [x] 测试：新增 `test_context_capabilities.py`、`test_context_budget.py`，重写 `test_context_config.py`
-- [x] 全量验证：`pytest` 141 个用例全部通过，`ruff` 无告警
+- [x] 全量验证：`pytest` 148 个用例全部通过，`ruff`、编译、CLI 参数与 Diff 格式检查通过
 - [ ] 待办：真正的消息压缩（在 prepare 内超 trigger 后裁剪）、历史滚动摘要、可观测占比记录写回
+
+### 完成：原始会话历史与模型请求上下文分离
+
+#### Bad Case
+- [x] CLI 在每次运行结束后先删除 assistant tool-call 和 tool result 再写入 SQLite，导致数据库不是完整事实记录
+- [x] 恢复或切换会话时再次压缩历史，工具调用参数和原始结果无法从会话消息中还原
+- [x] 会话持久化层承担模型 Token 优化职责，原始数据与请求视图边界混乱
+- [x] 如果直接压缩整个 Runtime 消息列表，会误删当前 Run 正在使用的工具协议，导致下一次模型请求无法关联 ToolCall 与 ToolResult
+
+#### 修复结果
+- [x] CLI 始终把 `AgentResult.messages` 完整写入 SQLite，创建、恢复和切换会话均加载原始消息
+- [x] 将工具协议整理函数从 `app/conversation/` 移到 `app/context/`，会话层只负责事实存储
+- [x] `ContextManager.prepare()` 新增历史前缀边界，只整理已持久化的旧历史，完整保留当前 Run 的用户消息、工具调用和工具结果
+- [x] Runtime 使用独立的模型请求上下文调用 Adapter，同时继续用原始消息生成 `AgentResult`
+- [x] Token 估算与输入预算判断改为基于处理后的实际模型请求上下文
+- [x] 上下文确实移除旧工具协议时设置 `context_trimmed=True`，便于事件和 Trace 观测
+- [x] 新增 SQLite 完整工具协议恢复、ContextManager 边界保护和 Runtime 请求/结果分离测试
+- [x] 全量验证：`pytest` 151 个用例全部通过，`ruff`、编译、CLI 参数与 Diff 格式检查通过
 
 ---
 

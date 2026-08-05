@@ -13,6 +13,7 @@ from .capabilities import (
     build_model_capability_registry,
 )
 from .config import ContextSettings
+from .history import compact_model_history
 from .manager import ContextDecision, ContextManager
 from .tokens import TokenEstimator, default_token_estimator, model_family
 
@@ -29,6 +30,7 @@ __all__ = [
     "TokenEstimator",
     "build_budget_policy",
     "build_model_capability_registry",
+    "compact_model_history",
     "default_token_estimator",
     "model_family",
 ]

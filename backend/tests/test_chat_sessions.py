@@ -6,7 +6,7 @@ import pytest
 
 from app.agent.events import AgentEvent, AgentEventHandler, AgentEventType
 from app.agent.result import AgentResult, AgentStopReason
-from app.conversation import SQLiteConversationStore, compact_conversation_history
+from app.conversation import SQLiteConversationStore
 from app.models.chat import (
     _load_or_create_conversation,
     _print_permission_rules,
@@ -69,31 +69,6 @@ class StubRuntime:
             if event_handler is not None:
                 await event_handler.emit(event)
             yield event
-
-
-def test_compact_conversation_history_removes_tool_protocol_messages() -> None:
-    call = ToolCall(id="search-1", name="web_search", arguments={"query": "AI"})
-    messages = (
-        Message(role=MessageRole.SYSTEM, content="系统提示"),
-        Message(role=MessageRole.USER, content="搜索新闻"),
-        Message(role=MessageRole.ASSISTANT, tool_calls=(call,)),
-        Message(
-            role=MessageRole.TOOL,
-            tool_call_id=call.id,
-            name=call.name,
-            content="很长的搜索结果",
-        ),
-        Message(role=MessageRole.ASSISTANT, content="新闻摘要"),
-    )
-
-    compacted = compact_conversation_history(messages)
-
-    assert [message.role for message in compacted] == [
-        MessageRole.SYSTEM,
-        MessageRole.USER,
-        MessageRole.ASSISTANT,
-    ]
-    assert compacted[-1].content == "新闻摘要"
 
 
 @pytest.mark.asyncio
@@ -197,6 +172,83 @@ async def test_send_message_persists_runtime_history_and_generates_title(
     assert runs[0].run_id == "stub-run"
     assert runs[0].conversation_id == conversation.id
     assert runs[0].event_count == 2
+
+
+@pytest.mark.asyncio
+async def test_cli_persists_and_restores_complete_tool_protocol_history(
+    tmp_path,
+    capsys,
+) -> None:
+    store = SQLiteConversationStore(tmp_path / "oneagent.db")
+    await store.initialize()
+    trace_store = SQLiteTraceStore(tmp_path / "oneagent.db")
+    await trace_store.initialize()
+    conversation = await store.create()
+    history: list[Message] = []
+    call = ToolCall(id="search-1", name="web_search", arguments={"query": "AI"})
+
+    class ToolProtocolRuntime(StubRuntime):
+        async def run(
+            self,
+            user_input: str,
+            *,
+            history: Sequence[Message] = (),
+            conversation_id: str | None = None,
+        ) -> AgentResult:
+            user_message = Message(role=MessageRole.USER, content=user_input)
+            tool_call_message = Message(
+                role=MessageRole.ASSISTANT,
+                tool_calls=(call,),
+            )
+            tool_message = Message(
+                role=MessageRole.TOOL,
+                tool_call_id=call.id,
+                name=call.name,
+                content="搜索原始结果",
+            )
+            final_message = Message(role=MessageRole.ASSISTANT, content="搜索摘要")
+            return AgentResult(
+                run_id="tool-run",
+                final_message=final_message,
+                messages=(
+                    *history,
+                    user_message,
+                    tool_call_message,
+                    tool_message,
+                    final_message,
+                ),
+                steps=2,
+                stop_reason=AgentStopReason.FINAL_ANSWER,
+            )
+
+    await _send_message(
+        runtime=ToolProtocolRuntime(),  # type: ignore[arg-type]
+        conversation_store=store,
+        trace_handler=SQLiteTraceEventHandler(trace_store),
+        conversation=conversation,
+        provider=ModelProvider.OPENAI,
+        history=history,
+        content="搜索 AI",
+        model="fake-model",
+    )
+    _, restored_history, resumed = await _load_or_create_conversation(
+        store,
+        identifier=conversation.id,
+        force_new=False,
+        system_prompt=None,
+    )
+
+    assert resumed is True
+    assert restored_history == history
+    assert [message.role for message in restored_history] == [
+        MessageRole.USER,
+        MessageRole.ASSISTANT,
+        MessageRole.TOOL,
+        MessageRole.ASSISTANT,
+    ]
+    assert restored_history[1].tool_calls == (call,)
+    assert restored_history[2].tool_call_id == call.id
+    capsys.readouterr()
 
 
 @pytest.mark.asyncio

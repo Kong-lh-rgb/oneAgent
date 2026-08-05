@@ -318,6 +318,61 @@ async def test_runtime_reads_then_writes_and_returns_final_text(tmp_path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_runtime_keeps_raw_history_but_sends_processed_model_context() -> None:
+    old_call = ToolCall(
+        id="old-count",
+        name="count",
+        arguments={"value": 1},
+    )
+    history = (
+        Message(role=MessageRole.USER, content="上一轮"),
+        Message(role=MessageRole.ASSISTANT, tool_calls=(old_call,)),
+        Message(
+            role=MessageRole.TOOL,
+            tool_call_id=old_call.id,
+            name=old_call.name,
+            content="1",
+        ),
+        Message(role=MessageRole.ASSISTANT, content="上一轮完成"),
+    )
+    current_call = ToolCall(
+        id="current-count",
+        name="count",
+        arguments={"value": 2},
+    )
+    registry, adapter = fake_registry(
+        [
+            model_response(tool_calls=(current_call,)),
+            model_response(content="这一轮完成"),
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(CountingTool())
+
+    result = await AgentRuntime(registry, tools, provider="fake").run(
+        "这一轮",
+        history=history,
+    )
+
+    assert result.messages[: len(history)] == history
+    assert result.messages[1].tool_calls == (old_call,)
+    assert result.messages[2].role is MessageRole.TOOL
+    assert [message.content for message in adapter.requests[0].messages] == [
+        "上一轮",
+        "上一轮完成",
+        "这一轮",
+    ]
+    second_request = adapter.requests[1].messages
+    assert all(
+        old_call not in message.tool_calls
+        for message in second_request
+    )
+    assert second_request[-2].tool_calls == (current_call,)
+    assert second_request[-1].role is MessageRole.TOOL
+    assert second_request[-1].tool_call_id == current_call.id
+
+
+@pytest.mark.asyncio
 async def test_model_error_returns_assistant_message() -> None:
     registry, _ = fake_registry([RuntimeError("model unavailable")])
     event_handler = InMemoryEventHandler()

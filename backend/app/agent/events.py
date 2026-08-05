@@ -61,6 +61,7 @@ class AgentEvent(BaseModel):
     trigger_tokens: int | None = Field(default=None, ge=0)
     target_tokens: int | None = Field(default=None, ge=0)
     requires_compaction: bool | None = None
+    exceeds_input_budget: bool | None = None
     capability_source: str | None = None
 
     @field_validator("run_id")

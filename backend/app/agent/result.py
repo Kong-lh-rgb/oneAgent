@@ -17,6 +17,7 @@ class AgentStopReason(StrEnum):
     """Agent 循环停止的原因。"""
 
     FINAL_ANSWER = "final_answer"
+    CONTEXT_ERROR = "context_error"
     MODEL_ERROR = "model_error"
     REPEATED_TOOL_CALL = "repeated_tool_call"
     MAX_STEPS = "max_steps"

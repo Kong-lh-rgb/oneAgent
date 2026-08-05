@@ -12,8 +12,9 @@ from app.context import (
     ModelCapabilities,
     build_budget_policy,
     build_model_capability_registry,
+    compact_model_history,
 )
-from app.models.types import Message, MessageRole
+from app.models.types import Message, MessageRole, ToolCall
 
 
 def _caps(
@@ -67,6 +68,13 @@ def test_negative_budget_raises_clear_error() -> None:
         policy.compute(_caps(context_window=10, max_output=50))
 
 
+def test_requested_output_cannot_exceed_model_maximum() -> None:
+    policy = ContextBudgetPolicy(safety_margin_tokens=0)
+
+    with pytest.raises(ValueError, match="model maximum"):
+        policy.compute(_caps(max_output=1_000), max_output_tokens=1_001)
+
+
 def test_invalid_ratio_config_raises() -> None:
     with pytest.raises(ValueError, match="trigger_ratio"):
         ContextBudgetPolicy(trigger_ratio=1.5)
@@ -74,6 +82,83 @@ def test_invalid_ratio_config_raises() -> None:
         ContextBudgetPolicy(target_ratio=0.9)
     with pytest.raises(ValueError, match="target_ratio"):
         ContextBudgetPolicy(trigger_ratio=0.6, target_ratio=0.7)
+
+
+def test_compact_model_history_only_removes_tool_protocol() -> None:
+    call = ToolCall(id="search-1", name="web_search", arguments={"query": "AI"})
+    messages = (
+        Message(role=MessageRole.SYSTEM, content="系统提示"),
+        Message(role=MessageRole.USER, content="搜索新闻"),
+        Message(role=MessageRole.ASSISTANT, tool_calls=(call,)),
+        Message(
+            role=MessageRole.TOOL,
+            tool_call_id=call.id,
+            name=call.name,
+            content="很长的搜索结果",
+        ),
+        Message(role=MessageRole.ASSISTANT, content="新闻摘要"),
+    )
+
+    compacted = compact_model_history(messages)
+
+    assert [message.role for message in compacted] == [
+        MessageRole.SYSTEM,
+        MessageRole.USER,
+        MessageRole.ASSISTANT,
+    ]
+    assert compacted[-1].content == "新闻摘要"
+
+
+@pytest.mark.asyncio
+async def test_context_manager_compacts_only_persisted_history_prefix() -> None:
+    manager = ContextManager()
+    old_call = ToolCall(
+        id="old-search",
+        name="web_search",
+        arguments={"query": "旧查询"},
+    )
+    current_call = ToolCall(
+        id="current-search",
+        name="web_search",
+        arguments={"query": "新查询"},
+    )
+    history = (
+        Message(role=MessageRole.USER, content="上一轮"),
+        Message(role=MessageRole.ASSISTANT, tool_calls=(old_call,)),
+        Message(
+            role=MessageRole.TOOL,
+            tool_call_id=old_call.id,
+            name=old_call.name,
+            content="旧工具输出",
+        ),
+        Message(role=MessageRole.ASSISTANT, content="上一轮答案"),
+    )
+    current_run = (
+        Message(role=MessageRole.USER, content="这一轮"),
+        Message(role=MessageRole.ASSISTANT, tool_calls=(current_call,)),
+        Message(
+            role=MessageRole.TOOL,
+            tool_call_id=current_call.id,
+            name=current_call.name,
+            content="当前工具输出",
+        ),
+    )
+
+    decision = await manager.prepare(
+        (*history, *current_run),
+        history_count=len(history),
+        model="qwen3.7-plus",
+        provider="qwen",
+    )
+
+    assert decision.messages == (
+        history[0],
+        history[3],
+        *current_run,
+    )
+    assert decision.trimmed is True
+    assert history[1].tool_calls == (old_call,)
+    assert history[2].content == "旧工具输出"
 
 
 @pytest.mark.asyncio
