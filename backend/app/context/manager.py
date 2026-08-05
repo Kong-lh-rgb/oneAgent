@@ -70,12 +70,16 @@ class ContextManager:
         provider: str | None = None,
         max_output_tokens: int | None = None,
         history_count: int | None = None,
+        keep_recent_tool_rounds: int = 0,
     ) -> ContextDecision:
         """返回模型请求上下文、估算与预算状态。
 
         ``history_count`` 标记消息序列中已经持久化的历史前缀。只有这个前缀
         会移除旧工具协议；当前 Run 新增的消息保持完整，确保工具调用与工具
         结果仍能按 Provider 协议继续发送。
+
+        ``keep_recent_tool_rounds`` 控制历史前缀中保留最近多少轮完整工具协议；
+        更旧的工具轮会被降级移除。默认 0 表示全部移除（旧行为）。
         """
 
         if history_count is None:
@@ -84,7 +88,10 @@ class ContextManager:
             raise ValueError("history_count must be within the messages range")
 
         request_messages = (
-            *compact_model_history(messages[:history_count]),
+            *compact_model_history(
+                messages[:history_count],
+                keep_recent_tool_rounds=keep_recent_tool_rounds,
+            ),
             *messages[history_count:],
         )
         trimmed = request_messages != tuple(messages)
@@ -109,7 +116,8 @@ class ContextManager:
             f"estimated={estimated};input_budget={budget.input_budget};"
             f"trigger={budget.trigger_tokens};target={budget.target_tokens};"
             f"requires_compaction={requires_compaction};"
-            f"exceeds_input_budget={exceeds_input_budget};trimmed={trimmed}"
+            f"exceeds_input_budget={exceeds_input_budget};trimmed={trimmed};"
+            f"keep_recent_tool_rounds={keep_recent_tool_rounds}"
         )
         return ContextDecision(
             messages=request_messages,

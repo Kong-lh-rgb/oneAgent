@@ -87,6 +87,13 @@
 - [x] 块划分保持消息顺序，不修改原消息；供后续压缩以块为最小单元保留/丢弃
 - [x] 新增 `tests/test_context_blocks.py`（系统+对话、工具轮、连续 system 合并、多工具轮独立、对话轮拆分、空序列、顺序保持）
 - [x] 全量验证：`pytest` 158 个用例全部通过，`ruff` 无告警
+
+### 完成：分层保留历史工具结果
+- [x] `compact_model_history(messages, keep_recent_tool_rounds=N)`：最近 N 轮工具调用（assistant(tool_calls)+TOOL 结果）完整保留；更旧工具轮降级——TOOL 结果移除，assistant 带文本则去 tool_calls 保留纯文本、否则整条移除；SYSTEM/普通对话始终保留
+- [x] 默认 `keep_recent_tool_rounds=0` 保持旧行为（全部移除），向后兼容
+- [x] `ContextManager.prepare` 新增 `keep_recent_tool_rounds` 参数透传，仅作用于历史前缀，当前 Run 工具协议不受影响；`reason` 中记录该参数
+- [x] 新增 `tests/test_context_history.py`（默认回归、保留最近 1/2 轮、带文本降级、保留轮数超上限、孤立 TOOL 移除、ContextManager 透传）
+- [x] 全量验证：`pytest` 165 个用例全部通过，`ruff` 无告警
 - [ ] 待办：基于块做压缩（超 trigger 后按块丢弃/摘要）、把块划分接入 ContextManager、历史滚动摘要、可观测占比记录写回
 
 ### 完成：原始会话历史与模型请求上下文分离
