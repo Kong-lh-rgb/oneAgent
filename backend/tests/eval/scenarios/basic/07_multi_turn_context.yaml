@@ -1,0 +1,17 @@
+id: eval-07
+group: basic
+name: 多轮对话保持上下文
+initial_history:
+  - role: user
+    content: "我叫小明，我准备做一个关于太空的项目。"
+  - role: assistant
+    content: "好的，小明。关于太空的项目可以从多个角度展开，比如天文观测、火箭技术或航天器设计。你可以告诉我更具体的方向。"
+user_input: "刚才我们聊的项目主题是什么？请直接回答。"
+max_steps: 4
+expect:
+  tools:
+    total_count: 0
+  task:
+    created: false
+  answer:
+    keypoints: ["太空"]

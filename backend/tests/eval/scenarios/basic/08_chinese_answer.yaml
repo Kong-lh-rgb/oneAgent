@@ -1,0 +1,12 @@
+id: eval-08
+group: basic
+name: 中文回答
+user_input: "请用中文介绍一个高效学习方法。"
+max_steps: 4
+expect:
+  tools:
+    total_count: 0
+  task:
+    created: false
+  answer:
+    any_of: ["学习", "方法", "复习", "专注", "记忆"]

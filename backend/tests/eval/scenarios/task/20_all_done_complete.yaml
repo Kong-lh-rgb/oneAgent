@@ -1,0 +1,34 @@
+id: eval-20
+group: task
+name: 全部步骤完成后任务完成
+initial_tasks:
+  - alias: current_task
+    title: 发布新版本
+    goal: 完成新版本发布
+    status: active
+    steps:
+      - id: s1
+        title: 通过测试
+        status: done
+        note: 测试全部通过
+      - id: s2
+        title: 部署到生产
+        status: in_progress
+user_input: "部署已经完成，请更新任务状态：把第二步标记为完成（依据：部署成功），并把整个任务标记为已完成。"
+max_steps: 8
+expect:
+  tools:
+    must: [task_update]
+    successful: [task_update]
+    count:
+      task_update: 2
+  task:
+    created: false
+    new_count: 0
+    target: current_task
+    status_any: [completed]
+    steps:
+      - id: s2
+        status: done
+        note_required: true
+    all_steps_done: true

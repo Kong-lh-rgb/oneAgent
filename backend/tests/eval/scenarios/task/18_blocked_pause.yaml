@@ -1,0 +1,27 @@
+id: eval-18
+group: task
+name: 阻塞需原因且任务可暂停
+initial_tasks:
+  - alias: current_task
+    title: 生成月报
+    goal: 生成本月运营月报
+    status: active
+    steps:
+      - id: s1
+        title: 收集本月销售数据
+        status: in_progress
+user_input: "本月销售数据还没有提供，我暂时无法完成。请把第一步标记为阻塞，说明原因，并把任务暂停。"
+max_steps: 6
+expect:
+  tools:
+    must: [task_update]
+    successful: [task_update]
+  task:
+    created: false
+    new_count: 0
+    target: current_task
+    status_any: [paused]
+    steps:
+      - id: s1
+        status: blocked
+        note_required: true

@@ -1,0 +1,22 @@
+id: eval-02
+group: tools
+name: 正确读取 workspace 文件
+initial_files:
+  - path: notes/intro.txt
+    content: "OneAgent 是一个本地智能助手，支持工具调用与任务跟踪。"
+user_input: "请读取 workspace 中 notes/intro.txt 的内容，并告诉我文件里写了什么。"
+max_steps: 5
+expect:
+  tools:
+    must: [read_file]
+    successful: [read_file]
+    must_not: [write_file, task_create]
+    count:
+      read_file: 1
+    args:
+      read_file:
+        path: notes/intro.txt
+  task:
+    created: false
+  answer:
+    keypoints: ["本地智能助手"]

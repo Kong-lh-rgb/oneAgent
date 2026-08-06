@@ -1,0 +1,27 @@
+id: eval-17
+group: task
+name: 步骤完成必须留依据
+initial_tasks:
+  - alias: current_task
+    title: 整理会议纪要
+    goal: 输出一份完整会议纪要
+    status: active
+    steps:
+      - id: s1
+        title: 收集会议要点
+        status: in_progress
+user_input: "会议要点已经收集完毕，请把第一步标记为已完成，并说明完成依据。"
+max_steps: 6
+expect:
+  tools:
+    must: [task_update]
+    successful: [task_update]
+    must_not: [task_create]
+  task:
+    created: false
+    new_count: 0
+    target: current_task
+    steps:
+      - id: s1
+        status: done
+        note_required: true

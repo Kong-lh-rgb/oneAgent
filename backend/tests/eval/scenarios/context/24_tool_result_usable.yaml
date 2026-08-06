@@ -1,0 +1,16 @@
+id: eval-24
+group: context
+name: 压缩后旧工具结果仍可回答
+initial_files:
+  - path: data/registry.txt
+    content: "服务: api-gateway\n端口: 8080\n协议: https\n"
+user_input: "请读取 data/registry.txt，记住其中的端口信息，然后告诉我 api-gateway 服务的端口是多少。"
+max_steps: 8
+expect:
+  tools:
+    must: [read_file]
+    successful: [read_file]
+  task:
+    created: false
+  answer:
+    keypoints: ["8080"]

@@ -1,0 +1,37 @@
+id: eval-22
+group: context
+name: 长对话后继续正常回答
+initial_history:
+  - role: user
+    content: "我们开始一次很长的对话练习，我会依次问你数字。第一个数字是 3。"
+  - role: assistant
+    content: "好的，我记住了第一个数字是 3。"
+  - role: user
+    content: "第二个数字是 7，请继续记住。"
+  - role: assistant
+    content: "好的，第二个数字是 7，我已记住当前数字序列：3、7。"
+  - role: user
+    content: "第三个数字是 12。"
+  - role: assistant
+    content: "已记住第三个数字 12，当前数字序列：3、7、12。"
+  - role: user
+    content: "第四个数字是 5。"
+  - role: assistant
+    content: "已记住第四个数字 5，当前数字序列：3、7、12、5。"
+  - role: user
+    content: "第五个数字是 9。"
+  - role: assistant
+    content: "已记住第五个数字 9，当前数字序列：3、7、12、5、9。"
+  - role: user
+    content: "第六个数字是 2。"
+  - role: assistant
+    content: "已记住第六个数字 2，当前数字序列：3、7、12、5、9、2。"
+user_input: "请问我让你记住的第二个数字是多少？"
+max_steps: 4
+expect:
+  tools:
+    total_count: 0
+  task:
+    created: false
+  answer:
+    keypoints: ["7"]

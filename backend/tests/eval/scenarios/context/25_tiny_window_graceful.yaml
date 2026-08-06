@@ -1,0 +1,15 @@
+id: eval-25
+group: context
+name: 极小窗口超预算优雅处理
+user_input: "这是一个很长的输入，用来验证在极小上下文窗口下系统不会崩溃，而是优雅处理：一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十一二三四五六七八九十。"
+max_steps: 4
+max_output_tokens: 32
+allowed_tools: []
+context:
+  window_override: 300
+  margin_tokens: 50
+expect:
+  task:
+    created: false
+  answer:
+    any_of: ["无法", "过长", "处理", "超限", "失败"]

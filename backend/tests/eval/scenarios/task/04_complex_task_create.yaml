@@ -1,0 +1,18 @@
+id: eval-04
+group: task
+name: 复杂多步骤请求创建 Task
+user_input: "我需要完成三件事：①搭建 API 层 ②写一个前端聊天页 ③调研 MCP 集成方案。请帮我记录下来并规划执行。"
+max_steps: 8
+expect:
+  tools:
+    must: [task_create]
+    successful: [task_create]
+    count:
+      task_create: 1
+  task:
+    created: true
+    new_count: 1
+    target: new
+    status_any: [pending, active]
+    min_steps: 3
+    content_contains: ["API", "前端", "MCP"]

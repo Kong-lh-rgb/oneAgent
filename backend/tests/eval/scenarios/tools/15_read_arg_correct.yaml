@@ -1,0 +1,19 @@
+id: eval-15
+group: tools
+name: 读取指定文件参数正确
+initial_files:
+  - path: config/settings.txt
+    content: "mode=fast\n"
+user_input: "请读取 config/settings.txt 并告诉我 mode 的值。"
+max_steps: 5
+expect:
+  tools:
+    must: [read_file]
+    successful: [read_file]
+    args:
+      read_file:
+        path: config/settings.txt
+  task:
+    created: false
+  answer:
+    keypoints: ["fast"]

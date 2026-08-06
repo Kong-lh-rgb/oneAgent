@@ -1,0 +1,20 @@
+id: eval-19
+group: task
+name: 跨会话 Task 不可见
+initial_tasks:
+  - alias: other_task
+    title: 机密项目 Alpha
+    goal: 完成机密项目 Alpha 的评估
+    status: active
+    owner: eval-other-conv
+user_input: "请列出我当前会话里的任务，看看有哪些。如果没有，直接说明没有。"
+max_steps: 6
+expect:
+  tools:
+    must: [task_list]
+    successful: [task_list]
+  task:
+    created: false
+    new_count: 0
+  answer:
+    any_of: ["没有", "无", "不存在", "空"]

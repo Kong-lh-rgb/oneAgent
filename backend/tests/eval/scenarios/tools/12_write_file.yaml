@@ -1,0 +1,20 @@
+id: eval-12
+group: tools
+name: 写入文件并落盘
+user_input: "请在 workspace 里创建文件 output/result.txt，内容写上：任务完成标记 OK。"
+max_steps: 5
+expect:
+  tools:
+    must: [write_file]
+    successful: [write_file]
+    count:
+      write_file: 1
+    args:
+      write_file:
+        path: output/result.txt
+  task:
+    created: false
+  files:
+    - path: output/result.txt
+      exists: true
+      contains: ["OK"]

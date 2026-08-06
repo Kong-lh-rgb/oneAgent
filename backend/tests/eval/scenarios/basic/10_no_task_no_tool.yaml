@@ -1,0 +1,12 @@
+id: eval-10
+group: basic
+name: 无法回答时也不乱建任务
+user_input: "你目前无法访问我的私有邮箱，请告诉我你能做什么，不要为此创建任务。"
+max_steps: 4
+expect:
+  tools:
+    total_count: 0
+  task:
+    created: false
+  answer:
+    any_of: ["无法", "不能", "没有", "无法访问"]

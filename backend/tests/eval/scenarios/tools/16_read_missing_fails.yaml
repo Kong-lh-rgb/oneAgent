@@ -1,0 +1,13 @@
+id: eval-16
+group: tools
+name: 读取不存在文件应如实失败
+user_input: "请读取 workspace 里不存在的文件 missing/no_such.txt，并告诉我结果。"
+max_steps: 5
+expect:
+  tools:
+    must: [read_file]
+    unsuccessful: [read_file]
+  task:
+    created: false
+  answer:
+    any_of: ["不存在", "未找到", "无法读取", "失败"]

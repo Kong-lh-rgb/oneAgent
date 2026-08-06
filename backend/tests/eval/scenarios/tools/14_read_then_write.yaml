@@ -1,0 +1,19 @@
+id: eval-14
+group: tools
+name: 读取后写入的组合
+initial_files:
+  - path: data/input.txt
+    content: "第一行数据\n第二行数据\n"
+user_input: "请读取 data/input.txt 的内容，然后把它追加写入 output/copy.txt。"
+max_steps: 6
+expect:
+  tools:
+    must: [read_file, write_file]
+    successful: [read_file, write_file]
+    ordered: [read_file, write_file]
+  task:
+    created: false
+  files:
+    - path: output/copy.txt
+      exists: true
+      contains: ["第一行数据"]

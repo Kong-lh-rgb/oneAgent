@@ -144,6 +144,49 @@
 - [x] 测试：done 无 note 拒绝、blocked 无 note 拒绝、blocked 有原因成功、in_progress 无 note 允许、任务 paused→active 恢复、runtime 集成测试补 note
 - [x] 全量验证：`pytest` 237 个用例全部通过，`ruff` 无告警
 
+### 完成：自建轻量 Eval Harness（v1 测评框架）
+- [x] 策略确定：自建（不引 LangSmith/DeepEval/Inspect）；直接驱动真实 `AgentRuntime` 并读取 `AgentResult`/事件/`FileTaskStore`/workspace 内部状态
+- [x] 两套运行：`pytest` 用 Mock 模型自检 harness（CI 可跑）；`tests.eval.run_live` 用真实模型跑场景
+- [x] 场景 YAML（`tests/eval/scenarios/`）：初始历史/预置 Task/文件、用户输入、Runtime 限制、审批/上下文覆盖、期望（工具 must/must_not/no_successful、Task 状态/步骤、文件、回答关键点/任一、是否压缩）
+- [x] 评分宽松：工具只查必须包含/禁止包含/参数关键值；步骤支持 status_any；回答支持 keypoints（全含）与 any_of（任一）
+- [x] 指标与报告（`metrics.py`）：场景通过率、工具选择准确率、Task 状态正确率、安全组通过率、平均 steps/工具调用/tokens/耗时、失败归因；Markdown 报告存 `tests/eval/reports/`
+- [x] 首批 6 条场景：简单问答不建 Task、读取文件、工具失败不宣称完成、复杂请求创建 Task、压缩后遵守目标、审批拒绝不执行
+- [x] Harness 自检：`tests/test_harness.py`（mock 模型验证加载/运行/预置/评分/报告，6 例全通过）
+- [x] 运行：`pytest tests/test_harness.py`（离线）；`.venv/bin/python -m tests.eval.run_live [--group/--scenario/--runs]`（真实模型）
+- [x] 全量验证：`pytest` 277 个用例全部通过，`ruff` 无告警
+- [ ] 待办：跑通 6 条 live 场景 → 扩到 20–30 条（basic/tools/task/context/safety）→ 波动大场景跑 3 次 → 失败归因沉淀
+
+### 完成：Eval Harness 误判修复与断言增强
+
+#### Bad Case
+- [x] `created: false` 被解释为运行后 Task 总数为零，导致预置 Task 的场景必然误判，并提前跳过目标与步骤检查
+- [x] 工具断言只确认调用名称，不确认成功、失败、次数和顺序；同名多次调用只检查最后一次参数
+- [x] 模型以 error/max_steps 等原因停止时，只要返回 `AgentResult` 就会被视为正常运行
+- [x] 未声明某维度期望的场景仍进入准确率分母，工具与 Task 指标会被无关场景稀释
+- [x] 压缩场景没有制造足够预算压力，且 Harness 未接入滚动摘要器，报告中的压缩失败不具备归因价值
+
+#### 修复结果
+- [x] 保存初始 Task ID 快照；`created` 改为检查本轮新增，支持 `new_count`、初始 Task alias、`target: new` 和明确目标选择
+- [x] 工具断言增加 successful/unsuccessful/no_successful、精确次数、总次数、有序子序列、任意一次参数匹配和审批拒绝事件
+- [x] 默认只接受 `final_answer`，负面场景可用 `stop_reason_any` 显式声明合法停止原因
+- [x] 检查结果增加 applicable/skipped 语义，指标只统计真正声明了该维度期望的场景
+- [x] 压缩断言要求达到触发线、压缩阶段非 none 且请求上下文确实变化；压缩场景接入与 CLI 同类的滚动摘要链路
+- [x] 场景加载增加冲突、重复 ID、未知工具、隐藏必需工具和 Task target 校验；预置文件拒绝绝对路径与 `../` 穿越
+- [x] Live Eval 每次使用独立现场目录，报告区分唯一场景与运行样本并记录模型和现场；失败默认返回退出码 1
+- [x] 收紧首批六个场景，补齐工具失败写回 blocked、复杂任务三步覆盖、真实压缩和审批拒绝证据
+- [x] 离线 Harness 回归扩展到 13 项；全量验证：`pytest` 284 个用例全部通过
+
+### 完成：30 条测评场景（5 组 × 6 条）
+- [x] 扩到 30 条场景，按 basic / tools / task / context / safety 各 6 条
+- [x] basic（01/07-11）：简单问答不建 Task、多轮上下文、中文回答、不调用工具、一次性问题不建任务
+- [x] tools（02/12-16）：读文件、写文件并落盘、列目录、读后写组合、参数正确、读不存在文件如实失败
+- [x] task（03/04/17-20）：工具失败不宣称完成、复杂请求创建 Task、done 必须留依据、blocked 需原因且任务暂停、跨会话不可见、全步骤完成收尾
+- [x] context（05/21-25）：压缩后目标/约束/关键事实保留、长对话继续、工具结果可用、极小窗口优雅处理
+- [x] safety（06/26-30）：审批拒绝、路径穿越、未知工具、HTTP 拒绝、工具轮次收尾、shell 审批
+- [x] schema 增强配合：`InitialTask.owner`（跨会话预置）、ToolExpectation（successful/unsuccessful/count/ordered/approval_denied）、TaskExpectation（target/new_count/content_contains/min_steps）、stop_reason_any
+- [x] `test_harness` 场景数量断言更新为 30 条；加载校验通过（5 组 × 6）
+- [x] 全量验证：`pytest` 284 个用例全部通过，`ruff` 无告警
+
 ---
 
 ## 2026-08-05

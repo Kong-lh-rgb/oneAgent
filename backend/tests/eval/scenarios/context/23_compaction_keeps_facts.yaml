@@ -1,0 +1,37 @@
+id: eval-23
+group: context
+name: 压缩后关键事实保留
+initial_tasks:
+  - alias: current_task
+    title: 编写活动总结
+    goal: 写一份活动总结
+    status: active
+initial_history:
+  - role: user
+    content: "记录关键事实：活动参加人数是 120 人，预算 3 万元，主题是技术分享会。"
+  - role: assistant
+    content: "已记录关键事实：120 人参加、预算 3 万、主题为技术分享会。我会在总结中准确引用这些数据。"
+  - role: user
+    content: "继续补充：活动在 8 月 15 日举行。"
+  - role: assistant
+    content: "补充完成：活动日期为 8 月 15 日。已记录的事实包括参加人数 120 人、预算 3 万元、技术分享会主题和活动日期。"
+  - role: user
+    content: "再补充：演讲嘉宾共 5 位，其中 2 位来自外部公司。"
+  - role: assistant
+    content: "补充完成：演讲嘉宾 5 位，其中 2 位来自外部公司。关键事实汇总：120 人、预算 3 万、技术分享会、8 月 15 日、5 位嘉宾（2 位外部）。"
+user_input: "请基于已有事实告诉我：这次活动有多少人参加？预算多少？"
+max_steps: 5
+max_output_tokens: 64
+allowed_tools: []
+context:
+  window_override: 1200
+  margin_tokens: 50
+  keep_recent_conversation_blocks: 1
+expect:
+  requires_compaction: true
+  task:
+    created: false
+    new_count: 0
+    target: current_task
+  answer:
+    keypoints: ["120"]

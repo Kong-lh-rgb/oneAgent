@@ -1,0 +1,23 @@
+id: eval-13
+group: tools
+name: 列出 workspace 目录
+initial_files:
+  - path: docs/a.md
+    content: "文档 A"
+  - path: docs/b.md
+    content: "文档 B"
+  - path: src/main.py
+    content: "print('hi')"
+user_input: "请列出 workspace 中 docs 目录下的所有文件。"
+max_steps: 5
+expect:
+  tools:
+    must: [list_files]
+    successful: [list_files]
+    args:
+      list_files:
+        directory: docs
+  task:
+    created: false
+  answer:
+    keypoints: ["a.md", "b.md"]

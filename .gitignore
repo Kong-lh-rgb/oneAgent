@@ -18,3 +18,6 @@ workspace/*
 !workspace/.gitkeep
 .oneagent/
 backend/.oneagent/
+
+# Local evaluation artifacts
+backend/tests/eval/reports/*.md

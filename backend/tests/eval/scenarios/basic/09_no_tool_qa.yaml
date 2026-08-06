@@ -1,0 +1,12 @@
+id: eval-09
+group: basic
+name: 常识问答不调用工具
+user_input: "太阳系有几大行星？请直接回答，不要调用任何工具。"
+max_steps: 4
+expect:
+  tools:
+    total_count: 0
+  task:
+    created: false
+  answer:
+    keypoints: ["8"]

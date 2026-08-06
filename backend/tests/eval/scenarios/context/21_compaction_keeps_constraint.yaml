@@ -1,0 +1,37 @@
+id: eval-21
+group: context
+name: 压缩后用户约束保留
+initial_tasks:
+  - alias: current_task
+    title: 撰写技术方案
+    goal: 撰写一份技术方案文档
+    status: active
+initial_history:
+  - role: user
+    content: "注意约束：技术方案必须坚持使用 Python，不允许使用 Go。"
+  - role: assistant
+    content: "明白，我会坚持使用 Python 技术栈，避免引入 Go。技术方案的总体设计、模块划分和示例代码都会基于 Python。"
+  - role: user
+    content: "开始写总体设计部分，继续遵守 Python 技术栈约束。"
+  - role: assistant
+    content: "总体设计基于 Python 完成：采用 FastAPI 提供接口，SQLite 做存储，pydantic 做数据校验。每个模块都给出 Python 的实现思路，不引入 Go。"
+  - role: user
+    content: "继续写接口设计章节，仍然坚持 Python 技术栈。"
+  - role: assistant
+    content: "接口设计章节已基于 Python 完成，定义了 RESTful 接口与数据模型，示例代码全部使用 Python 编写。方案整体围绕 Python 技术栈展开，未涉及 Go。"
+user_input: "请总结这份方案的技术栈选择，并说明这个约束是在哪里提出的。"
+max_steps: 5
+max_output_tokens: 64
+allowed_tools: []
+context:
+  window_override: 1200
+  margin_tokens: 50
+  keep_recent_conversation_blocks: 1
+expect:
+  requires_compaction: true
+  task:
+    created: false
+    new_count: 0
+    target: current_task
+  answer:
+    keypoints: ["Python"]

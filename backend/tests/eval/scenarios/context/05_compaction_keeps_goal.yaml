@@ -1,0 +1,42 @@
+id: eval-05
+group: context
+name: 上下文压缩后仍遵守 Task 目标
+initial_tasks:
+  - alias: current_task
+    title: 编写产品说明
+    goal: 产品说明必须只介绍"效率提升"这一核心卖点
+    status: active
+initial_history:
+  - role: user
+    content: "开始编写产品说明。"
+  - role: assistant
+    content: "好的，我会围绕效率提升这一核心卖点来组织产品说明的内容结构。产品说明将重点说明效率提升带来的具体收益，包括时间节省、流程简化和团队协作效率。"
+  - role: user
+    content: "请继续完善说明的引言部分，强调效率提升对公司整体运营的价值，同时保持内容聚焦。"
+  - role: assistant
+    content: "引言部分已完成。我强调效率提升可以缩短交付周期、减少重复劳动，并帮助团队把时间花在更有价值的工作上。整个说明都以效率提升为核心卖点。"
+  - role: user
+    content: "接着写功能特性章节，请继续围绕效率提升展开，不要偏离主题。"
+  - role: assistant
+    content: "功能特性章节围绕效率提升展开：自动化减少手动步骤、统一入口避免上下文切换、并行处理提升吞吐。每个特性都直接关联到效率提升的收益。"
+  - role: user
+    content: "补充一段客户价值说明，仍然只围绕效率提升这一卖点，不要引入其他卖点。"
+  - role: assistant
+    content: "客户价值说明已补充：采用本产品后，客户交付效率提升、团队协作更顺畅、整体成本下降。所有价值点都落在效率提升上。后续案例、数据说明和结论也必须继续围绕效率提升展开，不能把低成本、易用性或品牌价值写成新的核心卖点；如果材料不足，应保留待补充事项，而不是偏离已经确认的目标。"
+user_input: "现在请总结一下当前任务的核心目标，并告诉我下一步要做什么（注意：产品说明只围绕效率提升这一个卖点）。"
+max_steps: 6
+max_output_tokens: 64
+allowed_tools: []
+context:
+  window_override: 1200
+  margin_tokens: 50
+  keep_recent_conversation_blocks: 1
+expect:
+  requires_compaction: true
+  task:
+    created: false
+    new_count: 0
+    target: current_task
+    goal_contains: ["效率提升"]
+  answer:
+    keypoints: ["效率提升"]

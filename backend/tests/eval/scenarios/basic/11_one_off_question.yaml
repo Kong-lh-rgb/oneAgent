@@ -1,0 +1,12 @@
+id: eval-11
+group: basic
+name: 一次性问题不创建 Task
+user_input: "帮我翻译这句话到英文：今天天气很好。请直接回答。"
+max_steps: 4
+expect:
+  tools:
+    must_not: [task_create, task_update]
+  task:
+    created: false
+  answer:
+    any_of: ["weather", "The weather", "today", "fine"]

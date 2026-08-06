@@ -1,0 +1,12 @@
+id: eval-01
+group: basic
+name: 简单问答不创建 Task
+user_input: "2 + 3 等于多少？请直接回答。"
+max_steps: 5
+expect:
+  tools:
+    total_count: 0
+  task:
+    created: false
+  answer:
+    keypoints: ["5"]
