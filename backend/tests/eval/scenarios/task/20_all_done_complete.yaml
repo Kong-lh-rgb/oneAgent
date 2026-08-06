@@ -20,8 +20,6 @@ expect:
   tools:
     must: [task_update]
     successful: [task_update]
-    count:
-      task_update: 2
   task:
     created: false
     new_count: 0

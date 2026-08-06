@@ -9,4 +9,4 @@ expect:
   task:
     created: false
   answer:
-    keypoints: ["8"]
+    any_of: ["8", "八"]

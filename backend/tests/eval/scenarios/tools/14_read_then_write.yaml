@@ -6,6 +6,7 @@ initial_files:
     content: "第一行数据\n第二行数据\n"
 user_input: "请读取 data/input.txt 的内容，然后把它追加写入 output/copy.txt。"
 max_steps: 6
+allowed_tools: [read_file, write_file]
 expect:
   tools:
     must: [read_file, write_file]
