@@ -77,6 +77,31 @@
 - [x] 新增路径越界、符号链接、并发更新、revision 冲突、原子失败、上下文自动绑定、动态重排计划和 Runtime 创建/更新后即时刷新测试
 - [x] 全量验证：`pytest` 226 个用例全部通过，`ruff`、编译、CLI 参数与 Diff 格式检查通过
 
+### 完成：任务按会话隔离（Bad Case）
+
+#### Bad Case
+- [x] 所有会话都能看到并更新所有任务，A 会话创建的任务在 B 会话也能 list/get/update，跨会话任务数据相互可见、可被覆盖
+- [x] 对话压缩不会丢失任务，但会话隔离缺失会让任务事实被无关会话误改或泄露
+
+#### 修复结果
+- [x] 隔离原则：任务归属由 `conversation_ids` 决定；带有效会话上下文时强制按会话隔离
+  - `task_list`：只返回当前会话的任务（`store.list(conversation_id=...)`）
+  - `task_get` / `task_update`：只能操作属于当前会话的任务，其他会话统一按“任务不存在”处理（隐藏存在性）
+  - `task_create`：自动绑定创建它的会话（原有）
+- [x] 无会话上下文的直接调用/测试不强制隔离（向后兼容）；真实运行始终携带会话上下文，因此默认隔离生效
+- [x] `store.list` 新增 `conversation_id` 过滤参数；tools 新增 `_resolve_owned` 归属校验 helper，三个工具改用 `execute_with_context` 获取会话上下文
+- [x] 测试：跨会话 list 过滤、get/update 跨会话拒绝（含执行器路径）、store list 按会话过滤
+- [x] 全量验证：`pytest` 231 个用例全部通过，`ruff` 无告警
+
+### 完成：步骤状态需留依据（step_note）
+- [x] 问题：模型可无凭据地把步骤标记为 done 或 blocked，之后无法回溯"为什么完成了 / 为什么卡住"
+- [x] 约束：`task_update` 将 `step_status` 置为 `done` 时必须提供非空 `step_note`（完成依据）；置为 `blocked` 时必须提供非空 `step_note`（阻塞原因，如"缺少用户提供的实验结果文件"）。系统不校验内容真假，只强制留痕
+- [x] 仅推进单步骤路径强制；`in_progress`/`todo` 不强制；`steps` 整体重排（保留已完成步骤）不强制
+- [x] 任务可进入 `paused`：当步骤 blocked（等待用户输入/外部条件）时，建议把任务置为 paused，使下次恢复时模型明确知道在等什么；工具 `status` 描述已引导该用法
+- [x] 工具定义描述同步说明该要求；空字符串不算依据
+- [x] 测试：done 无 note 拒绝、blocked 无 note 拒绝、blocked 有原因成功、in_progress 无 note 允许、任务 paused→active 恢复、runtime 集成测试补 note
+- [x] 全量验证：`pytest` 237 个用例全部通过，`ruff` 无告警
+
 ---
 
 ## 2026-08-05

@@ -208,6 +208,25 @@ async def test_list_filters_by_status_and_orders_by_update(
     assert pending.id in {task.id for task in all_tasks}
 
 
+async def test_list_filters_by_conversation(store: FileTaskStore) -> None:
+    task_a = await store.create(title="A 任务", conversation_ids=("conv-a",))
+    task_b = await store.create(title="B 任务", conversation_ids=("conv-b",))
+    task_free = await store.create(title="无绑定")
+
+    in_a = await store.list(conversation_id="conv-a")
+    assert [task.id for task in in_a] == [task_a.id]
+
+    in_b = await store.list(conversation_id="conv-b")
+    assert [task.id for task in in_b] == [task_b.id]
+
+    all_tasks = await store.list(limit=10)
+    assert {task.id for task in all_tasks} == {
+        task_a.id,
+        task_b.id,
+        task_free.id,
+    }
+
+
 async def test_list_skips_corrupt_files(store: FileTaskStore) -> None:
     await store.create(title="正常任务")
     corrupt = store.tasks_dir / "corrupt.json"

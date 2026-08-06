@@ -125,14 +125,25 @@ class FileTaskStore:
         *,
         limit: int = 50,
         status: TaskStatus | None = None,
+        conversation_id: str | None = None,
     ) -> tuple[Task, ...]:
-        """按最近更新时间倒序列出任务，可按状态过滤。"""
+        """按最近更新时间倒序列出任务，可按状态与归属会话过滤。"""
 
         if limit < 1:
             raise ValueError("limit must be at least 1")
         tasks = await self._all_tasks()
         if status is not None:
             tasks = [task for task in tasks if task.status is status]
+        if conversation_id:
+            normalized = _normalize_required_entry(
+                conversation_id,
+                field_name="conversation_id",
+            )
+            tasks = [
+                task
+                for task in tasks
+                if normalized in task.conversation_ids
+            ]
         tasks.sort(key=lambda task: task.updated_at, reverse=True)
         return tuple(tasks[:limit])
 

@@ -639,6 +639,7 @@ async def test_runtime_refreshes_task_context_after_step_update(tmp_path) -> Non
                             "expected_revision": task.revision,
                             "step_id": "step-1",
                             "step_status": "done",
+                            "step_note": "实现已完成",
                         },
                     ),
                 )

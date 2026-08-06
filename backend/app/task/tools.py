@@ -172,7 +172,11 @@ class TaskUpdateTool(BaseTool):
                     "status": {
                         "type": "string",
                         "enum": [s.value for s in TaskStatus],
-                        "description": "新的任务状态。",
+                        "description": (
+                            "新的任务状态；当步骤 blocked（等待用户输入或外部"
+                            "条件）时，可把任务置为 paused，使下次恢复时模型"
+                            "明确知道在等什么。"
+                        ),
                     },
                     "goal": {
                         "type": "string",
@@ -221,11 +225,18 @@ class TaskUpdateTool(BaseTool):
                     "step_status": {
                         "type": "string",
                         "enum": [s.value for s in TaskStepStatus],
-                        "description": "步骤的新状态。",
+                        "description": (
+                            "步骤的新状态；标记为 done 时必须同时提供 "
+                            "step_note 记录完成依据，标记为 blocked 时必须"
+                            "提供 step_note 说明阻塞原因。"
+                        ),
                     },
                     "step_note": {
                         "type": "string",
-                        "description": "可选的步骤备注。",
+                        "description": (
+                            "步骤备注；标记为 done 时记录完成依据，标记为 "
+                            "blocked 时说明阻塞原因，两者均必填。"
+                        ),
                     },
                     "expected_revision": {
                         "type": "integer",
@@ -334,10 +345,21 @@ class TaskUpdateTool(BaseTool):
         step_note = arguments.get("step_note")
         if step_note is not None and not isinstance(step_note, str):
             raise ValueError("'step_note' must be a string")
+        if step_status in ("done", "blocked") and (
+            step_note is None or not step_note.strip()
+        ):
+            if step_status == "done":
+                raise ValueError(
+                    "将步骤标记为 done 时必须提供 step_note 说明完成依据"
+                )
+            raise ValueError(
+                "将步骤标记为 blocked 时必须提供 step_note 说明阻塞原因"
+            )
 
-        task = await self._store.resolve(task_id)
-        if task is None:
-            raise KeyError(f"任务不存在：{task_id}")
+        conversation_id = (
+            context.conversation_id if context is not None else None
+        )
+        task = await _resolve_owned(self._store, task_id, conversation_id)
 
         patch_data: dict[str, Any] = {
             "status": status,
@@ -348,9 +370,7 @@ class TaskUpdateTool(BaseTool):
                 TaskStepStatus(step_status) if step_status is not None else None
             ),
             "expected_revision": expected_revision,
-            "conversation_id": (
-                context.conversation_id if context is not None else None
-            ),
+            "conversation_id": conversation_id,
             "run_id": context.run_id if context is not None else None,
         }
         if "goal" in arguments:
@@ -399,12 +419,28 @@ class TaskGetTool(BaseTool):
         )
 
     async def execute(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self._execute(arguments, context=None)
+
+    async def execute_with_context(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        return await self._execute(arguments, context=context)
+
+    async def _execute(
+        self,
+        arguments: dict[str, Any],
+        *,
+        context: ToolExecutionContext | None,
+    ) -> dict[str, Any]:
         task_id = arguments.get("task_id")
         if not isinstance(task_id, str) or not task_id.strip():
             raise ValueError("'task_id' must be a non-empty string")
-        task = await self._store.resolve(task_id)
-        if task is None:
-            raise KeyError(f"任务不存在：{task_id}")
+        conversation_id = (
+            context.conversation_id if context is not None else None
+        )
+        task = await _resolve_owned(self._store, task_id, conversation_id)
         return _task_full(task)
 
 
@@ -445,6 +481,21 @@ class TaskListTool(BaseTool):
         )
 
     async def execute(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return await self._execute(arguments, context=None)
+
+    async def execute_with_context(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        return await self._execute(arguments, context=context)
+
+    async def _execute(
+        self,
+        arguments: dict[str, Any],
+        *,
+        context: ToolExecutionContext | None,
+    ) -> dict[str, Any]:
         limit = arguments.get("limit", 50)
         if not isinstance(limit, int) or not 1 <= limit <= _MAX_LIST_LIMIT:
             raise ValueError(
@@ -456,7 +507,14 @@ class TaskListTool(BaseTool):
         if raw_status is not None:
             status = TaskStatus(raw_status)
 
-        tasks = await self._store.list(limit=limit, status=status)
+        conversation_id = (
+            context.conversation_id if context is not None else None
+        )
+        tasks = await self._store.list(
+            limit=limit,
+            status=status,
+            conversation_id=conversation_id,
+        )
         return {
             "count": len(tasks),
             "tasks": [_task_brief(task) for task in tasks],
@@ -474,6 +532,25 @@ def register_task_tools(registry: ToolRegistry, store: FileTaskStore) -> None:
 
 def _task_full(task: Task) -> dict[str, Any]:
     return task.model_dump(mode="json")
+
+
+async def _resolve_owned(
+    store: FileTaskStore,
+    task_id: str,
+    conversation_id: str | None,
+) -> Task:
+    """解析任务并要求归属当前会话；无会话上下文时不强制校验。
+
+    任务不存在或不属于当前会话时统一返回“任务不存在”，避免泄露
+    其他会话中任务的存在性。
+    """
+
+    task = await store.resolve(task_id)
+    if task is None:
+        raise KeyError(f"任务不存在：{task_id}")
+    if conversation_id and conversation_id not in task.conversation_ids:
+        raise KeyError(f"任务不存在：{task_id}")
+    return task
 
 
 def _task_brief(task: Task) -> dict[str, Any]:

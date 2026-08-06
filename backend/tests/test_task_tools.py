@@ -12,6 +12,7 @@ from app.task import (
     TaskListTool,
     TaskStatus,
     TaskStep,
+    TaskStepStatus,
     TaskUpdateTool,
     register_task_tools,
 )
@@ -127,6 +128,115 @@ async def test_task_update_advances_step(store: FileTaskStore) -> None:
     assert step["note"] == "已完成"
 
 
+async def test_task_update_done_requires_note(store: FileTaskStore) -> None:
+    """步骤标记 done 时必须提供 step_note 作为完成依据。"""
+
+    tool = TaskUpdateTool(store)
+    created = await store.create(
+        title="完成依据",
+        steps=(TaskStep(id="s1", title="步骤一"),),
+    )
+
+    with pytest.raises(ValueError, match="step_note"):
+        await tool.execute(
+            {
+                "task_id": created.id,
+                "step_id": "s1",
+                "step_status": "done",
+            }
+        )
+    # 空字符串同样不算依据。
+    with pytest.raises(ValueError, match="step_note"):
+        await tool.execute(
+            {
+                "task_id": created.id,
+                "step_id": "s1",
+                "step_status": "done",
+                "step_note": "   ",
+            }
+        )
+
+    # 任务未被修改。
+    unchanged = await store.get(created.id)
+    assert unchanged is not None
+    assert unchanged.steps[0].status is TaskStepStatus.TODO
+
+
+async def test_task_update_in_progress_without_note_allowed(
+    store: FileTaskStore,
+) -> None:
+    """非 done 状态（如 in_progress）不强制要求 step_note。"""
+
+    tool = TaskUpdateTool(store)
+    created = await store.create(
+        title="执行中",
+        steps=(TaskStep(id="s1", title="步骤一"),),
+    )
+
+    result = await tool.execute(
+        {
+            "task_id": created.id,
+            "step_id": "s1",
+            "step_status": "in_progress",
+        }
+    )
+    assert result["steps"][0]["status"] == "in_progress"
+
+
+async def test_task_update_blocked_requires_note(store: FileTaskStore) -> None:
+    """步骤标记 blocked 时必须提供 step_note 说明阻塞原因。"""
+
+    tool = TaskUpdateTool(store)
+    created = await store.create(
+        title="阻塞原因",
+        steps=(TaskStep(id="s1", title="步骤一"),),
+    )
+
+    with pytest.raises(ValueError, match="blocked"):
+        await tool.execute(
+            {
+                "task_id": created.id,
+                "step_id": "s1",
+                "step_status": "blocked",
+            }
+        )
+    with pytest.raises(ValueError, match="blocked"):
+        await tool.execute(
+            {
+                "task_id": created.id,
+                "step_id": "s1",
+                "step_status": "blocked",
+                "step_note": "  ",
+            }
+        )
+
+    # 提供阻塞原因后可以成功。
+    result = await tool.execute(
+        {
+            "task_id": created.id,
+            "step_id": "s1",
+            "step_status": "blocked",
+            "step_note": "缺少用户提供的实验结果文件",
+        }
+    )
+    step = result["steps"][0]
+    assert step["status"] == "blocked"
+    assert step["note"] == "缺少用户提供的实验结果文件"
+
+
+async def test_task_update_can_pause_and_resume(store: FileTaskStore) -> None:
+    """任务可进入 paused（等待外部输入），恢复时仍可继续。"""
+
+    tool = TaskUpdateTool(store)
+    created = await store.create(title="等待输入")
+
+    paused = await tool.execute({"task_id": created.id, "status": "paused"})
+    assert paused["status"] == "paused"
+
+    resumed = await tool.execute({"task_id": created.id, "status": "active"})
+    assert resumed["status"] == "active"
+
+
 async def test_task_update_can_replace_plan_and_preserve_existing_step_id(
     store: FileTaskStore,
 ) -> None:
@@ -183,7 +293,8 @@ async def test_task_update_attaches_run_and_conversation(
     store: FileTaskStore,
 ) -> None:
     registry = _registry(store)
-    created = await store.create(title="关联")
+    # 任务已属于 conv-1（例如由 task_create 在 conv-1 中创建）。
+    created = await store.create(title="关联", conversation_ids=("conv-1",))
     call = ToolCall(
         id="update-1",
         name="task_update",
@@ -288,3 +399,112 @@ async def test_task_list_invalid_limit(store: FileTaskStore) -> None:
     tool = TaskListTool(store)
     with pytest.raises(ValueError, match="limit"):
         await tool.execute({"limit": 0})
+
+
+async def test_task_list_scoped_to_current_conversation(
+    store: FileTaskStore,
+) -> None:
+    """task_list 只返回当前会话的任务。"""
+
+    await store.create(title="A 会话任务", conversation_ids=("conv-a",))
+    await store.create(title="B 会话任务", conversation_ids=("conv-b",))
+    tool = TaskListTool(store)
+
+    result_a = await tool.execute_with_context(
+        {},
+        ToolExecutionContext(
+            tool_call=ToolCall(id="list-1", name="task_list", arguments={}),
+            conversation_id="conv-a",
+            run_id="run-a",
+        ),
+    )
+    assert [item["title"] for item in result_a["tasks"]] == ["A 会话任务"]
+
+    result_b = await tool.execute_with_context(
+        {},
+        ToolExecutionContext(
+            tool_call=ToolCall(id="list-2", name="task_list", arguments={}),
+            conversation_id="conv-b",
+            run_id="run-b",
+        ),
+    )
+    assert [item["title"] for item in result_b["tasks"]] == ["B 会话任务"]
+
+
+async def test_task_get_hidden_from_other_conversation(
+    store: FileTaskStore,
+) -> None:
+    """其他会话无法获取不属于自己的任务（隐藏存在性）。"""
+
+    created = await store.create(title="A 会话任务", conversation_ids=("conv-a",))
+    tool = TaskGetTool(store)
+
+    with pytest.raises(KeyError, match="任务不存在"):
+        await tool.execute_with_context(
+            {"task_id": created.id},
+            ToolExecutionContext(
+                tool_call=ToolCall(id="get-1", name="task_get", arguments={}),
+                conversation_id="conv-b",
+                run_id="run-b",
+            ),
+        )
+
+    result = await tool.execute_with_context(
+        {"task_id": created.id},
+        ToolExecutionContext(
+            tool_call=ToolCall(id="get-2", name="task_get", arguments={}),
+            conversation_id="conv-a",
+            run_id="run-a",
+        ),
+    )
+    assert result["id"] == created.id
+
+
+async def test_task_update_rejected_from_other_conversation(
+    store: FileTaskStore,
+) -> None:
+    """其他会话不能更新不属于自己的任务。"""
+
+    created = await store.create(title="A 会话任务", conversation_ids=("conv-a",))
+    tool = TaskUpdateTool(store)
+
+    with pytest.raises(KeyError, match="任务不存在"):
+        await tool.execute_with_context(
+            {"task_id": created.id, "status": "completed"},
+            ToolExecutionContext(
+                tool_call=ToolCall(id="upd-1", name="task_update", arguments={}),
+                conversation_id="conv-b",
+                run_id="run-b",
+            ),
+        )
+
+    unchanged = await store.get(created.id)
+    assert unchanged is not None and unchanged.status is TaskStatus.PENDING
+
+
+async def test_executor_path_rejects_other_conversation_update(
+    store: FileTaskStore,
+) -> None:
+    """即使其他会话知道任务 ID，执行器也会拒绝更新。"""
+
+    registry = _registry(store)
+    created = await store.create(title="A 任务", conversation_ids=("conv-a",))
+    call = ToolCall(
+        id="upd-exec-1",
+        name="task_update",
+        arguments={"task_id": created.id, "status": "completed"},
+    )
+
+    executed = await ToolExecutor(registry).execute(
+        call,
+        context=ToolExecutionContext(
+            tool_call=call,
+            conversation_id="conv-b",
+            run_id="run-b",
+        ),
+    )
+
+    assert executed.success is False
+    assert "任务不存在" in (executed.error or "")
+    unchanged = await store.get(created.id)
+    assert unchanged is not None and unchanged.status is TaskStatus.PENDING
