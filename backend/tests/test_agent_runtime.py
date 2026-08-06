@@ -600,7 +600,7 @@ async def test_runtime_injects_task_created_in_current_run(tmp_path) -> None:
     assert result.ok is True
     tasks = await task_store.list()
     assert len(tasks) == 1
-    assert tasks[0].conversation_ids == ("conversation-1",)
+    assert tasks[0].owner_conversation_id == "conversation-1"
     assert result.run_id in tasks[0].run_ids
     assert not any(
         message.name == TASK_CONTEXT_MESSAGE_NAME for message in result.messages
@@ -625,7 +625,7 @@ async def test_runtime_refreshes_task_context_after_step_update(tmp_path) -> Non
     task = await task_store.create(
         title="持续任务",
         steps=(TaskStep(id="step-1", title="完成实现"),),
-        conversation_ids=("conversation-1",),
+        owner_conversation_id="conversation-1",
     )
     registry, adapter = fake_registry(
         [

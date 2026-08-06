@@ -40,6 +40,10 @@ _TASK_ID_RE = re.compile(rf"^[0-9a-f]{{{TASK_ID_LENGTH}}}$")
 _TASK_PREFIX_RE = re.compile(rf"^[0-9a-f]{{4,{TASK_ID_LENGTH}}}$")
 
 
+class LegacyTaskOwnershipError(ValueError):
+    """旧任务无法确定唯一 owner，因此不能暴露给模型。"""
+
+
 class FileTaskStore:
     """任务的 CRUD、状态推进与关联管理（本地 JSON 文件存储）。"""
 
@@ -64,7 +68,7 @@ class FileTaskStore:
         goal: str | None = None,
         priority: TaskPriority = TaskPriority.NORMAL,
         steps: Sequence[TaskStep] = (),
-        conversation_ids: Sequence[str] = (),
+        owner_conversation_id: str,
         run_ids: Sequence[str] = (),
     ) -> Task:
         """创建一个新任务。"""
@@ -78,7 +82,10 @@ class FileTaskStore:
             status=TaskStatus.PENDING,
             priority=priority,
             steps=tuple(steps),
-            conversation_ids=_merge_entries((), conversation_ids),
+            owner_conversation_id=_normalize_required_entry(
+                owner_conversation_id,
+                field_name="owner_conversation_id",
+            ),
             run_ids=_merge_entries((), run_ids),
             created_at=now,
             updated_at=now,
@@ -95,10 +102,18 @@ class FileTaskStore:
             return None
         if await asyncio.to_thread(path.is_symlink):
             return None
-        return await asyncio.to_thread(_read_task, path)
+        try:
+            return await asyncio.to_thread(_read_task, path)
+        except LegacyTaskOwnershipError:
+            return None
 
-    async def resolve(self, identifier: str) -> Task | None:
-        """使用完整 ID 或唯一 ID 前缀查找任务。"""
+    async def resolve(
+        self,
+        identifier: str,
+        *,
+        owner_conversation_id: str | None = None,
+    ) -> Task | None:
+        """使用完整 ID 或唯一前缀查找，可先按任务 owner 过滤。"""
 
         normalized = identifier.strip().lower()
         if not normalized:
@@ -106,15 +121,27 @@ class FileTaskStore:
 
         _validate_task_prefix(normalized)
 
+        owner = (
+            _normalize_required_entry(
+                owner_conversation_id,
+                field_name="owner_conversation_id",
+            )
+            if owner_conversation_id is not None
+            else None
+        )
         if len(normalized) == TASK_ID_LENGTH:
             exact = await self.get(normalized)
-            if exact is not None:
+            if exact is not None and (
+                owner is None or exact.owner_conversation_id == owner
+            ):
                 return exact
+            return None
 
         matches = [
             task
             for task in await self._all_tasks()
             if task.id.startswith(normalized)
+            and (owner is None or task.owner_conversation_id == owner)
         ]
         if len(matches) > 1:
             raise ValueError(f"任务 ID 前缀不唯一：{identifier}")
@@ -125,7 +152,7 @@ class FileTaskStore:
         *,
         limit: int = 50,
         status: TaskStatus | None = None,
-        conversation_id: str | None = None,
+        owner_conversation_id: str | None = None,
     ) -> tuple[Task, ...]:
         """按最近更新时间倒序列出任务，可按状态与归属会话过滤。"""
 
@@ -134,15 +161,15 @@ class FileTaskStore:
         tasks = await self._all_tasks()
         if status is not None:
             tasks = [task for task in tasks if task.status is status]
-        if conversation_id:
+        if owner_conversation_id is not None:
             normalized = _normalize_required_entry(
-                conversation_id,
-                field_name="conversation_id",
+                owner_conversation_id,
+                field_name="owner_conversation_id",
             )
             tasks = [
                 task
                 for task in tasks
-                if normalized in task.conversation_ids
+                if normalized == task.owner_conversation_id
             ]
         tasks.sort(key=lambda task: task.updated_at, reverse=True)
         return tuple(tasks[:limit])
@@ -160,7 +187,13 @@ class FileTaskStore:
             await asyncio.to_thread(path.unlink)
             return True
 
-    async def apply_patch(self, task_id: str, patch: TaskPatch) -> Task:
+    async def apply_patch(
+        self,
+        task_id: str,
+        patch: TaskPatch,
+        *,
+        owner_conversation_id: str | None = None,
+    ) -> Task:
         """原子应用一组任务变更；校验失败时不写入任何部分结果。"""
 
         normalized = _validate_task_id(task_id)
@@ -168,6 +201,13 @@ class FileTaskStore:
             raise ValueError("task patch must contain at least one change")
         async with self._lock_for(normalized):
             task = await self._require(normalized)
+            if owner_conversation_id is not None:
+                owner = _normalize_required_entry(
+                    owner_conversation_id,
+                    field_name="owner_conversation_id",
+                )
+                if task.owner_conversation_id != owner:
+                    raise KeyError(f"任务不存在：{task_id}")
             if (
                 patch.expected_revision is not None
                 and patch.expected_revision != task.revision
@@ -244,18 +284,6 @@ class FileTaskStore:
 
         return await self._update(task_id, TaskPatch(status=status))
 
-    async def attach_conversation(
-        self,
-        task_id: str,
-        conversation_id: str,
-    ) -> Task:
-        """把一次执行会话关联到任务。"""
-
-        return await self._update(
-            task_id,
-            TaskPatch(conversation_id=conversation_id),
-        )
-
     async def attach_run(self, task_id: str, run_id: str) -> Task:
         """把一次 Agent 运行关联到任务。"""
 
@@ -277,7 +305,7 @@ class FileTaskStore:
         tasks = [
             task
             for task in await self._all_tasks()
-            if normalized in task.conversation_ids
+            if normalized == task.owner_conversation_id
             and task.status not in _TERMINAL_STATUSES
         ]
         tasks.sort(key=lambda task: task.updated_at, reverse=True)
@@ -334,6 +362,9 @@ def _scan_tasks(tasks_dir: Path) -> list[Task]:
             if task.id != path.stem:
                 continue
             tasks.append(task)
+        except LegacyTaskOwnershipError:
+            # _read_task 已记录明确的归属告警，此处只跳过不可访问任务。
+            continue
         except (OSError, ValueError, TypeError) as exc:
             logger.warning(
                 "Skipping invalid task file path=%s error=%s: %s",
@@ -351,6 +382,28 @@ def _read_task(path: Path) -> Task:
             f"task file exceeds {MAX_TASK_FILE_BYTES} byte safety limit"
         )
     data = json.loads(path.read_text(encoding="utf-8"))
+    if "owner_conversation_id" not in data:
+        legacy_owners = data.pop("conversation_ids", None)
+        if not isinstance(legacy_owners, list) or len(legacy_owners) != 1:
+            logger.warning(
+                "Legacy task has ambiguous owner and is inaccessible path=%s owners=%r",
+                path,
+                legacy_owners,
+            )
+            raise LegacyTaskOwnershipError(
+                "legacy task must have exactly one conversation owner"
+            )
+        data["owner_conversation_id"] = legacy_owners[0]
+        task = Task.model_validate(data)
+        _write_task(path, task)
+        logger.info(
+            "Migrated legacy task owner path=%s owner_conversation_id=%s",
+            path,
+            task.owner_conversation_id,
+        )
+        return task
+    if "conversation_ids" in data:
+        raise ValueError("task cannot contain both owner ownership schemas")
     return Task.model_validate(data)
 
 
@@ -377,6 +430,9 @@ def _apply_patch(task: Task, patch: TaskPatch, now: datetime) -> Task:
     """在内存中完成整组变更，最后统一通过 Task 重新校验。"""
 
     data = task.model_dump(mode="python")
+    if task.status in _TERMINAL_STATUSES:
+        if patch.status is not None and patch.status is not task.status:
+            raise ValueError("terminal task cannot be reopened by ordinary update")
     if "goal" in patch.model_fields_set:
         data["goal"] = patch.goal
     if patch.status is not None:
@@ -399,13 +455,20 @@ def _apply_patch(task: Task, patch: TaskPatch, now: datetime) -> Task:
             patch.add_key_facts,
         )
     if "replace_steps" in patch.model_fields_set:
-        data["steps"] = patch.replace_steps or ()
+        replacement_steps = patch.replace_steps or ()
+        _validate_step_replacement(task.steps, replacement_steps)
+        data["steps"] = replacement_steps
     if patch.step_id is not None and patch.step_status is not None:
         updated_steps: list[TaskStep] = []
         found = False
         for step in task.steps:
             if step.id == patch.step_id:
                 found = True
+                if (
+                    step.status is TaskStepStatus.DONE
+                    and patch.step_status is not TaskStepStatus.DONE
+                ):
+                    raise ValueError("done task step cannot be rolled back")
                 step_data = step.model_dump(mode="python")
                 step_data["status"] = patch.step_status
                 if "step_note" in patch.model_fields_set:
@@ -416,16 +479,40 @@ def _apply_patch(task: Task, patch: TaskPatch, now: datetime) -> Task:
         if not found:
             raise KeyError(f"任务步骤不存在：{patch.step_id}")
         data["steps"] = tuple(updated_steps)
-    if patch.conversation_id is not None:
-        data["conversation_ids"] = _merge_entries(
-            task.conversation_ids,
-            (patch.conversation_id,),
-        )
     if patch.run_id is not None:
         data["run_ids"] = _merge_entries(task.run_ids, (patch.run_id,))
     data["revision"] = task.revision + 1
     data["updated_at"] = now
     return Task.model_validate(data)
+
+
+def _validate_step_replacement(
+    existing: Sequence[TaskStep],
+    replacement: Sequence[TaskStep],
+) -> None:
+    """重排计划不能删除或回退已经开始执行的步骤。"""
+
+    replacement_by_id = {step.id: step for step in replacement}
+    for step in existing:
+        if step.status not in {
+            TaskStepStatus.DONE,
+            TaskStepStatus.IN_PROGRESS,
+        }:
+            continue
+        candidate = replacement_by_id.get(step.id)
+        if candidate is None:
+            raise ValueError(
+                f"replace_steps cannot delete protected step: {step.id}"
+            )
+        if step.status is TaskStepStatus.DONE:
+            if candidate.status is not TaskStepStatus.DONE:
+                raise ValueError(
+                    f"replace_steps cannot roll back done step: {step.id}"
+                )
+        elif candidate.status is TaskStepStatus.TODO:
+            raise ValueError(
+                f"replace_steps cannot roll back in_progress step: {step.id}"
+            )
 
 
 def _merge_entries(

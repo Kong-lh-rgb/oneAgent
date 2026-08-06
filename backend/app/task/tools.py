@@ -109,6 +109,7 @@ class TaskCreateTool(BaseTool):
         *,
         context: ToolExecutionContext | None,
     ) -> dict[str, Any]:
+        conversation_id = _require_conversation_id(context)
         title = arguments.get("title")
         if not isinstance(title, str) or not title.strip():
             raise ValueError("'title' must be a non-empty string")
@@ -133,11 +134,7 @@ class TaskCreateTool(BaseTool):
             goal=goal,
             priority=priority,
             steps=steps,
-            conversation_ids=(
-                (context.conversation_id,)
-                if context is not None and context.conversation_id
-                else ()
-            ),
+            owner_conversation_id=conversation_id,
             run_ids=(
                 (context.run_id,)
                 if context is not None and context.run_id
@@ -298,6 +295,14 @@ class TaskUpdateTool(BaseTool):
                 raise ValueError(
                     "'step_id' and 'step_status' must be provided together"
                 )
+        if "steps" in arguments and (
+            step_id is not None
+            or step_status is not None
+            or "step_note" in arguments
+        ):
+            raise ValueError(
+                "'steps' cannot be combined with step_id/step_status/step_note"
+            )
         goal: str | None = None
         if "goal" in arguments:
             goal = arguments["goal"]
@@ -356,9 +361,7 @@ class TaskUpdateTool(BaseTool):
                 "将步骤标记为 blocked 时必须提供 step_note 说明阻塞原因"
             )
 
-        conversation_id = (
-            context.conversation_id if context is not None else None
-        )
+        conversation_id = _require_conversation_id(context)
         task = await _resolve_owned(self._store, task_id, conversation_id)
 
         patch_data: dict[str, Any] = {
@@ -370,7 +373,6 @@ class TaskUpdateTool(BaseTool):
                 TaskStepStatus(step_status) if step_status is not None else None
             ),
             "expected_revision": expected_revision,
-            "conversation_id": conversation_id,
             "run_id": context.run_id if context is not None else None,
         }
         if "goal" in arguments:
@@ -385,6 +387,7 @@ class TaskUpdateTool(BaseTool):
         task = await self._store.apply_patch(
             task.id,
             TaskPatch.model_validate(patch_data),
+            owner_conversation_id=conversation_id,
         )
 
         return _task_full(task)
@@ -437,9 +440,7 @@ class TaskGetTool(BaseTool):
         task_id = arguments.get("task_id")
         if not isinstance(task_id, str) or not task_id.strip():
             raise ValueError("'task_id' must be a non-empty string")
-        conversation_id = (
-            context.conversation_id if context is not None else None
-        )
+        conversation_id = _require_conversation_id(context)
         task = await _resolve_owned(self._store, task_id, conversation_id)
         return _task_full(task)
 
@@ -507,13 +508,11 @@ class TaskListTool(BaseTool):
         if raw_status is not None:
             status = TaskStatus(raw_status)
 
-        conversation_id = (
-            context.conversation_id if context is not None else None
-        )
+        conversation_id = _require_conversation_id(context)
         tasks = await self._store.list(
             limit=limit,
             status=status,
-            conversation_id=conversation_id,
+            owner_conversation_id=conversation_id,
         )
         return {
             "count": len(tasks),
@@ -539,18 +538,29 @@ async def _resolve_owned(
     task_id: str,
     conversation_id: str | None,
 ) -> Task:
-    """解析任务并要求归属当前会话；无会话上下文时不强制校验。
+    """先按当前会话归属过滤，再解析任务 ID 或唯一前缀。
 
     任务不存在或不属于当前会话时统一返回“任务不存在”，避免泄露
     其他会话中任务的存在性。
     """
 
-    task = await store.resolve(task_id)
+    task = await store.resolve(
+        task_id,
+        owner_conversation_id=conversation_id,
+    )
     if task is None:
         raise KeyError(f"任务不存在：{task_id}")
-    if conversation_id and conversation_id not in task.conversation_ids:
-        raise KeyError(f"任务不存在：{task_id}")
     return task
+
+
+def _require_conversation_id(
+    context: ToolExecutionContext | None,
+) -> str:
+    """模型任务工具必须在一个可识别的会话中执行。"""
+
+    if context is None or not context.conversation_id:
+        raise ValueError("task tool requires conversation context")
+    return context.conversation_id
 
 
 def _task_brief(task: Task) -> dict[str, Any]:

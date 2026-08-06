@@ -8,6 +8,26 @@
 
 ## 2026-08-06
 
+### 完成：Task V1 收口——严格会话私有与状态机不变量
+
+#### Bad Case
+- [x] `conversation_ids` 允许一个 Task 被多个会话共享，owner 可在更新时继续追加，无法形成不可变的任务归属
+- [x] 模型工具缺少 conversation context 时会退化成全局访问，跨会话 ID 前缀还可能提前产生歧义
+- [x] 任务步骤可同时有多个 `in_progress`，done/blocked 可不留依据，paused/completed 与步骤状态可能互相矛盾
+- [x] 普通更新可以回退 done、删除已开始步骤、重开终态任务，任务文件虽然可写但状态不可信
+
+#### 收口结果
+- [x] Task 使用不可变 `owner_conversation_id`；`task_create` 只从 `ToolExecutionContext` 绑定 owner，Patch 不提供修改 owner 的入口
+- [x] `task_list/get/update` 缺少 conversation context 直接拒绝；跨会话统一表现为“任务不存在”
+- [x] ID 前缀先按 owner 过滤再判断唯一性，不同会话的相同前缀互不干扰
+- [x] 旧 JSON 只有一个 `conversation_ids` 时原子迁移为 owner，revision 和业务时间不变；为空或多个时记录 warning 并禁止模型访问
+- [x] 领域不变量统一放入 `Task` / `TaskStep` 校验和 `FileTaskStore.apply_patch` 路径：单一 in_progress、done/blocked 必须有 note、paused 无 in_progress、completed 的全部步骤 done
+- [x] 普通更新禁止回退 done、删除或回退 done/in_progress、恢复 completed/failed/cancelled；整体 steps 与单步骤更新互斥
+- [x] 所有更新继续保持 revision 冲突检测、任务级异步锁、内存完整校验和原子替换；非法组合测试逐项验证文件字节不变
+- [x] `TaskContextProvider` 继续只按当前会话 owner 读取活动任务，以临时 system 消息注入模型请求，不写入原始聊天历史
+- [x] 验收覆盖 A/B 会话 list/get/update 隔离、跨 owner 同前缀、缺失 context、全部状态非法组合、旧 JSON 迁移和 Runtime 注入
+- [x] 全量验证：`pytest` 260 个用例全部通过；`ruff check .`、`compileall app tests`、`git diff --check` 通过
+
 ### 完成：任务领域层（Task）——长任务状态与对话解耦
 
 #### Bad Case
@@ -21,8 +41,8 @@
 - [x] 显式状态源：任务状态由上层显式写入（Agent/用户/未来规划器），不自动从对话猜测，避免幻觉污染事实
 
 #### 实现
-- [x] `app/task/models.py`：`TaskStatus`（pending/active/paused/completed/failed/cancelled）、`TaskPriority`、`TaskStepStatus`（todo/in_progress/done/blocked）、`TaskStep`、`Task`（goal/constraints/state/key_facts/steps/conversation_ids/run_ids/created_at/updated_at/completed_at，文本折叠与去重校验）
-- [x] `app/task/store.py`：`FileTaskStore`（任务以独立 JSON 文件存储；create/get/resolve 前缀/list(status)/delete；update_goal/update_state/add_constraints/add_key_facts/replace_steps/set_step_status/set_status/attach_conversation/attach_run；终态维护 completed_at）
+- [x] `app/task/models.py`：`TaskStatus`（pending/active/paused/completed/failed/cancelled）、`TaskPriority`、`TaskStepStatus`（todo/in_progress/done/blocked）、`TaskStep`、`Task`（goal/constraints/state/key_facts/steps/owner_conversation_id/run_ids/created_at/updated_at/completed_at，文本折叠与去重校验）
+- [x] `app/task/store.py`：`FileTaskStore`（任务以独立 JSON 文件存储；create/get/resolve 前缀/list(status)/delete；update_goal/update_state/add_constraints/add_key_facts/replace_steps/set_step_status/set_status/attach_run；终态维护 completed_at）
 - [x] `app/task/__init__.py` 导出 `FileTaskStore` / `DEFAULT_TASKS_DIR`
 - [x] `tests/test_task_store.py`（13 例：往返、规范化去重、前缀解析/歧义、生命周期 completed_at、步骤推进、重排步骤、目标/状态/事实更新、会话与 run 关联、状态过滤排序、删除、缺失抛错、进度摘要）
 - [x] 全量验证：`pytest` 200 个用例全部通过，`ruff` 无告警
@@ -84,19 +104,19 @@
 - [x] 对话压缩不会丢失任务，但会话隔离缺失会让任务事实被无关会话误改或泄露
 
 #### 修复结果
-- [x] 隔离原则：任务归属由 `conversation_ids` 决定；带有效会话上下文时强制按会话隔离
-  - `task_list`：只返回当前会话的任务（`store.list(conversation_id=...)`）
+- [x] 隔离原则：任务归属由不可变 `owner_conversation_id` 决定；带有效会话上下文时强制按会话隔离
+  - `task_list`：只返回当前会话的任务（`store.list(owner_conversation_id=...)`）
   - `task_get` / `task_update`：只能操作属于当前会话的任务，其他会话统一按“任务不存在”处理（隐藏存在性）
   - `task_create`：自动绑定创建它的会话（原有）
-- [x] 无会话上下文的直接调用/测试不强制隔离（向后兼容）；真实运行始终携带会话上下文，因此默认隔离生效
-- [x] `store.list` 新增 `conversation_id` 过滤参数；tools 新增 `_resolve_owned` 归属校验 helper，三个工具改用 `execute_with_context` 获取会话上下文
+- [x] 模型工具缺少会话上下文时拒绝执行；真实运行始终携带会话上下文
+- [x] `store.list/resolve/apply_patch` 支持 owner 过滤；tools 使用 `_resolve_owned` 和 `execute_with_context` 获取可信会话上下文
 - [x] 测试：跨会话 list 过滤、get/update 跨会话拒绝（含执行器路径）、store list 按会话过滤
 - [x] 全量验证：`pytest` 231 个用例全部通过，`ruff` 无告警
 
 ### 完成：步骤状态需留依据（step_note）
 - [x] 问题：模型可无凭据地把步骤标记为 done 或 blocked，之后无法回溯"为什么完成了 / 为什么卡住"
 - [x] 约束：`task_update` 将 `step_status` 置为 `done` 时必须提供非空 `step_note`（完成依据）；置为 `blocked` 时必须提供非空 `step_note`（阻塞原因，如"缺少用户提供的实验结果文件"）。系统不校验内容真假，只强制留痕
-- [x] 仅推进单步骤路径强制；`in_progress`/`todo` 不强制；`steps` 整体重排（保留已完成步骤）不强制
+- [x] 领域模型对单步骤更新和 `steps` 整体重排统一强制；`in_progress`/`todo` 不强制 note
 - [x] 任务可进入 `paused`：当步骤 blocked（等待用户输入/外部条件）时，建议把任务置为 paused，使下次恢复时模型明确知道在等什么；工具 `status` 描述已引导该用法
 - [x] 工具定义描述同步说明该要求；空字符串不算依据
 - [x] 测试：done 无 note 拒绝、blocked 无 note 拒绝、blocked 有原因成功、in_progress 无 note 允许、任务 paused→active 恢复、runtime 集成测试补 note

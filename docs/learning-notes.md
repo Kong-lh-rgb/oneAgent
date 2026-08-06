@@ -411,10 +411,10 @@ Token 和压缩统计，但不应该记录 API Key 等秘密。
 ### 13.3 数据模型与生命周期
 
 - `Task`：goal / status / priority / constraints / state / key_facts / steps
-  / conversation_ids / run_ids / revision / 时间戳；
+  / owner_conversation_id / run_ids / revision / 时间戳；owner 创建后不可变；
 - `TaskStep` 状态：todo / in_progress / done / blocked；
 - Task 生命周期状态：pending / active / paused / completed / failed /
-  cancelled；当前允许模型根据真实情况显式恢复或调整状态，终态记录 completed_at；
+  cancelled；普通 `task_update` 不允许恢复终态，终态记录 completed_at；
 - 持久化：`FileTaskStore`——每个任务一个 `<id>.json` 放在 `tasks/` 目录
   （默认 `backend/.oneagent/tasks/`），缩进 JSON 便于人工查看与版本管理；
   临时文件 + 原子替换写入，损坏文件在 list 中跳过。任务不写入 SQLite，与会话
@@ -474,16 +474,20 @@ Task 领域通过 4 个工具暴露给主模型（`app/task/tools.py`），工�
 - 单进程内按 task_id 加锁，避免并发更新相互覆盖；每次成功更新递增 revision；
 - 模型可携带 expected_revision，基于旧快照更新时拒绝覆盖新版本；
 - 临时文件使用唯一名称，写入后 flush/fsync，再通过 os.replace 原子替换；
-- conversation_id 和 run_id 来自 ToolExecutionContext，不接受模型猜测；
+- owner_conversation_id 和 run_id 来自 ToolExecutionContext，不接受模型猜测；
 - 任务按会话隔离：`task_list`/`task_get`/`task_update` 只操作属于当前会话
-  （`conversation_ids` 含当前 conversation_id）的任务；其他会话统一按“任务
-  不存在”处理以隐藏存在性。无会话上下文的直接调用不强制隔离（向后兼容）；
-  真实运行始终携带会话上下文，因此隔离默认生效；
-- Task/TaskStep 更新后统一重新校验，步骤 ID 必须唯一，时间统一为 UTC；
+  （`owner_conversation_id` 等于当前 conversation_id）的任务；其他会话统一按
+  “任务不存在”处理以隐藏存在性；缺少会话上下文时模型工具直接拒绝执行；
+- ID 前缀先在当前 owner 的任务集合中过滤，再判断唯一性，其他会话的相同前缀
+  不会造成歧义；旧 `conversation_ids` 仅含一个值时自动迁移，为空或多个时禁止访问；
+- Task/TaskStep 更新后统一重新校验：步骤 ID 唯一、最多一个 in_progress、paused
+  不含 in_progress、completed 的步骤全部 done，时间统一为 UTC；
 - 步骤状态需留依据：把步骤标记为 done 时必须同时提供非空 step_note（完成依据），
   标记为 blocked 时必须提供非空 step_note（阻塞原因）。系统不校验内容真假，只
-  强制留痕；in_progress/todo 与整体重排计划不强制。步骤 blocked（等待外部输入）
+  强制留痕；in_progress/todo 不强制。步骤 blocked（等待外部输入）
   时任务可置为 paused，使恢复时模型明确知道在等什么；
+- done 步骤不可回退；整体重排不得删除或回退 done/in_progress；整体 steps 更新与
+  单步骤更新互斥；completed/failed/cancelled 不可通过普通更新恢复；
 - 损坏或超限文件不参与任务列表，并记录可观察 warning。
 
 ## 14. 关键工程教训

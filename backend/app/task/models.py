@@ -98,6 +98,17 @@ class TaskStep(BaseModel):
             raise ValueError("task step note is too long")
         return normalized
 
+    @model_validator(mode="after")
+    def validate_status_note(self) -> TaskStep:
+        """完成与阻塞步骤必须记录可恢复的依据。"""
+
+        if self.status in {TaskStepStatus.DONE, TaskStepStatus.BLOCKED}:
+            if not self.note:
+                raise ValueError(
+                    f"task step with status {self.status.value} requires a note"
+                )
+        return self
+
 
 class Task(BaseModel):
     """一个可恢复、可查询的长任务。"""
@@ -114,7 +125,7 @@ class Task(BaseModel):
     state: tuple[str, ...] = ()
     key_facts: tuple[str, ...] = ()
     steps: tuple[TaskStep, ...] = ()
-    conversation_ids: tuple[str, ...] = ()
+    owner_conversation_id: str = Field(min_length=1, frozen=True)
     run_ids: tuple[str, ...] = ()
     created_at: datetime
     updated_at: datetime
@@ -169,6 +180,16 @@ class Task(BaseModel):
             raise ValueError("task id must be a 32-character hexadecimal string")
         return normalized
 
+    @field_validator("owner_conversation_id", mode="before")
+    @classmethod
+    def normalize_owner_conversation_id(cls, value: object) -> str:
+        """任务必须永久归属于一个非空会话。"""
+
+        normalized = _normalize_optional_text(value)
+        if normalized is None:
+            raise ValueError("task owner_conversation_id cannot be empty")
+        return normalized
+
     @field_validator("created_at", "updated_at", "completed_at")
     @classmethod
     def normalize_datetime(cls, value: datetime | None) -> datetime | None:
@@ -182,13 +203,23 @@ class Task(BaseModel):
 
     @model_validator(mode="after")
     def validate_invariants(self) -> Task:
-        """验证步骤唯一性和时间顺序。"""
+        """验证步骤、任务状态与时间顺序。"""
 
         step_ids = [step.id for step in self.steps]
         if len(step_ids) != len(set(step_ids)):
             raise ValueError("task step ids must be unique")
         if len(self.steps) > _MAX_STEPS:
             raise ValueError(f"task cannot contain more than {_MAX_STEPS} steps")
+        in_progress_count = sum(
+            step.status is TaskStepStatus.IN_PROGRESS for step in self.steps
+        )
+        if in_progress_count > 1:
+            raise ValueError("task can contain at most one in_progress step")
+        if self.status is TaskStatus.PAUSED and in_progress_count:
+            raise ValueError("paused task cannot contain an in_progress step")
+        if self.status is TaskStatus.COMPLETED and self.steps:
+            if any(step.status is not TaskStepStatus.DONE for step in self.steps):
+                raise ValueError("completed task requires all steps to be done")
         for field_name in ("constraints", "state", "key_facts"):
             if len(getattr(self, field_name)) > _MAX_ENTRIES:
                 raise ValueError(
@@ -227,7 +258,6 @@ class TaskPatch(BaseModel):
     step_id: str | None = None
     step_status: TaskStepStatus | None = None
     step_note: str | None = None
-    conversation_id: str | None = None
     run_id: str | None = None
     expected_revision: int | None = Field(default=None, ge=1)
 
@@ -236,7 +266,7 @@ class TaskPatch(BaseModel):
     def normalize_optional_text(cls, value: object) -> str | None:
         return _normalize_optional_text(value)
 
-    @field_validator("step_id", "conversation_id", "run_id", mode="before")
+    @field_validator("step_id", "run_id", mode="before")
     @classmethod
     def normalize_optional_identifier(cls, value: object) -> str | None:
         normalized = _normalize_optional_text(value)
@@ -260,6 +290,10 @@ class TaskPatch(BaseModel):
             raise ValueError("step_id and step_status must be provided together")
         if self.step_note is not None and self.step_id is None:
             raise ValueError("step_note requires step_id and step_status")
+        if "replace_steps" in self.model_fields_set and self.step_id is not None:
+            raise ValueError(
+                "replace_steps cannot be combined with a single step update"
+            )
         return self
 
     @property
@@ -275,7 +309,6 @@ class TaskPatch(BaseModel):
                 bool(self.add_constraints),
                 bool(self.add_key_facts),
                 self.step_id is not None,
-                self.conversation_id is not None,
                 self.run_id is not None,
             )
         )
