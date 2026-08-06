@@ -633,3 +633,25 @@ Agent 测评同时包含两类证据：模型回答属于非确定性文本，�
 请求上下文发生变化以及压缩后的核心目标仍被保留。Eval Harness 对压缩场景使用与
 生产 CLI 相同的 ConversationReducer 和 ModelContextSummarizer，但它仍是 Runtime
 级测评，不等于完整的会话持久化、Checkpoint 恢复和终端交互测评。
+
+## 17. reasoning 模型与严格 JSON 摘要的适配
+
+`deepseek-v4-flash` 是 reasoning 模型：输出预算先被思考 tokens 消耗。做严格 JSON
+摘要时，只要 `max_output_tokens` 小于本次思考消耗，content 就为空，摘要组件表现为
+“压缩失败 / 不稳定”。
+
+关键实测结论：
+- 空 content 是概率性的：同一输入时而成功时而失败；输入越大思考越多越容易空，
+  并非“真实大上下文会自动消失”。
+- 关闭思考（chat completions 的 `extra_body={"thinking":{"type":"disabled"}}`）
+  是确定性解法：1024 预算下稳定输出；主 agent 可保留 reasoning。
+- 关闭思考后模型倾向“全量输出”，摘要会变长 → 需配合紧凑约束（数组 ≤5 条、
+  每条 ≤80 字）把摘要压到 ~400 token。
+- 模型对 prompt 指令（如“必须短于输入”）是软约束，偶发不遵守 → 对确定性要求
+  高的路径要加重试 / 校验兜底，不要假定模型一定遵守。
+- 小输出预算下 reasoning 主 agent 也可能空 content → 主 agent 预算要 ≥4096
+  （或按需关思考），场景配置应贴近真实运行配置，而不是随意缩小。
+
+工程启示：reasoning 模型的“稳定输出”取决于 thinking 消耗与预算的余量，不要把
+“换模型 / 关思考 / 加预算”看成互斥替代，而是按需求组合：结构化摘要这类任务优先
+关思考；主 agent 深度推理保留 reasoning 但要给足预算。

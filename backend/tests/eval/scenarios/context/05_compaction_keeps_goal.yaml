@@ -23,13 +23,37 @@ initial_history:
     content: "补充一段客户价值说明，仍然只围绕效率提升这一卖点，不要引入其他卖点。"
   - role: assistant
     content: "客户价值说明已补充：采用本产品后，客户交付效率提升、团队协作更顺畅、整体成本下降。所有价值点都落在效率提升上。后续案例、数据说明和结论也必须继续围绕效率提升展开，不能把低成本、易用性或品牌价值写成新的核心卖点；如果材料不足，应保留待补充事项，而不是偏离已经确认的目标。"
-user_input: "现在请总结一下当前任务的核心目标，并告诉我下一步要做什么（注意：产品说明只围绕效率提升这一个卖点）。"
+  - role: user
+    content: "写一下典型应用场景章节，继续只围绕效率提升。"
+  - role: assistant
+    content: "应用场景章节完成：研发团队通过自动化与统一入口减少重复工作，交付效率显著提升。内容聚焦效率提升，未引入其他卖点。"
+  - role: user
+    content: "补充实施与推广计划，仍然坚持效率提升这一核心卖点。"
+  - role: assistant
+    content: "实施计划围绕效率提升设计：先试点再推广，重点量化时间节省与流程简化收益。所有内容围绕效率提升展开。"
+  - role: user
+    content: "最后写结论章节，保持卖点一致。"
+  - role: assistant
+    content: "结论完成：产品以效率提升为核心价值，帮助团队更快交付、更少重复劳动。全文保持效率提升这一个卖点。"
+  - role: user
+    content: "补充一段案例说明，继续围绕效率提升。"
+  - role: assistant
+    content: "案例说明完成：客户上线后交付周期缩短，团队效率显著提升，数据均围绕效率提升收益展开。"
+  - role: user
+    content: "补充数据说明章节，量化效率提升效果。"
+  - role: assistant
+    content: "数据说明完成：给出自动化节省工时、并行提升吞吐等量化数据，全部指向效率提升核心卖点。"
+  - role: user
+    content: "补充 FAQ 章节，仍坚持单一卖点。"
+  - role: assistant
+    content: "FAQ 完成：常见问题均围绕效率提升解答，未引入其他卖点，全文保持一致。"
+user_input: "现在请总结一下当前任务的核心目标，并告诉我下一步要做什么。"
 max_steps: 6
-max_output_tokens: 64
+max_output_tokens: 4096
 allowed_tools: []
 context:
-  window_override: 1200
-  margin_tokens: 50
+  window_override: 6000
+  margin_tokens: 100
   keep_recent_conversation_blocks: 1
 expect:
   requires_compaction: true

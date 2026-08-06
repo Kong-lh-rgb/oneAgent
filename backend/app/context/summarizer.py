@@ -15,11 +15,19 @@ from .summary import (
     SummaryGenerationResult,
 )
 
-_SUMMARY_SYSTEM_PROMPT = """你是会话压缩器。
-请把旧摘要和新增历史合并成一个完整的结构化摘要。
-只能保留输入中明确存在的信息，禁止补充、推断或编造事实。
-必须保留仍有效的用户约束、关键决定、当前状态和未完成事项。
-只输出一个 JSON 对象，不要输出 Markdown 或解释。"""
+# 关闭 reasoning 的 extra_body；仅发送给实测支持该字段的 Provider。
+_DISABLE_THINKING_BODY = {"thinking": {"type": "disabled"}}
+_REASONING_DISABLE_PROVIDERS = frozenset({ModelProvider.DEEPSEEK})
+
+_SUMMARY_SYSTEM_PROMPT = """你是会话压缩器，把旧摘要和新增历史合并成紧凑结构化摘要。
+
+要求：
+- 只输出一个 JSON 对象，不要输出 Markdown、解释或任何思考过程；
+- 只能保留输入中明确存在的信息，禁止补充、推断或编造事实；
+- 只保留后续继续任务需要的信息，删除重复与冗余内容；
+- 每个数组最多 5 条，每条不超过 80 个中文字符；
+- 没有内容的字段使用 null 或空数组；
+- 摘要必须明显短于输入历史。"""
 
 
 class ContextSummarizer(ABC):
@@ -44,6 +52,7 @@ class ModelContextSummarizer(ContextSummarizer):
         provider: ModelProvider | str | None = None,
         model: str | None = None,
         max_output_tokens: int = 1_024,
+        disable_reasoning: bool | None = None,
     ) -> None:
         if max_output_tokens <= 0:
             raise ValueError("max_output_tokens must be greater than zero")
@@ -51,6 +60,8 @@ class ModelContextSummarizer(ContextSummarizer):
         self._provider = provider
         self._model = model
         self._max_output_tokens = max_output_tokens
+        # None 表示自动：仅对支持关闭 reasoning 的 Provider 生效。
+        self._disable_reasoning = disable_reasoning
 
     async def summarize(
         self,
@@ -94,6 +105,14 @@ class ModelContextSummarizer(ContextSummarizer):
                 ),
                 tools=(),
                 max_output_tokens=self._max_output_tokens,
+                extra_body=(
+                    _DISABLE_THINKING_BODY
+                    if _disable_reasoning(
+                        self._disable_reasoning,
+                        self._provider,
+                    )
+                    else {}
+                ),
             )
         )
         content = response.message.content
@@ -105,6 +124,25 @@ class ModelContextSummarizer(ContextSummarizer):
             ),
             usage=response.usage,
         )
+
+
+def _disable_reasoning(
+    requested: bool | None,
+    provider: ModelProvider | str | None,
+) -> bool:
+    """决定本次摘要请求是否携带关闭 reasoning 的 extra_body。
+
+    None（自动）时仅对实测支持该字段的 Provider 生效；显式 bool 强制覆盖。
+    """
+
+    if requested is not None:
+        return requested
+    if provider is None:
+        return False
+    normalized = (
+        provider.value if isinstance(provider, ModelProvider) else provider
+    )
+    return normalized in {p.value for p in _REASONING_DISABLE_PROVIDERS}
 
 
 def _parse_json_object(content: str) -> dict[str, Any]:

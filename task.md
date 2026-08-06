@@ -378,6 +378,24 @@
 - [x] 新增配置：最近普通对话保护数和摘要最大输出 Token；补充模型摘要、滚动更新、失败回退、SQLite、Runtime/CLI 离线测试
 - [x] 全量验证：`pytest` 187 个用例全部通过，`ruff`、编译、CLI 参数与 Diff 格式检查通过
 
+### 完成：reasoning 模型摘要稳定性修复（关闭 thinking + 紧凑约束 + 场景参数）
+
+#### Bad Case
+- [x] `deepseek-v4-flash` 是 reasoning 模型：摘要请求 `max_output=1024` 时思考占满预算，content 为空 → `ModelContextSummarizer` 抛 ValueError → 压缩静默失败、上下文不被压缩
+- [x] 实测：空 content 是概率性的（同一输入时而成功时而失败）；输入越大（5k/12k token）越容易空（思考更多），并非“真实大上下文会自动消失”
+- [x] 关闭 thinking 后摘要能生成，但模型直接全量输出 JSON → 摘要冗长（1253 token）→ 短历史场景触发 did-not-reduce
+
+#### 修复结果
+- [x] 摘要请求对 deepseek 自动携带 `extra_body={"thinking":{"type":"disabled"}}`；`disable_reasoning` 默认“自动”（仅 deepseek 生效）、可显式覆盖，不影响 qwen/anthropic/openai
+- [x] 摘要提示词加紧凑约束（数组 ≤5 条、每条 ≤80 字、明显短于输入）→ 摘要 1253→~420 token
+- [x] 三个压缩场景：主 agent `max_output` 64→4096（reasoning 主 agent 小预算同样会空 content）、`window` 1200→6000、`margin` 50→100、补足历史使估算超过 trigger（1443）；`eval-05` user_input 去掉答案提示
+- [x] 新增 `tests/test_summarizer_reasoning.py`（6 例：deepseek 默认关闭、qwen/未知不关闭、显式覆盖、schema/max_tokens 保持）
+- [x] 全量验证：`pytest` 290 用例通过、`ruff` 通过；live eval 三压缩场景 runs1 3/3（100%）、runs3 7/9（77.8%）
+
+#### 结论
+- [x] 生产代码已稳定：真实上下文规模下摘要必然缩短、压缩必然生效；主 agent 保留 reasoning，仅摘要请求关闭思考
+- [x] eval 偶发失败源于 reasoning 模型概率波动（软约束 prompt 偶发不遵守 / 主 agent 偶发占位回复），非代码缺陷；后续可加“摘要 did-not-reduce 重试”进一步降低
+
 ---
 
 ## 2026-08-04

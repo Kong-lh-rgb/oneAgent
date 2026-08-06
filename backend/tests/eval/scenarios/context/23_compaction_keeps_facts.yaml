@@ -19,13 +19,57 @@ initial_history:
     content: "再补充：演讲嘉宾共 5 位，其中 2 位来自外部公司。"
   - role: assistant
     content: "补充完成：演讲嘉宾 5 位，其中 2 位来自外部公司。关键事实汇总：120 人、预算 3 万、技术分享会、8 月 15 日、5 位嘉宾（2 位外部）。"
+  - role: user
+    content: "补充：活动签到处设在二楼大厅，并提供同声传译。"
+  - role: assistant
+    content: "补充完成：签到处在二楼大厅，提供同声传译。全部关键事实（120 人、预算 3 万、技术分享会、8 月 15 日、5 位嘉宾）均已汇总，供总结引用。"
+  - role: user
+    content: "再补充：活动由赞助商提供纪念品。"
+  - role: assistant
+    content: "补充完成：赞助商提供纪念品。事实汇总：120 人参加、预算 3 万元、8 月 15 日、5 位嘉宾、签到处二楼、同声传译、纪念品。"
+  - role: user
+    content: "补充：活动提供参会者手册。"
+  - role: assistant
+    content: "补充完成：提供参会者手册。事实汇总保持完整：120 人、预算 3 万、技术分享会、8 月 15 日、5 位嘉宾。"
+  - role: user
+    content: "再补充：活动有开场致辞环节。"
+  - role: assistant
+    content: "补充完成：有开场致辞。关键事实（参加人数 120 人、预算 3 万元）持续累计，供最终总结使用。"
+  - role: user
+    content: "最后补充：活动结束后会发布回顾推文。"
+  - role: assistant
+    content: "补充完成：会后发布回顾推文。所有事实（120 人、3 万预算等）已完整记录。"
+  - role: user
+    content: "补充：活动提供直播回放。"
+  - role: assistant
+    content: "补充完成：提供直播回放。全部事实（120 人、预算 3 万等）保持完整。"
+  - role: user
+    content: "补充：活动设置两个分会场。"
+  - role: assistant
+    content: "补充完成：设两个分会场。关键事实（120 人、预算 3 万等）持续累计。"
+  - role: user
+    content: "再补充：活动提供免费停车。"
+  - role: assistant
+    content: "补充完成：提供免费停车。事实汇总保持完整：120 人参加、预算 3 万元。"
+  - role: user
+    content: "最后补充：活动评选优秀讲师。"
+  - role: assistant
+    content: "补充完成：评选优秀讲师。全部事实（120 人、预算 3 万、技术分享会等）已完整记录。"
+  - role: user
+    content: "补充：活动提供茶歇。"
+  - role: assistant
+    content: "补充完成：提供茶歇。事实（120 人、预算 3 万等）保持完整。"
+  - role: user
+    content: "再补充：活动摄影记录。"
+  - role: assistant
+    content: "补充完成：活动有摄影记录。全部关键事实（参加人数 120 人、预算 3 万元）均已记录。"
 user_input: "请基于已有事实告诉我：这次活动有多少人参加？预算多少？"
 max_steps: 5
-max_output_tokens: 64
+max_output_tokens: 4096
 allowed_tools: []
 context:
-  window_override: 1200
-  margin_tokens: 50
+  window_override: 6000
+  margin_tokens: 100
   keep_recent_conversation_blocks: 1
 expect:
   requires_compaction: true
