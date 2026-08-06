@@ -29,6 +29,12 @@ from app.conversation import (
     Conversation,
     SQLiteConversationStore,
 )
+from app.task import (
+    DEFAULT_TASKS_DIR,
+    FileTaskStore,
+    TaskContextProvider,
+    register_task_tools,
+)
 from app.tools import (
     ApprovalScope,
     ConsoleApprovalGate,
@@ -347,6 +353,9 @@ async def _run(args: argparse.Namespace) -> int:
     except SearchError as exc:
         print(f"搜索配置错误：{exc}", file=sys.stderr)
         return 2
+    task_store = FileTaskStore(args.tasks_dir)
+    await task_store.initialize()
+    register_task_tools(tool_registry, task_store)
     search_tool = tool_registry.get("web_search")
     if isinstance(search_tool, WebSearchTool):
         if search_tool.provider_name == "tavily":
@@ -387,6 +396,7 @@ async def _run(args: argparse.Namespace) -> int:
                 ),
             ),
         ),
+        task_context_provider=TaskContextProvider(task_store),
     )
     try:
         if args.message is not None:
@@ -571,6 +581,10 @@ def _parse_args() -> argparse.Namespace:
             f"当前日期是 {datetime.now().astimezone().date().isoformat()}。"
             "调用工具时优先使用已有结果；网页搜索通常只需一到两次，获得可用结果后"
             "立即整理回答，不要为了追求完美而反复改写相同查询。"
+            "当用户明确要求记录任务，或工作复杂、需要多个步骤或跨多轮跟踪时，"
+            "调用 task_create；简单的一次性问题不要创建任务。完成任务步骤、计划"
+            "变化或任务状态变化后调用 task_update，必要时用 task_get/task_list"
+            "重新确认任务状态。"
         ),
         help="System prompt for this conversation.",
     )
@@ -597,6 +611,12 @@ def _parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_DATABASE_PATH,
         help="SQLite conversation database path.",
+    )
+    parser.add_argument(
+        "--tasks-dir",
+        type=Path,
+        default=DEFAULT_TASKS_DIR,
+        help="Directory containing persistent task JSON files.",
     )
     parser.add_argument(
         "--conversation",

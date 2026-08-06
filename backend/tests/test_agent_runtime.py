@@ -39,6 +39,13 @@ from app.models.types import (
     ToolDefinition,
     ToolPermission,
 )
+from app.task import (
+    TASK_CONTEXT_MESSAGE_NAME,
+    FileTaskStore,
+    TaskContextProvider,
+    TaskStep,
+    register_task_tools,
+)
 from app.tools.approval import (
     ApprovalDecision,
     ApprovalGate,
@@ -552,6 +559,118 @@ async def test_runtime_uses_rolling_summary_but_returns_complete_history() -> No
         message.content and "旧问题 0" in message.content
         for message in request.messages
     )
+
+
+@pytest.mark.asyncio
+async def test_runtime_injects_task_created_in_current_run(tmp_path) -> None:
+    task_store = FileTaskStore(tmp_path / "tasks")
+    await task_store.initialize()
+    registry, adapter = fake_registry(
+        [
+            model_response(
+                tool_calls=(
+                    ToolCall(
+                        id="create-task",
+                        name="task_create",
+                        arguments={
+                            "title": "实现长任务",
+                            "goal": "完成所有步骤",
+                            "steps": [{"title": "第一步"}],
+                        },
+                    ),
+                )
+            ),
+            model_response(content="任务已创建并开始执行"),
+        ]
+    )
+    tools = ToolRegistry()
+    register_task_tools(tools, task_store)
+    runtime = AgentRuntime(
+        registry,
+        tools,
+        provider="fake",
+        task_context_provider=TaskContextProvider(task_store),
+    )
+
+    result = await runtime.run(
+        "请完成这个长任务",
+        conversation_id="conversation-1",
+    )
+
+    assert result.ok is True
+    tasks = await task_store.list()
+    assert len(tasks) == 1
+    assert tasks[0].conversation_ids == ("conversation-1",)
+    assert result.run_id in tasks[0].run_ids
+    assert not any(
+        message.name == TASK_CONTEXT_MESSAGE_NAME for message in result.messages
+    )
+    assert not any(
+        message.name == TASK_CONTEXT_MESSAGE_NAME
+        for message in adapter.requests[0].messages
+    )
+    injected = next(
+        message
+        for message in adapter.requests[1].messages
+        if message.name == TASK_CONTEXT_MESSAGE_NAME
+    )
+    assert tasks[0].id in (injected.content or "")
+    assert "expected_revision" in (injected.content or "")
+
+
+@pytest.mark.asyncio
+async def test_runtime_refreshes_task_context_after_step_update(tmp_path) -> None:
+    task_store = FileTaskStore(tmp_path / "tasks")
+    await task_store.initialize()
+    task = await task_store.create(
+        title="持续任务",
+        steps=(TaskStep(id="step-1", title="完成实现"),),
+        conversation_ids=("conversation-1",),
+    )
+    registry, adapter = fake_registry(
+        [
+            model_response(
+                tool_calls=(
+                    ToolCall(
+                        id="update-task",
+                        name="task_update",
+                        arguments={
+                            "task_id": task.id,
+                            "expected_revision": task.revision,
+                            "step_id": "step-1",
+                            "step_status": "done",
+                        },
+                    ),
+                )
+            ),
+            model_response(content="步骤已经完成"),
+        ]
+    )
+    tools = ToolRegistry()
+    register_task_tools(tools, task_store)
+
+    result = await AgentRuntime(
+        registry,
+        tools,
+        provider="fake",
+        task_context_provider=TaskContextProvider(task_store),
+    ).run("继续执行", conversation_id="conversation-1")
+
+    assert result.ok is True
+    first_context = next(
+        message
+        for message in adapter.requests[0].messages
+        if message.name == TASK_CONTEXT_MESSAGE_NAME
+    )
+    second_context = next(
+        message
+        for message in adapter.requests[1].messages
+        if message.name == TASK_CONTEXT_MESSAGE_NAME
+    )
+    assert '"revision":1' in (first_context.content or "")
+    assert '"status":"todo"' in (first_context.content or "")
+    assert '"revision":2' in (second_context.content or "")
+    assert '"status":"done"' in (second_context.content or "")
 
 
 @pytest.mark.asyncio

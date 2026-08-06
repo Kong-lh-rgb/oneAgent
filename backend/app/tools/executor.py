@@ -138,7 +138,12 @@ class ToolExecutor:
             result = self._failure(tool_call, denied_reason, started_at)
             return await self._complete(execution_context, result, hook_runner)
 
-        result = await self._dispatch(tool, tool_call, started_at)
+        result = await self._dispatch(
+            tool,
+            tool_call,
+            execution_context,
+            started_at,
+        )
         return await self._complete(execution_context, result, hook_runner)
 
     def _lookup_tool(self, tool_call: ToolCall) -> BaseTool | None:
@@ -196,6 +201,7 @@ class ToolExecutor:
         self,
         tool: BaseTool,
         tool_call: ToolCall,
+        context: ToolExecutionContext,
         started_at: float,
     ) -> ToolResult:
         try:
@@ -209,7 +215,7 @@ class ToolExecutor:
 
         try:
             async with asyncio.timeout(self._timeout_seconds):
-                output = await tool.execute(arguments)
+                output = await tool.execute_with_context(arguments, context)
         except TimeoutError:
             return self._failure(
                 tool_call,

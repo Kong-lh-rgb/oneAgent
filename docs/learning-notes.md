@@ -393,7 +393,90 @@ Token 和压缩统计，但不应该记录 API Key 等秘密。
 未来 Memory 层不能直接写进 ToolReducer，也不能修改 SQLite 原始历史。上下文摘要
 与长期记忆必须保持独立：前者服务窗口预算，后者服务跨会话事实保存和按需召回。
 
-## 13. 关键工程教训
+## 13. 任务层（Task）
+
+### 13.1 解决的问题
+
+长任务的目标、约束、进度与待办如果只存在对话里，会在上下文压缩（工具结果
+缩短、旧工具轮移除、滚动摘要）时丢失或变模糊，且对话无法编程查询“任务做到
+哪了”。
+
+### 13.2 设计边界
+
+- Task 是任务事实的权威源，独立于会话消息持久化；
+- 对话降级为任务的执行日志，压缩只影响日志的紧凑表达；
+- 显式状态源：任务状态由上层显式写入（Agent/用户/未来规划器），不自动从对话
+  猜测，避免幻觉污染事实。
+
+### 13.3 数据模型与生命周期
+
+- `Task`：goal / status / priority / constraints / state / key_facts / steps
+  / conversation_ids / run_ids / revision / 时间戳；
+- `TaskStep` 状态：todo / in_progress / done / blocked；
+- Task 生命周期状态：pending / active / paused / completed / failed /
+  cancelled；当前允许模型根据真实情况显式恢复或调整状态，终态记录 completed_at；
+- 持久化：`FileTaskStore`——每个任务一个 `<id>.json` 放在 `tasks/` 目录
+  （默认 `backend/.oneagent/tasks/`），缩进 JSON 便于人工查看与版本管理；
+  临时文件 + 原子替换写入，损坏文件在 list 中跳过。任务不写入 SQLite，与会话
+  数据库分离。
+
+### 13.4 与上下文压缩的关系
+
+Task 文件是任务事实源，注入的 Task 快照只是当前模型请求视图，不进入
+`AgentResult.messages` 或 SQLite 消息历史，因此上下文压缩不会破坏任务事实。
+
+当前运行闭环：
+
+```text
+用户消息
+  ↓ 模型判断：明确要求记录 / 复杂多步骤 / 长期跟踪
+task_create
+  ↓ ToolExecutionContext 自动绑定 conversation_id + run_id
+tasks/<task_id>.json
+  ↓ 下一模型步骤重新加载
+TaskContextProvider 注入当前活动 Task 快照
+  ↓
+模型执行步骤或根据实际情况调整计划
+  ↓
+task_update（原子 TaskPatch + revision 检查）
+```
+
+同一会话存在多个非终态 Task 时，最近更新的 Task 作为当前活动任务。Task 完成、
+失败或取消后不再自动注入，但仍可通过 `task_get` / `task_list` 查询。
+
+后续增强：
+
+- CLI `/task` 命令（用户视角创建/推进/查询）；
+- Task 与 Memory 边界：短期工作记忆（摘要）服务窗口预算，长期事实（Task/
+  Memory）服务跨会话恢复与按需召回。
+
+### 13.5 模型可用工具
+
+Task 领域通过 4 个工具暴露给主模型（`app/task/tools.py`），工具持有共享的
+`FileTaskStore`，权限为 ALLOWED（状态管理不涉危险操作）：
+
+- `task_create`：工作复杂需跟踪进度、用户提出多个工作、或用户要求时创建任务；
+- `task_update`：步骤完成（step_id + step_status 成对）、状态变化、替换目标/
+  状态、追加约束/事实、动态替换步骤计划；会话与 run 由系统自动关联；
+- `task_get`：按 ID/前缀获取单个任务完整详情，模型重新确认当前状态；
+- `task_list`：按状态过滤列出任务（精简进度摘要），总览或用户明确要求时调用。
+
+设计意图：主模型自主判断何时创建、更新、查询任务，任务状态成为模型可编程
+访问的权威源，不再依赖"从对话里翻找进度"。
+
+### 13.6 写入一致性与安全边界
+
+- Task ID 固定为 32 位十六进制，短 ID 查询只接受十六进制前缀；
+- 文件路径必须停留在 tasks 目录，符号链接任务文件不读取、不更新；
+- `TaskPatch` 先完成全部参数校验，再一次性更新，避免工具失败但部分字段已落盘；
+- 单进程内按 task_id 加锁，避免并发更新相互覆盖；每次成功更新递增 revision；
+- 模型可携带 expected_revision，基于旧快照更新时拒绝覆盖新版本；
+- 临时文件使用唯一名称，写入后 flush/fsync，再通过 os.replace 原子替换；
+- conversation_id 和 run_id 来自 ToolExecutionContext，不接受模型猜测；
+- Task/TaskStep 更新后统一重新校验，步骤 ID 必须唯一，时间统一为 UTC；
+- 损坏或超限文件不参与任务列表，并记录可观察 warning。
+
+## 14. 关键工程教训
 
 1. **先测量，再压缩。** 低于 trigger 时删除任何历史都是不必要的信息损失。
 2. **事实历史与请求视图分离。** Token 优化不能破坏恢复和审计能力。
@@ -405,7 +488,7 @@ Token 和压缩统计，但不应该记录 API Key 等秘密。
 8. **观察逻辑不能控制业务。** Trace 和日志故障不应改变授权与执行结果。
 9. **Provider 特例留在 Adapter。** Runtime 保持模型无关，才能持续扩展模型。
 
-## 14. 测试与阅读入口
+## 15. 测试与阅读入口
 
 建议按以下顺序阅读代码：
 
@@ -418,9 +501,13 @@ Token 和压缩统计，但不应该记录 API Key 等秘密。
 7. `app/context/summarizer.py`
 8. `app/tools/executor.py`
 9. `app/tools/permission_hook.py`
-10. `app/conversation/store.py`
-11. `app/trace/store.py`
-12. `app/models/chat.py`
+10. `app/task/models.py`
+11. `app/task/store.py`
+12. `app/task/context.py`
+13. `app/task/tools.py`
+14. `app/conversation/store.py`
+15. `app/trace/store.py`
+16. `app/models/chat.py`
 
 离线验证命令：
 

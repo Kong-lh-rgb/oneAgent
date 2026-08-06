@@ -6,6 +6,79 @@
 
 ---
 
+## 2026-08-06
+
+### 完成：任务领域层（Task）——长任务状态与对话解耦
+
+#### Bad Case
+- [x] 长任务的目标、约束、进度、待办与关键事实全部隐式保存在对话消息里
+- [x] 上下文压缩（工具结果缩短、旧工具轮移除、滚动摘要）会替换或丢弃旧消息，任务状态随之丢失或变得模糊
+- [x] 对话是聊天记录，无法编程查询"任务做到哪了"、无法在中断后按目标恢复
+
+#### 设计原则
+- [x] Task 是任务事实的权威源，独立于会话消息持久化，对话压缩不影响任务状态
+- [x] 对话降级为任务的执行日志；压缩只影响日志的紧凑表达
+- [x] 显式状态源：任务状态由上层显式写入（Agent/用户/未来规划器），不自动从对话猜测，避免幻觉污染事实
+
+#### 实现
+- [x] `app/task/models.py`：`TaskStatus`（pending/active/paused/completed/failed/cancelled）、`TaskPriority`、`TaskStepStatus`（todo/in_progress/done/blocked）、`TaskStep`、`Task`（goal/constraints/state/key_facts/steps/conversation_ids/run_ids/created_at/updated_at/completed_at，文本折叠与去重校验）
+- [x] `app/task/store.py`：`FileTaskStore`（任务以独立 JSON 文件存储；create/get/resolve 前缀/list(status)/delete；update_goal/update_state/add_constraints/add_key_facts/replace_steps/set_step_status/set_status/attach_conversation/attach_run；终态维护 completed_at）
+- [x] `app/task/__init__.py` 导出 `FileTaskStore` / `DEFAULT_TASKS_DIR`
+- [x] `tests/test_task_store.py`（13 例：往返、规范化去重、前缀解析/歧义、生命周期 completed_at、步骤推进、重排步骤、目标/状态/事实更新、会话与 run 关联、状态过滤排序、删除、缺失抛错、进度摘要）
+- [x] 全量验证：`pytest` 200 个用例全部通过，`ruff` 无告警
+
+#### 后续待办（本阶段未接入）
+- [x] 把当前会话活动 Task 渲染为受控 system 消息，只注入模型请求而不写入原始聊天历史
+- [x] CLI Runtime 接入：模型通过任务工具创建、推进、查询并动态调整计划
+- [ ] Task 与 Memory 层的边界：短期工作记忆（摘要）与长期事实（Task/Memory）职责分离
+
+### 完成：任务管理工具（主模型可调用）
+- [x] `app/task/tools.py`：4 个工具，持有共享 `FileTaskStore`，供主模型在长任务中自主调用
+  - `task_create`：判断工作复杂/用户提出多个工作/用户要求时创建任务（title/goal/priority/steps）
+  - `task_update`：步骤完成（step_id+step_status）、状态变化、替换目标/状态、追加约束/事实、动态重排计划；会话与 run 由系统自动关联
+  - `task_get`：按 ID/前缀获取单个任务完整详情，供模型重新确认当前状态
+  - `task_list`：按状态过滤列出任务（精简进度摘要），供总览或用户明确要求时调用
+- [x] `register_task_tools(registry, store)` 注册函数；CLI `chat.py` 创建 `FileTaskStore` 并注册，任务工具随模型可用
+- [x] 工具权限默认 ALLOWED（任务状态管理不涉危险操作），`for_model=True` 时对模型可见
+- [x] `tests/test_task_tools.py`（13 例：注册 4 工具、创建带步骤、title 必填、步骤推进、状态/目标/约束/事实更新、关联 run/会话、至少一更新字段、step 成对、缺失任务、获取详情、列表过滤与精简、非法 limit）
+- [x] 全量验证：`pytest` 213 个用例全部通过，`ruff` 无告警
+
+### 完成：任务文件存储（tasks 文件夹，弃用 SQLite）
+- [x] 需求：Task 不写入 SQLite，改为本地 tasks 文件夹存储结构化任务
+- [x] `FileTaskStore` 取代 `SQLiteTaskStore`：每个任务一个 `<id>.json`（缩进 JSON，便于人工查看/备份/版本管理）
+- [x] 默认目录 `backend/.oneagent/tasks/`（`DEFAULT_TASKS_DIR`），构造参数可自定义
+- [x] 原子写入：临时文件 + `os.replace`，避免中断产生损坏文件；list 跳过损坏文件
+- [x] 磁盘 IO 用 `asyncio.to_thread` 隔离，保持异步 API；tools.py / chat.py 仅换 store 类型，接口不变
+- [x] 测试更新：`test_task_store.py`（文件往返/可读性/损坏跳过/歧义前缀）、`test_task_tools.py`（fixture 换 FileTaskStore）
+- [x] 全量验证：`pytest` 216 个用例全部通过，`ruff` 无告警
+
+### 完成：Task 长任务闭环与安全加固
+
+#### Bad Case
+- [x] Task ID 未限制时，文件路径可能通过 `../`、绝对路径或符号链接逃逸 tasks 目录
+- [x] `task_update` 按字段多次写盘，后续字段校验失败时可能已经产生部分更新
+- [x] 同一 Task 并发执行“读取—修改—写入”会丢失更新，固定 `.tmp` 文件也会互相冲突
+- [x] `model_copy(update=...)` 不重新执行完整 Pydantic 校验，更新路径可能绕过文本规范化和领域不变量
+- [x] 模型需要自己填写 conversation_id/run_id，但模型并不可靠地知道内部运行标识
+- [x] Task 创建后没有自动进入模型请求上下文，下一轮模型仍需靠 task_list/task_get 猜测当前任务
+- [x] 只能更新步骤状态，执行中无法根据实际情况重排或补充任务计划
+
+#### 完成结果
+- [x] Task ID 固定为 32 位十六进制，前缀只接受 4–32 位十六进制；拒绝路径穿越、绝对路径和符号链接任务文件
+- [x] 新增 `TaskPatch`，`task_update` 先验证全部参数，再一次读取、一次领域校验、一次原子写入；失败时不产生部分结果
+- [x] FileTaskStore 增加按任务异步锁、唯一临时文件、flush/fsync + os.replace，并用 revision/expected_revision 检测过期覆盖
+- [x] 更新后统一通过 `Task.model_validate()`，补充 Task/TaskStep 文本、唯一步骤 ID、UTC 时间、条目数量和文件尺寸约束
+- [x] BaseTool 增加向后兼容的 `execute_with_context()`；Task 创建与更新从真实 ToolExecutionContext 自动关联 conversation_id/run_id
+- [x] 新增 `TaskContextProvider`：每次模型调用前加载当前会话最近更新的非终态 Task，以受控 system 消息注入临时模型上下文
+- [x] Task 上下文不进入 AgentResult.messages/SQLite 消息历史；同一 Run 中创建 Task 后，下一模型步骤即可看到最新 Task
+- [x] `task_update` 支持携带 expected_revision，并支持整体替换步骤计划；已有步骤保留 ID，新步骤由系统生成 ID
+- [x] CLI 新增 `--tasks-dir`，系统提示明确简单问题不建 Task，复杂/长任务或用户明确要求时创建，并在进度或计划变化后更新
+- [x] 损坏 Task 文件不再完全静默，记录 warning；单文件超过安全上限时拒绝读取
+- [x] 新增路径越界、符号链接、并发更新、revision 冲突、原子失败、上下文自动绑定、动态重排计划和 Runtime 创建/更新后即时刷新测试
+- [x] 全量验证：`pytest` 226 个用例全部通过，`ruff`、编译、CLI 参数与 Diff 格式检查通过
+
+---
+
 ## 2026-08-05
 
 ### 完成：可记忆的人工审批规则与安全加固

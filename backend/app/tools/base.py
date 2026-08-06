@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.models.types import ToolDefinition
+
+if TYPE_CHECKING:
+    from .hooks import ToolExecutionContext
 
 
 class BaseTool(ABC):
@@ -19,3 +22,12 @@ class BaseTool(ABC):
     @abstractmethod
     async def execute(self, arguments: dict[str, Any]) -> Any:
         """执行工具且不阻塞事件循环。"""
+
+    async def execute_with_context(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> Any:
+        """执行需要运行上下文的工具；普通工具默认复用 execute。"""
+
+        return await self.execute(arguments)

@@ -20,6 +20,7 @@ from app.models.types import (
     ToolCall,
     ToolResult,
 )
+from app.task.context import TaskContextProvider
 from app.tools.approval import ApprovalGate
 from app.tools.executor import ToolExecutor
 from app.tools.hooks import ToolExecutionContext, ToolHook
@@ -71,6 +72,7 @@ class AgentRuntime:
         policy_engine: PermissionPolicyEngine | None = None,
         rule_store: PermissionRuleStore | None = None,
         context_manager: ContextManager | None = None,
+        task_context_provider: TaskContextProvider | None = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -87,6 +89,7 @@ class AgentRuntime:
         self._max_tool_rounds = max_tool_rounds
         self._max_output_tokens = max_output_tokens
         self._context_manager = context_manager or ContextManager()
+        self._task_context_provider = task_context_provider
         self._tool_executor = tool_executor or ToolExecutor(
             tool_registry,
             approval_gate=approval_gate,
@@ -209,17 +212,6 @@ class AgentRuntime:
                 and len(tool_rounds) >= self._max_tool_rounds
             )
             request_messages = tuple(messages)
-            if force_final_answer:
-                request_messages = (
-                    *request_messages,
-                    Message(
-                        role=MessageRole.SYSTEM,
-                        content=(
-                            "工具调用轮次已用完。请停止调用工具，直接根据已经获得的"
-                            "信息回答用户；如果信息有限，请明确说明，不要继续搜索。"
-                        ),
-                    ),
-                )
             request_tools = (
                 () if force_final_answer else self._tool_registry.definitions()
             )
@@ -238,6 +230,38 @@ class AgentRuntime:
                     step=step,
                     provider=_provider_name(self._provider),
                     model=self._model,
+                )
+
+            try:
+                if self._task_context_provider is not None:
+                    task_message = await self._task_context_provider.message_for(
+                        conversation_id
+                    )
+                    if task_message is not None:
+                        request_messages = (
+                            *request_messages[:historical_message_count],
+                            task_message,
+                            *request_messages[historical_message_count:],
+                        )
+                if force_final_answer:
+                    request_messages = (
+                        *request_messages,
+                        Message(
+                            role=MessageRole.SYSTEM,
+                            content=(
+                                "工具调用轮次已用完。请停止调用工具，直接根据已经"
+                                "获得的信息回答用户；如果信息有限，请明确说明，不要"
+                                "继续搜索。"
+                            ),
+                        ),
+                    )
+            except Exception as exc:
+                return await stop_with_error(
+                    ContextPreparationError(f"{type(exc).__name__}: {exc}"),
+                    AgentStopReason.CONTEXT_ERROR,
+                    step=step,
+                    provider=resolved_provider,
+                    model=resolved_model,
                 )
 
             try:
