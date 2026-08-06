@@ -9,6 +9,11 @@ from contextlib import suppress
 from typing import Any
 from uuid import uuid4
 
+from app.checkpoint import (
+    RunCheckpoint,
+    SQLiteCheckpointStore,
+    render_checkpoint_context,
+)
 from app.context import ContextManager, ConversationSummaryState
 from app.models.registry import ModelAdapterRegistry
 from app.models.types import (
@@ -73,6 +78,7 @@ class AgentRuntime:
         rule_store: PermissionRuleStore | None = None,
         context_manager: ContextManager | None = None,
         task_context_provider: TaskContextProvider | None = None,
+        checkpoint_store: SQLiteCheckpointStore | None = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -90,6 +96,7 @@ class AgentRuntime:
         self._max_output_tokens = max_output_tokens
         self._context_manager = context_manager or ContextManager()
         self._task_context_provider = task_context_provider
+        self._checkpoint_store = checkpoint_store
         self._tool_executor = tool_executor or ToolExecutor(
             tool_registry,
             approval_gate=approval_gate,
@@ -123,14 +130,64 @@ class AgentRuntime:
 
         run_id = uuid4().hex
         try:
-            return await self._run_once(
-                run_id,
-                user_input,
-                history=history,
-                conversation_id=conversation_id,
-                event_handler=event_handler,
-                summary_state=summary_state,
-            )
+            recovery_checkpoint: RunCheckpoint | None = None
+            if self._checkpoint_store is not None:
+                if conversation_id is not None:
+                    recovery_checkpoint = (
+                        await self._checkpoint_store.latest_unrecovered(
+                            conversation_id
+                        )
+                    )
+                await self._checkpoint_store.start(
+                    run_id,
+                    conversation_id=conversation_id,
+                    user_message=Message(
+                        role=MessageRole.USER,
+                        content=user_input,
+                    ),
+                )
+            try:
+                result = await self._run_once(
+                    run_id,
+                    user_input,
+                    history=history,
+                    conversation_id=conversation_id,
+                    event_handler=event_handler,
+                    summary_state=summary_state,
+                    recovery_checkpoint=recovery_checkpoint,
+                )
+            except BaseException as exc:
+                if self._checkpoint_store is not None:
+                    with suppress(Exception):
+                        await self._checkpoint_store.interrupt(
+                            run_id,
+                            error=f"{type(exc).__name__}: {exc}",
+                        )
+                raise
+
+            if self._checkpoint_store is not None:
+                if result.ok:
+                    await self._checkpoint_store.complete(
+                        run_id,
+                        stop_reason=result.stop_reason,
+                    )
+                    if recovery_checkpoint is not None:
+                        with suppress(Exception):
+                            await self._checkpoint_store.mark_recovered(
+                                recovery_checkpoint.run_id,
+                                recovered_by_run_id=run_id,
+                            )
+                else:
+                    await self._checkpoint_store.fail(
+                        run_id,
+                        stop_reason=result.stop_reason,
+                        error=(
+                            result.error.message
+                            if result.error is not None
+                            else None
+                        ),
+                    )
+            return result
         finally:
             with suppress(Exception):
                 await self._tool_executor.clear_run_rules(run_id)
@@ -144,6 +201,7 @@ class AgentRuntime:
         conversation_id: str | None,
         event_handler: AgentEventHandler | None,
         summary_state: ConversationSummaryState | None,
+        recovery_checkpoint: RunCheckpoint | None,
     ) -> AgentResult:
         """执行一次已分配 Run ID 的 Agent 循环。"""
 
@@ -207,6 +265,8 @@ class AgentRuntime:
             return result
 
         for step in range(1, self._max_steps + 1):
+            if self._checkpoint_store is not None:
+                await self._checkpoint_store.before_model(run_id, step=step)
             force_final_answer = (
                 self._max_tool_rounds is not None
                 and len(tool_rounds) >= self._max_tool_rounds
@@ -233,16 +293,23 @@ class AgentRuntime:
                 )
 
             try:
+                ephemeral_messages: list[Message] = []
+                if recovery_checkpoint is not None:
+                    ephemeral_messages.append(
+                        render_checkpoint_context(recovery_checkpoint)
+                    )
                 if self._task_context_provider is not None:
                     task_message = await self._task_context_provider.message_for(
                         conversation_id
                     )
                     if task_message is not None:
-                        request_messages = (
-                            *request_messages[:historical_message_count],
-                            task_message,
-                            *request_messages[historical_message_count:],
-                        )
+                        ephemeral_messages.append(task_message)
+                if ephemeral_messages:
+                    request_messages = (
+                        *request_messages[:historical_message_count],
+                        *ephemeral_messages,
+                        *request_messages[historical_message_count:],
+                    )
                 if force_final_answer:
                     request_messages = (
                         *request_messages,
@@ -389,6 +456,12 @@ class AgentRuntime:
                 return result
 
             round_records: list[ToolCallRecord] = []
+            if self._checkpoint_store is not None:
+                await self._checkpoint_store.before_tools(
+                    run_id,
+                    step=step,
+                    tool_calls=tool_calls_in_message,
+                )
             for tool_call in tool_calls_in_message:
                 signature = self._tool_call_signature(tool_call)
                 if signature == previous_signature:
@@ -435,6 +508,8 @@ class AgentRuntime:
                     ),
                     hook=tool_event_hook,
                 )
+                if self._checkpoint_store is not None:
+                    await self._checkpoint_store.complete_tool(run_id, result)
                 record = ToolCallRecord(
                     round_index=len(tool_rounds),
                     tool_call=tool_call,

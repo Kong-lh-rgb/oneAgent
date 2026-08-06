@@ -8,6 +8,28 @@
 
 ## 2026-08-06
 
+### 完成：Run Checkpoint V1——中断边界与安全恢复证据
+
+#### Bad Case
+- [x] Task 只能表示最后确认的业务进度；工具产生副作用后、`task_update(done)` 前中断时，无法判断动作未执行、执行中还是已经成功
+- [x] Trace 是可失败的观察层，Runtime 会隔离事件处理器异常，不能作为关键恢复状态源
+- [x] CLI 只在 Run 正常结束后保存完整会话，中断时本轮 user message 也可能尚未进入会话历史
+- [x] 遗留 `running` 没有明确转为 interrupted，恢复时容易盲目重试具有副作用的工具
+
+#### 实现结果
+- [x] 新增 `app/checkpoint/`：`RunCheckpoint`、`CheckpointStatus`、`CheckpointPhase`、`SQLiteCheckpointStore` 与恢复上下文渲染
+- [x] 复用现有 `oneagent.db` 的独立 `run_checkpoints` 表，不新增数据库；保存原始 user message、step、phase、pending ToolCall、已确认 ToolResult、终态、错误、时间和 revision
+- [x] Runtime 在 Run 开始、模型请求前、工具批次执行前、每个工具结果后和 Run 终态直接写 Checkpoint；Checkpoint 是关键路径，不依赖可忽略的 Event Handler
+- [x] 状态：running / completed / failed / interrupted；阶段：starting / model_request / tool_execution / tool_results_ready / finished
+- [x] 工具执行前先持久化 pending；只有获得统一 ToolResult 后才移入 completed。中断时保留 pending，明确表达“执行结果未知”
+- [x] Runtime 被取消或异常退出时标记 interrupted；非正常进程退出留下的 running 在 CLI 启动/切换会话时转换为 interrupted
+- [x] 下一次同会话 Run 临时注入最近未恢复 Checkpoint，包含原始用户请求、未决工具和已确认结果；不写入 AgentResult/SQLite 聊天历史
+- [x] 恢复提示明确要求先查 Trace/实际环境，副作用工具禁止盲目重试；参数提示最多保留 4000 字符，完整参数仍在 Checkpoint
+- [x] 后续 Run 正常结束后记录 `recovered_by_run_id`；新 Run 失败或再次中断时保留旧恢复证据
+- [x] CLI 新增 `/checkpoints`，启动发现中断 Run 时显示 phase、step 和待核对工具数
+- [x] 测试覆盖 Store 生命周期、跨重启、遗留 running、pending 不可跳过、Runtime 完成/失败、模型取消、工具取消、恢复上下文不污染原始历史
+- [x] 全量验证：`pytest` 271 个用例全部通过；`ruff check .`、`compileall app tests`、`git diff --check` 通过
+
 ### 完成：Task V1 收口——严格会话私有与状态机不变量
 
 #### Bad Case

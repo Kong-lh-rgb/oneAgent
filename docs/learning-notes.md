@@ -490,7 +490,78 @@ Task 领域通过 4 个工具暴露给主模型（`app/task/tools.py`），工�
   单步骤更新互斥；completed/failed/cancelled 不可通过普通更新恢复；
 - 损坏或超限文件不参与任务列表，并记录可观察 warning。
 
-## 14. 关键工程教训
+## 14. Run Checkpoint：中断边界与恢复证据
+
+### 14.1 为什么 Trace 不能直接等于 Checkpoint
+
+Trace 是观察层，记录“发生过什么”。事件处理器失败不能改变 Agent 的业务结果，
+因此 Runtime 会隔离 Trace 异常。Checkpoint 是恢复正确性的一部分，必须由 Runtime
+在关键边界直接写入，回答“最后确认停在哪里”。两者可以保存在同一个 SQLite
+文件，但不能共享失败语义。
+
+### 14.2 最小模型
+
+```text
+RunCheckpoint
+├── run_id / conversation_id
+├── user_message
+├── status: running / completed / failed / interrupted
+├── phase: starting / model_request / tool_execution
+│          / tool_results_ready / finished
+├── step
+├── pending_tool_calls
+├── completed_tool_results
+├── stop_reason / error
+├── started_at / updated_at / completed_at
+├── recovered_by_run_id
+└── revision
+```
+
+Checkpoint 不复制完整会话；完整历史仍属于 Conversation。保存 user_message 是因为
+CLI 只会在 Run 结束后整体写回消息，中断时本轮用户请求可能尚未进入聊天历史。
+
+### 14.3 Runtime 写入时序
+
+```text
+start(running, starting, user_message)
+  ↓
+before_model(step, model_request)
+  ↓ 模型返回 ToolCall
+before_tools(tool_execution, pending=[...])
+  ↓ 每个工具获得统一 ToolResult
+complete_tool(pending 移除, completed 追加)
+  ↓ pending 清空
+tool_results_ready
+  ↓ 下一轮模型或最终回答
+completed / failed
+```
+
+Runtime 被取消时保留当前 phase、pending 和 completed，并把状态改为 interrupted。
+进程被强制结束来不及写 interrupted 时，下一次 CLI 启动或切换会话会把遗留
+running 转成 interrupted。
+
+### 14.4 “pending”不是“failed”
+
+工具产生副作用与结果落盘无法成为一个跨系统原子事务。若工具已经写完文件，但
+Checkpoint 尚未收到 ToolResult 就断电，唯一诚实的状态是“结果未知”。因此：
+
+- pending ToolCall 表示必须核对现场，不能推断成功或失败；
+- completed ToolResult 表示 Runtime 已确认收到统一结果；
+- 副作用工具禁止自动重试；先查 Trace、文件、外部 API 或幂等键；
+- 安全只读工具可以由恢复策略判断后重试，但 V1 不做自动续跑。
+
+### 14.5 恢复上下文
+
+同一会话下一次 Run 会读取最近未恢复的 interrupted Checkpoint，把原始用户请求、
+未决工具和已确认结果渲染成临时 system message。它参与模型上下文预算，但不进入
+`AgentResult.messages` 和 SQLite 聊天历史。只有后续 Run 正常完成，旧记录才写入
+`recovered_by_run_id`；后续 Run 再次失败时仍保留恢复证据。
+
+Task 与 Checkpoint 的边界：Task 保存已确认的业务进度，Checkpoint 保存一次 Run
+最后确认的执行边界，Trace 保存详细时间线。Checkpoint V1 只帮助安全核对，不尝试
+从 Python 调用栈中间继续，也不自动重放工具。
+
+## 15. 关键工程教训
 
 1. **先测量，再压缩。** 低于 trigger 时删除任何历史都是不必要的信息损失。
 2. **事实历史与请求视图分离。** Token 优化不能破坏恢复和审计能力。

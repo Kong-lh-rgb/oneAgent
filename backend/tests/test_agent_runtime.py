@@ -15,6 +15,12 @@ from app.agent.events import (
 )
 from app.agent.result import AgentStopReason
 from app.agent.runtime import AgentRuntime
+from app.checkpoint import (
+    CHECKPOINT_CONTEXT_MESSAGE_NAME,
+    CheckpointPhase,
+    CheckpointStatus,
+    SQLiteCheckpointStore,
+)
 from app.context import (
     ContextBudgetPolicy,
     ContextManager,
@@ -127,6 +133,27 @@ class ApprovalCountingTool(CountingTool):
         },
         permission=ToolPermission.HUMAN_APPROVAL,
     )
+
+
+class BlockingTool(BaseTool):
+    definition = ToolDefinition(
+        name="blocking_tool",
+        description="Wait until cancelled",
+        parameters={"type": "object", "properties": {}},
+    )
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.cancelled = False
+
+    async def execute(self, arguments: dict[str, object]) -> str:
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        raise AssertionError("阻塞工具不应正常完成")
 
 
 class RememberRunGate(ApprovalGate):
@@ -1034,3 +1061,176 @@ async def test_closing_run_stream_cancels_background_model_request() -> None:
 
     assert first_event.type is AgentEventType.AGENT_STARTED
     assert adapter.cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_runtime_checkpoint_records_completed_tool_run(tmp_path) -> None:
+    checkpoint_store = SQLiteCheckpointStore(tmp_path / "oneagent.db")
+    await checkpoint_store.initialize()
+    registry, _ = fake_registry(
+        [
+            model_response(
+                tool_calls=(
+                    ToolCall(id="count-1", name="count", arguments={"value": 1}),
+                )
+            ),
+            model_response(content="完成"),
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(CountingTool())
+
+    result = await AgentRuntime(
+        registry,
+        tools,
+        provider="fake",
+        checkpoint_store=checkpoint_store,
+    ).run("执行工具", conversation_id="conv-1")
+    checkpoint = await checkpoint_store.get(result.run_id)
+
+    assert result.ok is True
+    assert checkpoint is not None
+    assert checkpoint.status is CheckpointStatus.COMPLETED
+    assert checkpoint.phase is CheckpointPhase.FINISHED
+    assert checkpoint.pending_tool_calls == ()
+    assert [
+        item.tool_call_id for item in checkpoint.completed_tool_results
+    ] == ["count-1"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_checkpoint_records_structured_failure(tmp_path) -> None:
+    checkpoint_store = SQLiteCheckpointStore(tmp_path / "oneagent.db")
+    await checkpoint_store.initialize()
+    registry, _ = fake_registry([RuntimeError("offline")])
+
+    result = await AgentRuntime(
+        registry,
+        ToolRegistry(),
+        provider="fake",
+        checkpoint_store=checkpoint_store,
+    ).run("hello", conversation_id="conv-1")
+    checkpoint = await checkpoint_store.get(result.run_id)
+
+    assert result.stop_reason is AgentStopReason.MODEL_ERROR
+    assert checkpoint is not None
+    assert checkpoint.status is CheckpointStatus.FAILED
+    assert checkpoint.stop_reason is AgentStopReason.MODEL_ERROR
+    assert "offline" in (checkpoint.error or "")
+
+
+@pytest.mark.asyncio
+async def test_runtime_cancellation_preserves_model_request_checkpoint(
+    tmp_path,
+) -> None:
+    checkpoint_store = SQLiteCheckpointStore(tmp_path / "oneagent.db")
+    await checkpoint_store.initialize()
+    config = ProviderConfig(
+        provider="blocking",
+        model="blocking-model",
+        api_key=SecretStr("offline-test-key"),
+        api_style=ApiStyle.CHAT_COMPLETIONS,
+    )
+    adapter = BlockingModelAdapter(config)
+    registry = ModelAdapterRegistry(ModelSettings(_env_file=None))
+    registry.register("blocking", lambda _: adapter, config=config)
+    runtime = AgentRuntime(
+        registry,
+        ToolRegistry(),
+        provider="blocking",
+        checkpoint_store=checkpoint_store,
+    )
+
+    running = asyncio.create_task(
+        runtime.run("hello", conversation_id="conv-1")
+    )
+    await adapter.started.wait()
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+    checkpoints = await checkpoint_store.list(conversation_id="conv-1")
+    assert len(checkpoints) == 1
+    assert checkpoints[0].status is CheckpointStatus.INTERRUPTED
+    assert checkpoints[0].phase is CheckpointPhase.MODEL_REQUEST
+    assert checkpoints[0].step == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_cancellation_preserves_uncertain_tool_call(tmp_path) -> None:
+    checkpoint_store = SQLiteCheckpointStore(tmp_path / "oneagent.db")
+    await checkpoint_store.initialize()
+    call = ToolCall(id="uncertain-tool", name="blocking_tool", arguments={})
+    registry, _ = fake_registry([model_response(tool_calls=(call,))])
+    tool = BlockingTool()
+    tools = ToolRegistry()
+    tools.register(tool)
+    runtime = AgentRuntime(
+        registry,
+        tools,
+        provider="fake",
+        checkpoint_store=checkpoint_store,
+    )
+
+    running = asyncio.create_task(
+        runtime.run("执行阻塞工具", conversation_id="conv-1")
+    )
+    await tool.started.wait()
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+
+    checkpoints = await checkpoint_store.list(conversation_id="conv-1")
+    assert len(checkpoints) == 1
+    assert checkpoints[0].status is CheckpointStatus.INTERRUPTED
+    assert checkpoints[0].phase is CheckpointPhase.TOOL_EXECUTION
+    assert checkpoints[0].pending_tool_calls == (call,)
+    assert checkpoints[0].completed_tool_results == ()
+    assert tool.cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_runtime_injects_interrupted_checkpoint_without_persisting_it(
+    tmp_path,
+) -> None:
+    checkpoint_store = SQLiteCheckpointStore(tmp_path / "oneagent.db")
+    await checkpoint_store.initialize()
+    uncertain = ToolCall(
+        id="uncertain-1",
+        name="write_file",
+        arguments={"path": "output.md"},
+    )
+    await checkpoint_store.start(
+        "old-run",
+        conversation_id="conv-1",
+        user_message=Message(role=MessageRole.USER, content="写入 output.md"),
+    )
+    await checkpoint_store.before_model("old-run", step=2)
+    await checkpoint_store.before_tools(
+        "old-run",
+        step=2,
+        tool_calls=(uncertain,),
+    )
+    await checkpoint_store.interrupt("old-run", error="process stopped")
+    registry, adapter = fake_registry([model_response(content="已核对中断状态")])
+
+    result = await AgentRuntime(
+        registry,
+        ToolRegistry(),
+        provider="fake",
+        checkpoint_store=checkpoint_store,
+    ).run("继续", conversation_id="conv-1")
+
+    injected = next(
+        message
+        for message in adapter.requests[0].messages
+        if message.name == CHECKPOINT_CONTEXT_MESSAGE_NAME
+    )
+    assert "禁止直接重试" in (injected.content or "")
+    assert "uncertain-1" in (injected.content or "")
+    assert not any(
+        message.name == CHECKPOINT_CONTEXT_MESSAGE_NAME
+        for message in result.messages
+    )
+    old = await checkpoint_store.get("old-run")
+    assert old is not None and old.recovered_by_run_id == result.run_id

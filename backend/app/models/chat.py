@@ -17,6 +17,7 @@ from pathlib import Path
 from app.agent.events import AgentEvent, AgentEventType
 from app.agent.result import AgentResult
 from app.agent.runtime import AgentRuntime
+from app.checkpoint import RunCheckpoint, SQLiteCheckpointStore
 from app.context import (
     ContextManager,
     ContextSettings,
@@ -258,6 +259,37 @@ def _print_runs(runs: tuple[AgentRunTrace, ...], current_conversation_id: str) -
         )
 
 
+def _print_checkpoints(checkpoints: tuple[RunCheckpoint, ...]) -> None:
+    """显示当前会话最近的恢复边界。"""
+
+    if not checkpoints:
+        print("当前会话暂无 Checkpoint。")
+        return
+    for checkpoint in checkpoints:
+        updated_at = checkpoint.updated_at.astimezone().strftime("%m-%d %H:%M:%S")
+        pending = len(checkpoint.pending_tool_calls)
+        print(
+            f"{checkpoint.run_id[:8]}  {updated_at}  "
+            f"{checkpoint.status.value:<11} phase={checkpoint.phase.value} "
+            f"step={checkpoint.step} pending_tools={pending}"
+        )
+
+
+def _print_recovered_checkpoints(
+    checkpoints: tuple[RunCheckpoint, ...],
+) -> None:
+    """提示启动时发现的未正常结束 Run。"""
+
+    for checkpoint in checkpoints:
+        print(
+            "检测到中断 Run："
+            f"{checkpoint.run_id[:8]} · phase={checkpoint.phase.value} · "
+            f"step={checkpoint.step} · "
+            f"待核对工具={len(checkpoint.pending_tool_calls)}。"
+            "下次对话会先把恢复证据提供给模型。"
+        )
+
+
 def _print_trace(events: tuple[AgentEvent, ...]) -> None:
     """显示一次 Run 的完整事件时间线。"""
 
@@ -329,6 +361,8 @@ async def _run(args: argparse.Namespace) -> int:
     trace_store = SQLiteTraceStore(args.database)
     await trace_store.initialize()
     trace_handler = SQLiteTraceEventHandler(trace_store)
+    checkpoint_store = SQLiteCheckpointStore(args.database)
+    await checkpoint_store.initialize()
     rule_store = SQLitePermissionRuleStore(args.database)
     await rule_store.initialize()
     policy_engine = PermissionPolicyEngine(rule_store)
@@ -347,6 +381,11 @@ async def _run(args: argparse.Namespace) -> int:
     print(
         f"{action}会话：{conversation.id[:8]} · "
         f"{conversation.title} · {conversation.message_count} 条消息"
+    )
+    _print_recovered_checkpoints(
+        await checkpoint_store.recover_running(
+            conversation_id=conversation.id,
+        )
     )
     try:
         tool_registry = build_builtin_tool_registry()
@@ -397,6 +436,7 @@ async def _run(args: argparse.Namespace) -> int:
             ),
         ),
         task_context_provider=TaskContextProvider(task_store),
+        checkpoint_store=checkpoint_store,
     )
     try:
         if args.message is not None:
@@ -415,7 +455,8 @@ async def _run(args: argparse.Namespace) -> int:
 
         print(
             "命令：/new 新建会话，/sessions 查看会话，/use <id> 切换会话，"
-            "/runs 查看运行，/trace <id> 查看轨迹，/permissions 查看审批规则，"
+            "/runs 查看运行，/checkpoints 查看恢复点，/trace <id> 查看轨迹，"
+            "/permissions 查看审批规则，"
             "/clear 清空当前会话，/help 查看帮助，/exit 退出"
         )
         while True:
@@ -483,6 +524,13 @@ async def _run(args: argparse.Namespace) -> int:
                     conversation.id,
                 )
                 continue
+            if content == "/checkpoints":
+                _print_checkpoints(
+                    await checkpoint_store.list(
+                        conversation_id=conversation.id,
+                    )
+                )
+                continue
             if content == "/trace" or content.startswith("/trace "):
                 identifier = content.removeprefix("/trace").strip()
                 if not identifier:
@@ -516,6 +564,11 @@ async def _run(args: argparse.Namespace) -> int:
                     continue
                 conversation = selected
                 history = list(await conversation_store.load_messages(conversation.id))
+                _print_recovered_checkpoints(
+                    await checkpoint_store.recover_running(
+                        conversation_id=conversation.id,
+                    )
+                )
                 print(
                     f"已切换会话：{conversation.id[:8]} · "
                     f"{conversation.title} · {conversation.message_count} 条消息"
@@ -536,6 +589,7 @@ async def _run(args: argparse.Namespace) -> int:
                     "/sessions 查看最近会话\n"
                     "/use <会话ID> 切换会话\n"
                     "/runs 查看最近 Agent Run\n"
+                    "/checkpoints 查看当前会话的运行恢复点\n"
                     "/trace <Run ID> 查看完整事件轨迹\n"
                     "/permissions 查看当前会话的审批规则\n"
                     "/permission remove <规则ID> 删除一条审批规则\n"
