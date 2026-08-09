@@ -30,6 +30,15 @@ from app.conversation import (
     Conversation,
     SQLiteConversationStore,
 )
+from app.memory import (
+    HybridMemoryRetriever,
+    MemoryManager,
+    MemorySettings,
+    MemoryWriter,
+    ModelMemoryExtractor,
+    OpenAICompatibleMemoryEmbedder,
+    SQLiteMemoryStore,
+)
 from app.task import (
     DEFAULT_TASKS_DIR,
     FileTaskStore,
@@ -403,6 +412,37 @@ async def _run(args: argparse.Namespace) -> int:
             print("联网搜索：DuckDuckGo（配置 TAVILY_API_KEY 可启用 Tavily）")
 
     registry = ModelAdapterRegistry(settings)
+    memory_settings = MemorySettings()
+    memory_manager: MemoryManager | None = None
+    try:
+        if memory_settings.memory_enabled:
+            memory_embedder = OpenAICompatibleMemoryEmbedder(
+                api_key=memory_settings.api_key_value(),
+                base_url=memory_settings.memory_embedding_base_url or None,
+                model=memory_settings.memory_embedding_model,
+                dimensions=memory_settings.memory_embedding_dimensions,
+            )
+            memory_store = SQLiteMemoryStore(
+                args.database,
+                embedding_dimensions=memory_embedder.dimensions,
+            )
+            await memory_store.initialize()
+            memory_manager = MemoryManager(
+                writer=MemoryWriter(memory_store, memory_embedder),
+                retriever=HybridMemoryRetriever(memory_store, memory_embedder),
+                extractor=ModelMemoryExtractor(
+                    registry,
+                    provider=provider.value,
+                    model=args.model,
+                ),
+            )
+            print(
+                "长期记忆：已启用 SQLite + FTS5 + sqlite-vec "
+                f"({memory_settings.memory_embedding_model})"
+            )
+    except (RuntimeError, ValueError) as exc:
+        print(f"记忆配置错误：{exc}", file=sys.stderr)
+        return 2
     context_settings = ContextSettings()
     context_summarizer = ModelContextSummarizer(
         registry,
@@ -437,6 +477,9 @@ async def _run(args: argparse.Namespace) -> int:
         ),
         task_context_provider=TaskContextProvider(task_store),
         checkpoint_store=checkpoint_store,
+        memory_manager=memory_manager,
+        memory_namespaces=memory_settings.parsed_namespaces(),
+        memory_write_namespace=memory_settings.memory_write_namespace,
     )
     try:
         if args.message is not None:

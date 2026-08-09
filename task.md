@@ -8,6 +8,33 @@
 
 ## 2026-08-09
 
+### 完成：Memory V1 生命周期与混合检索闭环
+
+#### Bad Case
+- [x] 把聊天记录直接向量化会同时保存大量寒暄、普通回复和临时工具结果，长期污染召回结果
+- [x] LLM 判断“值得记住”后直接成为永久事实，会把模型猜测升级为用户事实
+- [x] 仅依赖向量检索容易漏掉项目名、错误码和 Feature ID；仅依赖关键词又无法处理同义表达
+- [x] 新事实直接覆盖旧事实会丢失来源和变化原因；召回上下文写回聊天历史则会反复膨胀
+- [x] sqlite-vec 仍是 pre-v1，浮动依赖和静默降级会让不同环境产生不可解释行为
+
+#### 实现结果
+- [x] 领域模型收口为 FACT / EPISODE / PROCEDURE；namespace 支持 global、user、project、task 等任意隔离边界
+- [x] 生命周期为 candidate / active / superseded / archived；候选只有经过用户确认或真实任务采用后才晋升，确认次数和使用次数分别记录
+- [x] 每条记忆保存 normalized_content、SHA-256 fingerprint、importance、confidence、source session/run/message、访问遥测、替代链和 revision
+- [x] `SQLiteMemoryStore` 在同一个 `oneagent.db` 中维护 memories、FTS5 和 sqlite-vec vec0；事实写入、索引写入和冲突替代共用事务
+- [x] 指纹处理精确重复；active FACT 同 namespace/key 的新事实原子替代旧事实，旧记录保留为 superseded
+- [x] `MemoryWriter` 实现 Rule Filter 后的写入边界、每 Run 3 条/Session 5 条/Day 20 条预算、候选确认与使用晋升
+- [x] `HybridMemoryRetriever` 并行使用 FTS5 BM25 Top 20 和 Vector Top 20，以 RRF 合并并加入小幅 importance bonus，最终返回 3–5 条可解释结果
+- [x] Embedding 通过 `MemoryEmbedder` 抽象；测试使用确定性 Hash Embedder，生产支持独立 OpenAI 兼容 Embeddings API
+- [x] `ModelMemoryExtractor` 复用 Provider Adapter，结构化提取最多 3 条记忆；模型推断只能写 candidate
+- [x] Runtime 单独传入原始用户文本，只有“记住/以后/始终/必须”等明确指令允许 active；Assistant 在回答中复述这些词不能自行晋升记忆
+- [x] `MemoryManager` 向 Runtime 暴露 retrieve/observe/confirm/learn_from_use；Runtime 不感知 SQLite、FTS5、向量、RRF 或 fingerprint
+- [x] Memory 以临时 system message 进入 ContextManager 预算与压缩流程，不进入 AgentResult 或 SQLite 原始聊天历史；Memory 故障降级时不阻断 Agent 主流程
+- [x] CLI 通过 MEMORY_ENABLED 显式启用，并配置独立 embedding key/base URL/model/dimensions/namespaces；未启用时不产生额外模型调用
+- [x] 固定 `sqlite-vec==0.1.9`，启动时验证扩展加载和向量维度，失败给出明确错误
+- [x] 离线测试覆盖扩展加载、FTS/Vector/RRF、namespace 隔离、去重、冲突历史、候选不可召回、确认/使用晋升、预算、归档、访问遥测和 Runtime 临时注入
+- [x] 全量验证：`pytest` 309 个用例通过；`ruff`、`compileall`、CLI help 和 `git diff --check` 通过
+
 ### 完成：上下文压缩 V1 稳定性收口
 
 #### Bad Case

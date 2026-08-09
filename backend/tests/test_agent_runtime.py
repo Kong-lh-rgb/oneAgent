@@ -31,6 +31,7 @@ from app.context import (
     RollingConversationSummary,
     SummaryGenerationResult,
 )
+from app.memory import MEMORY_CONTEXT_MESSAGE_NAME
 from app.models.adapter import ModelAdapter
 from app.models.config import ModelSettings, ProviderConfig
 from app.models.registry import ModelAdapterRegistry
@@ -169,6 +170,24 @@ class RememberRunGate(ApprovalGate):
 class FailingEventHandler(AgentEventHandler):
     async def emit(self, event: AgentEvent) -> None:
         raise RuntimeError("event sink unavailable")
+
+
+class FakeMemoryManager:
+    """验证 Runtime 只依赖 Memory 门面，不接触检索实现。"""
+
+    def __init__(self) -> None:
+        self.observations: list[tuple[str, str, object]] = []
+
+    async def context_message(self, query, *, namespaces):
+        return Message(
+            role=MessageRole.SYSTEM,
+            name=MEMORY_CONTEXT_MESSAGE_NAME,
+            content="用户偏好中文",
+        )
+
+    async def observe(self, observation, *, namespace, source, explicit_user_text=None):
+        self.observations.append((observation, namespace, source))
+        return ()
 
 
 class BlockingModelAdapter(ModelAdapter):
@@ -1234,3 +1253,34 @@ async def test_runtime_injects_interrupted_checkpoint_without_persisting_it(
     )
     old = await checkpoint_store.get("old-run")
     assert old is not None and old.recovered_by_run_id == result.run_id
+
+
+@pytest.mark.asyncio
+async def test_runtime_recalls_and_observes_memory_without_persisting_context() -> None:
+    registry, adapter = fake_registry([model_response(content="我会使用中文回答")])
+    memory = FakeMemoryManager()
+    result = await AgentRuntime(
+        registry,
+        ToolRegistry(),
+        provider="fake",
+        memory_manager=memory,
+        memory_namespaces=("user:local", "project:oneagent"),
+        memory_write_namespace="user:local",
+    ).run("继续回答", conversation_id="conv-1")
+
+    injected = next(
+        message
+        for message in adapter.requests[0].messages
+        if message.name == MEMORY_CONTEXT_MESSAGE_NAME
+    )
+    assert injected.content == "用户偏好中文"
+    assert not any(
+        message.name == MEMORY_CONTEXT_MESSAGE_NAME for message in result.messages
+    )
+    assert len(memory.observations) == 1
+    observation, namespace, source = memory.observations[0]
+    assert "继续回答" in observation
+    assert "我会使用中文回答" in observation
+    assert namespace == "user:local"
+    assert source.session_id == "conv-1"
+    assert source.run_id == result.run_id

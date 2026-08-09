@@ -13,11 +13,13 @@ OneAgent 当前是一个运行在本地终端中的 Tool-Calling Agent，已经�
 - 本地文件、Shell、HTTP 和网页搜索工具；
 - 工具 Hook、人工审批和可记忆权限规则；
 - SQLite 会话、消息、运行轨迹和权限规则持久化；
-- Token 估算、模型上下文预算和第一层工具消息压缩；
+- Token 估算、模型上下文预算、工具消息压缩和滚动摘要；
+- 会话私有 Task、Run Checkpoint 和长期 Memory 存储；
 - 结构化 AgentResult 和 AgentEvent。
 
-当前没有实现 Task、Checkpoint、Subagent、Memory、MCP、Scheduler、FastAPI
-和前端。这些目录仍是后续能力的边界，不应该提前把它们的职责塞进 Runtime。
+Memory 当前只完成领域模型与 SQLite 存储，尚未接入 Runtime、工具或模型上下文。
+Subagent、MCP、Scheduler、FastAPI 和前端仍未实现；这些能力不应该提前把职责
+塞进 Runtime。
 
 ## 2. 总体分层
 
@@ -675,3 +677,36 @@ target 和 `summary_error`，让“没触发、生成失败、不够短、压缩
 CLI 参数默认值不应覆盖 Provider 配置。用户未传 `--max-output-tokens` 时，Runtime
 使用当前 Provider 的 `default_max_output_tokens`；只有显式参数才覆盖。这样 reasoning
 模型可以保留足够输出预算，非 reasoning 模型也不必被全局硬编码绑死。
+
+## 19. Memory V1：候选、混合召回与使用后学习
+
+Memory 与聊天历史、Task、Checkpoint 的职责不同：聊天历史记录完整交流，Task 保存
+长任务进度，Checkpoint 保存一次 Run 的可恢复边界，Memory 只保存跨会话仍可能改变
+未来决策的稳定事实、历史经验和操作方法。因此系统保存 FACT、EPISODE、PROCEDURE，
+而不是把全部 Conversation 做 embedding。
+
+LLM 提取结果属于不可信输入。明确用户指令可以直接 active，模型归纳只能 candidate。
+Candidate 不进入正常上下文；它必须经过用户 confirm 或真实任务 learn_from_use 才能
+晋升。confirmation_count 和 use_count 分开记录，避免把“模型用过一次”伪装成“用户
+确认过”。写入预算固定为每 Run 3 条、每 Session 5 条、每天 20 条，Memory 污染比少记
+一条更危险。
+
+SQLite 中有三个同步结构：memories 是权威事实，FTS5 保存全文索引，sqlite-vec 的
+vec0 表保存 float32 embedding。写入和冲突替代在同一个事务中更新三者；检索时 BM25
+擅长项目名、错误码和精确词，Vector 擅长同义表达，RRF 用 `1/(60+rank)` 合并两个
+榜单。最终结果继续接受 ContextManager 的 Token 预算，而不是绕过上下文管理直接塞满
+Prompt。
+
+namespace 是检索隔离边界，可以是 global、user:local、project:oneagent 或未来的
+task:id。source session/run/message 只是“为什么知道”的证据锚点，不限制记忆跨会话
+生效。FACT 的 namespace + key 表达当前事实槽位；新事实出现时旧记录进入 superseded，
+新记录通过 supersedes_id 指向旧记录，历史不会被 DELETE。
+
+Runtime 只依赖 MemoryManager 的 retrieve/observe，不了解 fingerprint、FTS5、vec0 或
+RRF。召回结果作为临时 system message 进入实际模型请求，但不进入 AgentResult 和聊天
+数据库。Memory 检索或观察失败会被隔离，不能让主 Agent 因辅助能力不可用而停止。
+
+sqlite-vec 是 pre-v1 依赖，因此固定版本并在初始化时验证 vec_version 和 embedding
+维度。Embedding 通过独立接口隔离：离线测试使用 HashMemoryEmbedder，生产使用独立的
+OpenAI 兼容 Embeddings API。Embedding 模型或维度变化不能直接复用旧向量表，后续需要
+显式 reindex/migration，而不是静默混用不同向量空间。

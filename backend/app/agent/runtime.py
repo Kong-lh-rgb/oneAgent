@@ -15,6 +15,7 @@ from app.checkpoint import (
     render_checkpoint_context,
 )
 from app.context import ContextManager, ConversationSummaryState
+from app.memory import MemoryManager, MemorySource
 from app.models.registry import ModelAdapterRegistry
 from app.models.types import (
     Message,
@@ -79,6 +80,9 @@ class AgentRuntime:
         context_manager: ContextManager | None = None,
         task_context_provider: TaskContextProvider | None = None,
         checkpoint_store: SQLiteCheckpointStore | None = None,
+        memory_manager: MemoryManager | None = None,
+        memory_namespaces: Sequence[str] = ("global", "user:local"),
+        memory_write_namespace: str = "user:local",
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -97,6 +101,9 @@ class AgentRuntime:
         self._context_manager = context_manager or ContextManager()
         self._task_context_provider = task_context_provider
         self._checkpoint_store = checkpoint_store
+        self._memory_manager = memory_manager
+        self._memory_namespaces = tuple(memory_namespaces)
+        self._memory_write_namespace = memory_write_namespace
         self._tool_executor = tool_executor or ToolExecutor(
             tool_registry,
             approval_gate=approval_gate,
@@ -221,6 +228,8 @@ class AgentRuntime:
         tool_calls: list[ToolCallRecord] = []
         usage = ModelUsage()
         current_summary_state = summary_state
+        memory_context_message: Message | None = None
+        memory_context_loaded = False
 
         await emitter.emit(
             AgentEventType.AGENT_STARTED,
@@ -294,6 +303,17 @@ class AgentRuntime:
 
             try:
                 ephemeral_messages: list[Message] = []
+                if self._memory_manager is not None and not memory_context_loaded:
+                    memory_context_loaded = True
+                    with suppress(Exception):
+                        memory_context_message = (
+                            await self._memory_manager.context_message(
+                                user_input,
+                                namespaces=self._memory_namespaces,
+                            )
+                        )
+                if memory_context_message is not None:
+                    ephemeral_messages.append(memory_context_message)
                 if recovery_checkpoint is not None:
                     ephemeral_messages.append(
                         render_checkpoint_context(recovery_checkpoint)
@@ -432,6 +452,21 @@ class AgentRuntime:
             )
             tool_calls_in_message = assistant_message.tool_calls
             if not tool_calls_in_message:
+                if self._memory_manager is not None:
+                    observation = (
+                        f"用户请求：{user_input}\n"
+                        f"Agent 回答：{assistant_message.content or ''}"
+                    )
+                    with suppress(Exception):
+                        await self._memory_manager.observe(
+                            observation,
+                            namespace=self._memory_write_namespace,
+                            source=MemorySource(
+                                session_id=conversation_id,
+                                run_id=run_id,
+                            ),
+                            explicit_user_text=user_input,
+                        )
                 result = self._result(
                     run_id=run_id,
                     final_message=assistant_message,
