@@ -447,6 +447,11 @@ def _check_compaction(scenario: Scenario, events: list[AgentEvent]) -> CheckResu
             "trimmed": event.context_trimmed,
             "before": event.original_estimated_input_tokens,
             "after": event.prepared_input_tokens,
+            "input_budget": event.input_budget,
+            "trigger": event.trigger_tokens,
+            "target": event.target_tokens,
+            "summary_updated": event.summary_updated,
+            "summary_error": event.summary_error,
         }
         for event in compaction_events
     ]

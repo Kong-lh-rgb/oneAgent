@@ -645,8 +645,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-output-tokens",
         type=int,
-        default=1024,
-        help="Maximum output tokens for each reply.",
+        default=None,
+        help=(
+            "Maximum output tokens for each reply; defaults to the configured "
+            "provider value."
+        ),
     )
     parser.add_argument(
         "--max-steps",
@@ -682,7 +685,7 @@ def _parse_args() -> argparse.Namespace:
         help="Start a new conversation instead of restoring the latest one.",
     )
     args = parser.parse_args()
-    if args.max_output_tokens <= 0:
+    if args.max_output_tokens is not None and args.max_output_tokens <= 0:
         parser.error("--max-output-tokens must be greater than zero")
     if args.max_steps <= 0:
         parser.error("--max-steps must be greater than zero")

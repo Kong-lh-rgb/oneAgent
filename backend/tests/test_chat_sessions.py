@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from collections.abc import Sequence
 
 import pytest
@@ -14,6 +15,7 @@ from app.context import (
 from app.conversation import SQLiteConversationStore
 from app.models.chat import (
     _load_or_create_conversation,
+    _parse_args,
     _print_permission_rules,
     _remove_permission_rule,
     _send_message,
@@ -329,3 +331,25 @@ async def test_cli_lists_and_removes_conversation_permission_rules(
         is True
     )
     assert await store.list(scope_ids=("conversation-1",)) == ()
+
+
+def test_cli_uses_provider_default_output_tokens_when_unspecified(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["oneagent-chat"])
+
+    args = _parse_args()
+
+    assert args.max_output_tokens is None
+
+
+def test_cli_accepts_explicit_output_tokens(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["oneagent-chat", "--max-output-tokens", "8192"],
+    )
+
+    args = _parse_args()
+
+    assert args.max_output_tokens == 8192

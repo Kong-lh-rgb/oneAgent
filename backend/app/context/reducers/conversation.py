@@ -14,7 +14,7 @@ from ..blocks import (
     ToolRoundBlock,
     partition_messages,
 )
-from ..summarizer import ContextSummarizer
+from ..summarizer import ContextSummarizer, SummaryGenerationError
 from ..summary import (
     SUMMARY_MESSAGE_NAME,
     ConversationSummaryState,
@@ -109,46 +109,57 @@ class ConversationReducer:
         source_messages = tuple(
             message for item in summary_blocks for message in item.block.messages
         )
-        try:
-            generated = await self._summarizer.summarize(
-                previous_state.summary if previous_state else None,
-                source_messages,
-            )
-        except Exception as exc:
-            return self._unchanged(
-                prepared,
-                previous_state,
-                initial_estimated_input_tokens,
-                target_tokens,
-                f"{type(exc).__name__}: {exc}",
-            )
+        previous_summary = previous_state.summary if previous_state else None
+        total_usage = ModelUsage()
+        last_error = "summary generation failed"
+        for attempt in range(2):
+            try:
+                generated = (
+                    await self._summarizer.summarize(
+                        previous_summary,
+                        source_messages,
+                    )
+                    if attempt == 0
+                    else await self._summarizer.retry_compact(
+                        previous_summary,
+                        source_messages,
+                        reason=last_error,
+                    )
+                )
+            except Exception as exc:
+                total_usage = _add_usage(total_usage, _error_usage(exc))
+                last_error = f"{type(exc).__name__}: {exc}"
+                continue
 
-        new_state = ConversationSummaryState(
-            summary=generated.summary,
-            covered_message_count=cutoff,
-        )
-        reduced_messages = _replace_covered_prefix(
-            prepared,
-            raw[covered:cutoff],
-            new_state,
-        )
-        estimated = estimate(reduced_messages)
-        if estimated >= initial_estimated_input_tokens:
-            return ConversationReductionResult(
-                messages=prepared,
-                estimated_input_tokens=initial_estimated_input_tokens,
-                summary_state=previous_state,
-                summary_usage=generated.usage,
-                reached_target=initial_estimated_input_tokens <= target_tokens,
-                error="generated summary did not reduce the request context",
+            total_usage = _add_usage(total_usage, generated.usage)
+            new_state = ConversationSummaryState(
+                summary=generated.summary,
+                covered_message_count=cutoff,
             )
-        return ConversationReductionResult(
-            messages=reduced_messages,
-            estimated_input_tokens=estimated,
-            summary_state=new_state,
-            summarized_conversation_blocks=len(summary_blocks),
-            summary_usage=generated.usage,
-            reached_target=estimated <= target_tokens,
+            reduced_messages = _replace_covered_prefix(
+                prepared,
+                raw[covered:cutoff],
+                new_state,
+            )
+            estimated = estimate(reduced_messages)
+            if estimated < initial_estimated_input_tokens:
+                return ConversationReductionResult(
+                    messages=reduced_messages,
+                    estimated_input_tokens=estimated,
+                    summary_state=new_state,
+                    summarized_conversation_blocks=len(summary_blocks),
+                    summary_usage=total_usage,
+                    reached_target=estimated <= target_tokens,
+                )
+            last_error = "generated summary did not reduce the request context"
+
+        return self._unchanged(
+            prepared,
+            previous_state,
+            initial_estimated_input_tokens,
+            target_tokens,
+            last_error,
+            summary_usage=total_usage,
         )
 
     @staticmethod
@@ -158,14 +169,31 @@ class ConversationReducer:
         estimated: int,
         target_tokens: int,
         error: str | None = None,
+        *,
+        summary_usage: ModelUsage | None = None,
     ) -> ConversationReductionResult:
         return ConversationReductionResult(
             messages=messages,
             estimated_input_tokens=estimated,
             summary_state=state,
+            summary_usage=summary_usage or ModelUsage(),
             reached_target=estimated <= target_tokens,
             error=error,
         )
+
+
+def _error_usage(error: Exception) -> ModelUsage:
+    if isinstance(error, SummaryGenerationError):
+        return error.usage
+    return ModelUsage()
+
+
+def _add_usage(left: ModelUsage, right: ModelUsage) -> ModelUsage:
+    return ModelUsage(
+        input_tokens=left.input_tokens + right.input_tokens,
+        output_tokens=left.output_tokens + right.output_tokens,
+        total_tokens=left.total_tokens + right.total_tokens,
+    )
 
 
 def build_summary_candidate(

@@ -61,29 +61,72 @@ class FakeSummarizer(ContextSummarizer):
 class SummaryModelAdapter(ModelAdapter):
     """只用于验证模型摘要请求结构的离线适配器。"""
 
-    def __init__(self, config: ProviderConfig) -> None:
+    def __init__(
+        self,
+        config: ProviderConfig,
+        *,
+        contents: list[str | None] | None = None,
+    ) -> None:
         super().__init__(config)
         self.requests: list[ModelRequest] = []
+        self.contents = contents or [
+            (
+                '{"current_objective":"完成测试","user_constraints":[], '
+                '"key_decisions":[],"completed_work":[],"current_state":[], '
+                '"pending_work":[],"important_facts":[]}'
+            )
+        ]
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         self.requests.append(request)
+        content = self.contents.pop(0)
         return ModelResponse(
             id="summary-response",
             provider="fake",
             model="fake-model",
             message=Message(
                 role=MessageRole.ASSISTANT,
-                content=(
-                    '{"current_objective":"完成测试","user_constraints":[], '
-                    '"key_decisions":[],"completed_work":[],"current_state":[], '
-                    '"pending_work":[],"important_facts":[]}'
-                ),
+                content=content,
             ),
             usage=ModelUsage(input_tokens=11, output_tokens=4, total_tokens=15),
         )
 
     async def close(self) -> None:
         pass
+
+
+class LongThenShortSummarizer(ContextSummarizer):
+    """第一次返回更长摘要，重试时返回短摘要。"""
+
+    def __init__(self) -> None:
+        self.initial_calls = 0
+        self.retry_calls = 0
+        self.retry_reason: str | None = None
+
+    async def summarize(
+        self,
+        previous_summary: RollingConversationSummary | None,
+        messages: Sequence[Message],
+    ) -> SummaryGenerationResult:
+        self.initial_calls += 1
+        return SummaryGenerationResult(
+            summary=RollingConversationSummary(current_objective="长" * 5_000),
+            usage=ModelUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+        )
+
+    async def retry_compact(
+        self,
+        previous_summary: RollingConversationSummary | None,
+        messages: Sequence[Message],
+        *,
+        reason: str,
+    ) -> SummaryGenerationResult:
+        self.retry_calls += 1
+        self.retry_reason = reason
+        return SummaryGenerationResult(
+            summary=RollingConversationSummary(current_objective="短目标"),
+            usage=ModelUsage(input_tokens=8, output_tokens=2, total_tokens=10),
+        )
 
 
 def _history(rounds: int) -> tuple[Message, ...]:
@@ -162,9 +205,10 @@ async def test_summary_failure_never_removes_original_messages() -> None:
     history = _history(5)
     current = (Message(role=MessageRole.USER, content="继续"),)
     prepared = (*history, *current)
+    summarizer = FakeSummarizer(error=RuntimeError("模型不可用"))
 
     result = await ConversationReducer(
-        FakeSummarizer(error=RuntimeError("模型不可用")),
+        summarizer,
         keep_recent_conversation_blocks=1,
         keep_recent_tool_rounds=0,
     ).reduce(
@@ -180,6 +224,7 @@ async def test_summary_failure_never_removes_original_messages() -> None:
     assert result.messages == prepared
     assert result.summary_state is None
     assert result.error == "RuntimeError: 模型不可用"
+    assert len(summarizer.calls) == 2
 
 
 @pytest.mark.asyncio
@@ -267,3 +312,87 @@ async def test_model_summarizer_requests_strict_json_without_tools() -> None:
     assert result.usage.total_tokens == 15
     assert adapter.requests[0].tools == ()
     assert adapter.requests[0].messages[0].role is MessageRole.SYSTEM
+
+
+@pytest.mark.asyncio
+async def test_invalid_model_summary_retries_once_and_counts_usage() -> None:
+    config = ProviderConfig(
+        provider="fake",
+        model="fake-model",
+        api_key=SecretStr("offline-key"),
+        api_style=ApiStyle.CHAT_COMPLETIONS,
+    )
+    too_many_entries = (
+        '{"current_objective":"目标","user_constraints":'
+        '["1","2","3","4","5","6","7","8","9"],"key_decisions":[],'
+        '"completed_work":[],"current_state":[],"pending_work":[],'
+        '"important_facts":[]}'
+    )
+    valid = (
+        '{"current_objective":"短目标","user_constraints":[],'
+        '"key_decisions":[],"completed_work":[],"current_state":[],'
+        '"pending_work":[],"important_facts":[]}'
+    )
+    adapter = SummaryModelAdapter(
+        config,
+        contents=[too_many_entries, valid],
+    )
+    registry = ModelAdapterRegistry(ModelSettings(_env_file=None))
+    registry.register("fake", lambda _: adapter, config=config)
+    history = _history(5)
+    current = (Message(role=MessageRole.USER, content="继续"),)
+
+    result = await ConversationReducer(
+        ModelContextSummarizer(registry, provider="fake"),
+        keep_recent_conversation_blocks=1,
+        keep_recent_tool_rounds=0,
+    ).reduce(
+        raw_history=history,
+        prepared_messages=(*history, *current),
+        current_messages=current,
+        previous_state=None,
+        initial_estimated_input_tokens=_estimate((*history, *current)),
+        target_tokens=100,
+        estimate=_estimate,
+    )
+
+    assert result.error is None
+    assert result.summary_state is not None
+    assert result.summary_state.summary.current_objective == "短目标"
+    assert result.summary_usage.total_tokens == 30
+    assert len(adapter.requests) == 2
+    assert "唯一重试机会" in (adapter.requests[1].messages[0].content or "")
+    schema_text = adapter.requests[0].messages[1].content or ""
+    assert '"maxItems":8' in schema_text
+    assert '"maxLength":80' in schema_text
+
+
+@pytest.mark.asyncio
+async def test_summary_that_does_not_reduce_retries_once() -> None:
+    history = _history(5)
+    current = (Message(role=MessageRole.USER, content="继续"),)
+    prepared = (*history, *current)
+    summarizer = LongThenShortSummarizer()
+
+    result = await ConversationReducer(
+        summarizer,
+        keep_recent_conversation_blocks=1,
+        keep_recent_tool_rounds=0,
+    ).reduce(
+        raw_history=history,
+        prepared_messages=prepared,
+        current_messages=current,
+        previous_state=None,
+        initial_estimated_input_tokens=_estimate(prepared),
+        target_tokens=100,
+        estimate=_estimate,
+    )
+
+    assert result.error is None
+    assert result.summary_state is not None
+    assert summarizer.initial_calls == 1
+    assert summarizer.retry_calls == 1
+    assert summarizer.retry_reason == (
+        "generated summary did not reduce the request context"
+    )
+    assert result.summary_usage.total_tokens == 25

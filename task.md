@@ -6,6 +6,29 @@
 
 ---
 
+## 2026-08-09
+
+### 完成：上下文压缩 V1 稳定性收口
+
+#### Bad Case
+- [x] CLI 固定传入 `max_output_tokens=1024`，覆盖 Provider 默认 4096；DeepSeek 主 Agent 保留 reasoning 时可能耗尽输出预算，Eval 与真实终端配置不一致
+- [x] 摘要紧凑约束只存在于 Prompt，模型可返回过多条目、过长文本或整体过大的合法 JSON
+- [x] 空内容、非法 JSON 和 did-not-reduce 均直接回退；上下文已经超预算时，没有一次受控修复机会
+- [x] AgentEvent 已有 `summary_error` 和预算字段，但 Eval 失败报告没有展示，需额外重跑才能归因
+
+#### 收口结果
+- [x] CLI 未显式指定 `--max-output-tokens` 时传入 None，由 Runtime 使用 `ProviderConfig.default_max_output_tokens`；显式参数继续优先
+- [x] `ModelContextSummarizer` 对目标长度、每字段安全上限、单条长度和摘要总字符数执行代码级硬校验；Prompt 建议每字段 5 条，硬上限 8 条，避免把轻微超出软目标但确实更短的有效摘要误拒绝
+- [x] `ContextSummarizer` 增加唯一重试入口；空内容、非法 JSON、Schema/长度错误或摘要不减反增时最多重试一次，第二次仍失败则完整保留原历史
+- [x] 重试提示携带精简失败原因，并再次强调优先保留用户约束、关键决定、当前状态和未完成事项
+- [x] 两次摘要请求的 Token 用量统一累加到 `AgentResult.usage`；失败响应已有用量也不会漏记
+- [x] Eval 压缩详情增加 input budget、trigger、target、summary_updated 和 summary_error
+- [x] 新增 Provider 默认输出预算、显式覆盖、非法摘要重试、did-not-reduce 重试、用量累计和失败最多重试一次测试
+- [x] 全量验证：`pytest` 294 个用例通过；`ruff`、`compileall`、`git diff --check` 通过
+- [x] DeepSeek Live Eval：eval-21、eval-23 首轮通过；eval-05 暴露“软目标 5 条被当作绝对上限”的误拒绝，区分建议目标与安全硬上限后重跑通过
+
+---
+
 ## 2026-08-06
 
 ### 完成：Run Checkpoint V1——中断边界与安全恢复证据
@@ -393,7 +416,7 @@
 - [x] 全量验证：`pytest` 290 用例通过、`ruff` 通过；live eval 三压缩场景 runs1 3/3（100%）、runs3 7/9（77.8%）
 
 #### 结论
-- [x] 生产代码已稳定：真实上下文规模下摘要必然缩短、压缩必然生效；主 agent 保留 reasoning，仅摘要请求关闭思考
+- [x] 生产代码已修复 reasoning 摘要空内容的主要原因；摘要仍可能不够紧凑，失败时完整保留原历史，后续由硬校验与单次重试继续收口
 - [x] eval 偶发失败源于 reasoning 模型概率波动（软约束 prompt 偶发不遵守 / 主 agent 偶发占位回复），非代码缺陷；后续可加“摘要 did-not-reduce 重试”进一步降低
 
 ---

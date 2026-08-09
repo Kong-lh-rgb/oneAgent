@@ -31,7 +31,11 @@ from .reducers import (
     ToolReductionResult,
     build_summary_candidate,
 )
-from .summarizer import ContextSummarizer, ModelContextSummarizer
+from .summarizer import (
+    ContextSummarizer,
+    ModelContextSummarizer,
+    SummaryGenerationError,
+)
 from .summary import (
     SUMMARY_MESSAGE_NAME,
     ConversationSummaryState,
@@ -69,6 +73,7 @@ __all__ = [
     "ToolReducer",
     "ToolReductionResult",
     "SummaryGenerationResult",
+    "SummaryGenerationError",
     "SQLiteConversationSummaryStore",
     "build_budget_policy",
     "build_model_capability_registry",
