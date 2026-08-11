@@ -607,6 +607,9 @@ class AgentRuntime:
                 )
                 if task_message is not None:
                     task_context = task_message.content or ""
+            recalled_memory_revisions = _recalled_memory_revisions(
+                result.tool_calls
+            )
             reflection_input = MemoryReflectionInput(
                 run_id=result.run_id,
                 conversation_id=conversation_id,
@@ -616,7 +619,7 @@ class AgentRuntime:
                     result.tool_calls,
                     max_chars=reflector.config.max_tool_context_chars,
                 ),
-                recalled_memory_ids=_recalled_memory_ids(result.tool_calls),
+                recalled_memory_ids=tuple(recalled_memory_revisions),
                 core_memory=core_memory,
                 memory_index=memory_index,
                 task_context=task_context,
@@ -632,12 +635,16 @@ class AgentRuntime:
             mutation_applied = False
             if decision.action is ReflectionAction.UPDATE:
                 memory_id = decision.memory_id
-                if memory_id not in reflection_input.recalled_memory_ids:
+                expected_revision = recalled_memory_revisions.get(memory_id or "")
+                if expected_revision is None:
                     raise ValueError(
                         "reflection update requires memory.read success in current run"
                     )
-                record = await manager.update(
+                record = await manager.update_if_revision(
                     memory_id or "",
+                    expected_revision=expected_revision,
+                    title=decision.title or "",
+                    summary=decision.summary or "",
                     content=decision.content or "",
                     reason=decision.reason,
                 )
@@ -1139,10 +1146,12 @@ def _reflection_tool_context(
     return tuple(items)
 
 
-def _recalled_memory_ids(records: Sequence[ToolCallRecord]) -> tuple[str, ...]:
-    """返回本轮确实成功读到完整正文的普通 Memory ID。"""
+def _recalled_memory_revisions(
+    records: Sequence[ToolCallRecord],
+) -> dict[str, int]:
+    """返回本轮确实读到的 Memory ID 与当时的语义 revision。"""
 
-    recalled: list[str] = []
+    recalled: dict[str, int] = {}
     for record in records:
         if record.tool_call.name != "memory.read" or not record.result.success:
             continue
@@ -1162,14 +1171,16 @@ def _recalled_memory_ids(records: Sequence[ToolCallRecord]) -> tuple[str, ...]:
         except (json.JSONDecodeError, TypeError):
             continue
         normalized = memory_id.strip().upper()
+        revision = output.get("revision") if isinstance(output, dict) else None
         if (
             isinstance(output, dict)
             and output.get("found") is True
             and output.get("id") == normalized
-            and normalized not in recalled
+            and isinstance(revision, int)
+            and revision > 0
         ):
-            recalled.append(normalized)
-    return tuple(recalled)
+            recalled[normalized] = revision
+    return recalled
 
 
 class _EventEmitter:

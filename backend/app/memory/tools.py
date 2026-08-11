@@ -58,6 +58,7 @@ class MemoryReadTool(BaseTool):
             "found": True,
             "id": record.id,
             "title": record.title,
+            "revision": record.revision,
             "content": record.render_full(),
         }
 
@@ -145,31 +146,19 @@ class MemoryCreateTool(BaseTool):
             raise ValueError("'summary' must be a non-empty string")
         if not isinstance(content, str) or not content.strip():
             raise ValueError("'content' must be a non-empty string")
-        record = await self._manager.create(
+        record = await self._manager.create_if_capacity(
             title=title,
             summary=summary,
             content=content,
         )
+        if record is None:
+            raise ValueError("active memory capacity is full")
         result: dict[str, Any] = {
             "id": record.id,
             "title": record.title,
             "summary": record.summary,
+            "revision": record.revision,
         }
-        if await self._manager.maintenance_required():
-            candidates = await self._manager.retention_candidates()
-            result["maintenance_required"] = True
-            result["candidates"] = [
-                {
-                    "id": item.id,
-                    "title": item.title,
-                    "access_count": item.access_count,
-                }
-                for item in candidates
-            ]
-            result["maintenance_instruction"] = (
-                "active memory exceeds capacity. Choose KEEP, MERGE or ARCHIVE "
-                "for each candidate, and act with memory.update / memory.archive."
-            )
         return result
 
 
@@ -184,8 +173,8 @@ class MemoryUpdateTool(BaseTool):
         return ToolDefinition(
             name="memory.update",
             description=(
-                "修正一条已有长期记忆的正文。当新信息只是旧记忆的更新时应优先"
-                "使用 update 而不是 create 新记忆，避免产生重复记忆。"
+                "基于最近一次读取的 revision，替换已有长期记忆的标题、Recall "
+                "Cue 和完整正文。新信息属于旧主题时优先 update，避免重复记忆。"
             ),
             parameters={
                 "type": "object",
@@ -198,12 +187,32 @@ class MemoryUpdateTool(BaseTool):
                         "type": "string",
                         "description": "修正后的完整正文。",
                     },
+                    "title": {
+                        "type": "string",
+                        "description": "修正后的完整标题。",
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": "修正后的完整 Recall Cue。",
+                    },
+                    "expected_revision": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "最近一次 memory.read 返回的 revision。",
+                    },
                     "reason": {
                         "type": "string",
                         "description": "更新原因（留痕）。",
                     },
                 },
-                "required": ["memory_id", "content", "reason"],
+                "required": [
+                    "memory_id",
+                    "title",
+                    "summary",
+                    "content",
+                    "reason",
+                    "expected_revision",
+                ],
                 "additionalProperties": False,
             },
             strict=False,
@@ -211,20 +220,38 @@ class MemoryUpdateTool(BaseTool):
 
     async def execute(self, arguments: dict[str, Any]) -> dict[str, Any]:
         memory_id = arguments.get("memory_id")
+        title = arguments.get("title")
+        summary = arguments.get("summary")
         content = arguments.get("content")
         reason = arguments.get("reason")
+        expected_revision = arguments.get("expected_revision")
         if not isinstance(memory_id, str) or not memory_id.strip():
             raise ValueError("'memory_id' must be a non-empty string")
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError("'title' must be a non-empty string")
+        if not isinstance(summary, str) or not summary.strip():
+            raise ValueError("'summary' must be a non-empty string")
         if not isinstance(content, str) or not content.strip():
             raise ValueError("'content' must be a non-empty string")
         if not isinstance(reason, str) or not reason.strip():
             raise ValueError("'reason' must be a non-empty string")
-        record = await self._manager.update(
+        if not isinstance(expected_revision, int) or expected_revision < 1:
+            raise ValueError("'expected_revision' must be a positive integer")
+        record = await self._manager.update_if_revision(
             memory_id,
+            expected_revision=expected_revision,
+            title=title,
+            summary=summary,
             content=content,
             reason=reason,
         )
-        return {"id": record.id, "updated": True}
+        return {
+            "id": record.id,
+            "title": record.title,
+            "summary": record.summary,
+            "revision": record.revision,
+            "updated": True,
+        }
 
 
 class MemoryArchiveTool(BaseTool):

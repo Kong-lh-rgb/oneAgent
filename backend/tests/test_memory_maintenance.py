@@ -122,11 +122,16 @@ async def _manager(path: Path) -> MemoryManager:
 
 async def _fill(manager: MemoryManager, count: int) -> None:
     for index in range(1, count + 1):
-        await manager.create(
-            title=f"记忆 {index}",
-            summary=f"cue {index}",
-            content=f"完整正文 {index}",
-        )
+        values = {
+            "title": f"记忆 {index}",
+            "summary": f"cue {index}",
+            "content": f"完整正文 {index}",
+        }
+        if index <= manager.max_active:
+            await manager.create(**values)
+        else:
+            # 模拟旧版本或人工导入留下的超容量数据。
+            await manager.store.create(**values)
 
 
 def _runtime(

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 
 import pytest
@@ -44,16 +44,20 @@ class FakeAdapter(ModelAdapter):
         responses: Sequence[ModelResponse | Exception],
         *,
         delay_seconds: float = 0.0,
+        before_return: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         super().__init__(config)
         self.responses = list(responses)
         self.delay_seconds = delay_seconds
+        self.before_return = before_return
         self.requests: list[ModelRequest] = []
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         self.requests.append(request)
         if self.delay_seconds:
             await asyncio.sleep(self.delay_seconds)
+        if self.before_return is not None:
+            await self.before_return()
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
@@ -206,6 +210,8 @@ async def test_reflection_update_decision_does_not_write_store(
     (manager.memory_dir / "INDEX.md").write_text("stale", encoding="utf-8")
     decision = (
         '{"action":"update","memory_id":"m001",'
+        '"title":"Memory 架构决定",'
+        '"summary":"普通记忆由运行后反思统一沉淀",'
         '"content":"新决定：普通记忆改由 Post-Run Reflector 写入。",'
         '"reason":"本轮改变了已有架构决定"}'
     )
@@ -249,6 +255,8 @@ async def test_reflection_update_requires_current_run_memory_read(
         [
             _response(
                 '{"action":"update","memory_id":"M001",'
+                '"title":"已有决定",'
+                '"summary":"模型根据 cue 猜测的错误更新",'
                 '"content":"模型根据 cue 猜测的替代正文",'
                 '"reason":"错误地尝试更新"}'
             )
@@ -420,6 +428,8 @@ async def test_runtime_successful_memory_read_authorizes_reflection_update(
         [
             _response(
                 '{"action":"update","memory_id":"M001",'
+                '"title":"项目长期记忆方向",'
+                '"summary":"普通记忆由运行后反思模型沉淀",'
                 '"content":"新方向：普通记忆由运行后反思模型沉淀。",'
                 '"reason":"本轮更新了已有架构决定"}'
             )
@@ -444,10 +454,95 @@ async def test_runtime_successful_memory_read_authorizes_reflection_update(
     assert result.ok is True
     updated = await manager.store.load(record.id)
     assert updated is not None
+    assert updated.title == "项目长期记忆方向"
+    assert updated.summary == "普通记忆由运行后反思模型沉淀"
     assert "运行后反思模型" in updated.content
-    assert "OneAgent 的长期记忆方向" in (
+    assert "普通记忆由运行后反思模型沉淀" in (
         await manager.index.load() or ""
     )
+
+
+@pytest.mark.asyncio
+async def test_runtime_rejects_reflection_update_after_concurrent_change(
+    tmp_path: Path,
+) -> None:
+    manager = await _manager(tmp_path / "memory")
+    record = await manager.create(
+        title="项目方向",
+        summary="旧方向",
+        content="初始正文",
+    )
+
+    async def concurrent_update() -> None:
+        await manager.update(
+            record.id,
+            title="并发更新标题",
+            summary="并发更新 cue",
+            content="另一个 Run 已经更新",
+            reason="并发测试",
+        )
+
+    main = FakeAdapter(
+        _config("main", "main-model"),
+        [
+            ModelResponse(
+                id="read-response",
+                provider="main",
+                model="main-model",
+                message=Message(
+                    role=MessageRole.ASSISTANT,
+                    tool_calls=(
+                        ToolCall(
+                            id="read-memory-1",
+                            name="memory.read",
+                            arguments={"memory_id": record.id},
+                        ),
+                    ),
+                ),
+            ),
+            _response("主任务完成", provider="main", model="main-model"),
+        ],
+    )
+    reflect = FakeAdapter(
+        _config("reflect", "reflection-model"),
+        [
+            _response(
+                '{"action":"update","memory_id":"M001",'
+                '"title":"过期标题","summary":"过期 cue",'
+                '"content":"基于旧 revision 的正文",'
+                '"reason":"模拟过期更新"}'
+            )
+        ],
+        before_return=concurrent_update,
+    )
+    registry = _registry(main=main, reflect=reflect)
+    tools = ToolRegistry()
+    register_memory_tools(tools, manager)
+    events = InMemoryEventHandler()
+    runtime = AgentRuntime(
+        registry,
+        tools,
+        provider="main",
+        memory_manager=manager,
+        memory_reflector=PostRunMemoryReflector(
+            registry,
+            config=_reflection_config(),
+        ),
+    )
+
+    result = await runtime.run("读取并更新已有方向", event_handler=events)
+
+    assert result.ok is True
+    current = await manager.store.load(record.id)
+    assert current is not None
+    assert current.content == "另一个 Run 已经更新"
+    failed = next(
+        event
+        for event in events.events
+        if event.type is AgentEventType.MEMORY_REFLECTION_FAILED
+    )
+    assert failed.reflection_error is not None
+    assert "revision conflict" in failed.reflection_error
 
 
 @pytest.mark.asyncio

@@ -51,6 +51,7 @@ class MemoryRecord(BaseModel):
     updated_at: datetime
     last_accessed_at: datetime
     access_count: int = Field(default=0, ge=0)
+    revision: int = Field(default=1, ge=1)
     status: MemoryStatus = MemoryStatus.ACTIVE
     last_update_reason: str | None = None
     archive_reason: str | None = None
@@ -124,6 +125,7 @@ class MemoryRecord(BaseModel):
             "updated_at": _iso(self.updated_at),
             "last_accessed_at": _iso(self.last_accessed_at),
             "access_count": self.access_count,
+            "revision": self.revision,
             "status": self.status.value,
         }
         if self.last_update_reason is not None:
@@ -184,6 +186,8 @@ def parse_memory_markdown(text: str) -> MemoryRecord:
         updated_at=_parse_iso(str(data["updated_at"])),
         last_accessed_at=_parse_iso(str(data["last_accessed_at"])),
         access_count=int(data.get("access_count", 0)),
+        # 兼容引入 revision 前创建的 Markdown 记忆。
+        revision=int(data.get("revision", 1)),
         status=MemoryStatus(str(data.get("status", MemoryStatus.ACTIVE.value))),
         last_update_reason=data.get("last_update_reason"),
         archive_reason=data.get("archive_reason"),

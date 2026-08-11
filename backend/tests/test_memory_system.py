@@ -6,6 +6,7 @@ Runtime 注入、Memory Policy 与语义工具。
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from app.memory import (
     MemoryManager,
     MemoryRecord,
     MemoryStatus,
+    parse_memory_markdown,
     register_memory_tools,
     register_memory_write_tools,
 )
@@ -247,7 +249,57 @@ async def test_update_changes_content(memory_root: Path) -> None:
     updated = await manager.update(record.id, content="新内容", reason="修正事实")
 
     assert updated.content == "新内容"
+    assert updated.revision == record.revision + 1
     assert (await manager.read(record.id)).content == "新内容"
+
+
+@pytest.mark.asyncio
+async def test_update_changes_recall_cue_and_rebuilds_index(
+    memory_root: Path,
+) -> None:
+    manager = await _manager(memory_root)
+    record = await manager.create(title="旧标题", summary="旧 cue", content="旧正文")
+
+    updated = await manager.update_if_revision(
+        record.id,
+        expected_revision=record.revision,
+        title="新标题",
+        summary="新 cue",
+        content="新正文",
+        reason="架构已经变化",
+    )
+
+    index = await manager.index.load() or ""
+    assert updated.title == "新标题"
+    assert updated.summary == "新 cue"
+    assert "[M001] 新标题" in index
+    assert "Cue: 新 cue" in index
+    assert "旧 cue" not in index
+
+
+@pytest.mark.asyncio
+async def test_update_rejects_stale_revision_without_changing_file_or_index(
+    memory_root: Path,
+) -> None:
+    manager = await _manager(memory_root)
+    record = await manager.create(title="标题", summary="cue", content="初始正文")
+    await manager.update(record.id, content="并发写入", reason="另一个 Run")
+    memory_path = memory_root / "active" / f"{record.id}.md"
+    before_file = memory_path.read_text(encoding="utf-8")
+    before_index = await manager.index.load()
+
+    with pytest.raises(ValueError, match="revision conflict"):
+        await manager.update_if_revision(
+            record.id,
+            expected_revision=record.revision,
+            title="过期标题",
+            summary="过期 cue",
+            content="过期正文",
+            reason="过期 Run",
+        )
+
+    assert memory_path.read_text(encoding="utf-8") == before_file
+    assert await manager.index.load() == before_index
 
 
 @pytest.mark.asyncio
@@ -378,6 +430,24 @@ async def test_update_refreshes_updated_at(memory_root: Path) -> None:
     assert updated.updated_at >= before
 
 
+def test_legacy_memory_without_revision_defaults_to_first_revision() -> None:
+    now = datetime.now(UTC)
+    record = MemoryRecord(
+        id="M001",
+        title="旧记忆",
+        summary="旧格式",
+        content="正文",
+        created_at=now,
+        updated_at=now,
+        last_accessed_at=now,
+    )
+    legacy = record.render_markdown().replace("revision: 1\n", "")
+
+    loaded = parse_memory_markdown(legacy)
+
+    assert loaded.revision == 1
+
+
 # ----------------------------------------------------------------------
 # INDEX 投影
 # ----------------------------------------------------------------------
@@ -452,20 +522,38 @@ async def test_active_below_limit_does_not_require_maintenance(
 
 
 @pytest.mark.asyncio
-async def test_26th_memory_triggers_maintenance(memory_root: Path) -> None:
+async def test_26th_memory_is_rejected_by_hard_capacity(memory_root: Path) -> None:
     manager = await _manager(memory_root)
-    for index in range(26):
+    for index in range(25):
         await manager.create(title=f"m{index}", summary=f"s{index}", content="c")
 
-    assert await manager.store.count_active() == 26
-    assert await manager.maintenance_required() is True
+    with pytest.raises(ValueError, match="capacity is full"):
+        await manager.create(title="m25", summary="s25", content="c")
+
+    assert await manager.store.count_active() == 25
+    assert await manager.maintenance_required() is False
 
 
 @pytest.mark.asyncio
-async def test_model_directed_maintenance_can_restore_capacity(
+async def test_two_managers_share_capacity_lock(memory_root: Path) -> None:
+    first_manager = MemoryManager(memory_root, max_active=1)
+    second_manager = MemoryManager(memory_root, max_active=1)
+    await asyncio.gather(first_manager.initialize(), second_manager.initialize())
+
+    first, second = await asyncio.gather(
+        first_manager.create_if_capacity(title="A", summary="A", content="A"),
+        second_manager.create_if_capacity(title="B", summary="B", content="B"),
+    )
+
+    assert await first_manager.active_count() == 1
+    assert sum(record is not None for record in (first, second)) == 1
+
+
+@pytest.mark.asyncio
+async def test_internal_create_tool_cannot_bypass_capacity(
     memory_root: Path,
 ) -> None:
-    """模型收到维护信号后执行 ARCHIVE，最终必须恢复到容量上限。"""
+    """即使显式注册内部写工具，也不能绕过 active 硬上限。"""
 
     manager = await _manager(memory_root)
     registry = ToolRegistry()
@@ -474,17 +562,12 @@ async def test_model_directed_maintenance_can_restore_capacity(
     for index in range(25):
         await manager.create(title=f"m{index}", summary=f"s{index}", content="c")
 
-    result = await registry.get("memory.create").execute(
-        {"title": "第 26 条", "summary": "触发维护", "content": "新内容"}
-    )
+    with pytest.raises(ValueError, match="capacity is full"):
+        await registry.get("memory.create").execute(
+            {"title": "第 26 条", "summary": "触发维护", "content": "新内容"}
+        )
 
-    assert result["maintenance_required"] is True
-    candidate = result["candidates"][0]["id"]
-    await registry.get("memory.archive").execute(
-        {"memory_id": candidate, "reason": "模型维护决定：不再保留"}
-    )
     assert await manager.store.count_active() == 25
-    assert await manager.maintenance_required() is False
 
 
 @pytest.mark.asyncio
@@ -634,7 +717,14 @@ async def test_memory_update_and_archive_tools(memory_root: Path) -> None:
     record = await manager.create(title="第一", summary="cue-1", content="旧正文")
 
     updated = await registry.get("memory.update").execute(
-        {"memory_id": record.id, "content": "新正文", "reason": "修正"}
+        {
+            "memory_id": record.id,
+            "title": "更新后的标题",
+            "summary": "更新后的 cue",
+            "content": "新正文",
+            "reason": "修正",
+            "expected_revision": record.revision,
+        }
     )
     assert updated["updated"] is True
 

@@ -36,8 +36,9 @@ Return strict JSON and no markdown fence:
 {"action":"none|create|update","memory_id":null,"title":null,
 "summary":null,"content":null,"reason":"..."}
 
-CREATE requires title, summary, content. UPDATE requires memory_id and complete
-replacement content. NONE must leave all mutation fields null."""
+CREATE requires title, summary, content. UPDATE requires memory_id plus the
+complete replacement title, summary, and content so the recall cue stays aligned
+with the body. NONE must leave all mutation fields null."""
 
 
 class PostRunMemoryReflector:

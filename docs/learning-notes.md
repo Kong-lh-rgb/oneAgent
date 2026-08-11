@@ -975,3 +975,23 @@ FINAL_ANSWER
 → 若存在历史超限，执行有界 Maintenance
 → AGENT_COMPLETED
 ```
+
+## 24. Memory Update：读取资格、语义版本与文件锁是三层保护
+
+“本轮成功 `memory.read`”只解决语义资格：Reflection 确实看过目标记忆的完整
+内容。它不能证明从读取到写入期间文件没有变化。普通 Memory 因此增加独立递增的
+`revision`；read 返回 revision 但不会递增它，update/archive 才递增。Runtime 从真实
+ToolResult 提取 `{memory_id: revision}`，Reflection UPDATE 必须携带完整 title、summary、
+content，Harness 只在当前 revision 与读取版本一致时写入。冲突只让后处理失败，不覆盖
+其他 Run 的新内容，也不改变主 AgentResult。
+
+UPDATE 必须替换完整 Recall Cue，而不只是正文。`INDEX.md` 由 title + summary 生成；若
+正文已经改成新架构、Index 仍显示旧摘要，后续主模型可能根本不会召回这条记忆。因此
+title、summary、content 构成一次语义版本，写入后在同一 mutation 临界区重建 Index。
+旧 Markdown 没有 revision 时按 1 加载，完成向后兼容；这不是数据库迁移任务。
+
+锁也分层。`asyncio.Lock` 只能串行化单个 Manager 实例，无法协调两个 CLI 进程。当前
+Manager 在 mutation 时先取得实例锁，再在 Memory 目录的 `.memory.lock` 上取得 POSIX
+`flock`，覆盖 ID 分配、容量检查、文件原子替换和 Index 重建。macOS/Linux 因而共享同一
+写入边界；Windows 暂时退化为实例锁。底层 `MemoryStore` 仍保留无容量的原始文件能力，
+只用于旧数据导入和修复；Runtime 与模型工具必须经过执行硬上限的 MemoryManager。

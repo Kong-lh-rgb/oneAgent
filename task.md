@@ -8,6 +8,25 @@
 
 ## 2026-08-12
 
+### 收口：普通 Memory 更新一致性与跨实例写入保护
+
+#### Bad Case
+- [x] Reflection UPDATE 只能替换正文，标题和 Recall Cue 保持旧值，导致 `INDEX.md` 与真实内容语义脱节
+- [x] “本轮成功读取”只能证明模型看过旧内容，无法阻止另一个 Run 在读取后先更新同一记忆并被后写者覆盖
+- [x] `asyncio.Lock` 只保护单个 `MemoryManager` 实例，两个 CLI 进程或独立 Manager 仍可能同时分配 ID、抢占最后容量或覆盖临时文件
+- [x] `MemoryManager.create` 与内部 `memory.create` 仍可绕过 Reflection 使用的硬容量路径，25 条上限没有在统一领域入口成立
+- [ ] Reflection 输入仍采用有界字符截断；重要证据落在截断区时可能漏记，需要后续用评测数据决定是否改成结构化摘取
+- [ ] Windows 暂无标准库 `flock`，当前退化为单实例锁；POSIX/macOS/Linux 使用目录级 `.memory.lock`
+
+#### 修复结果
+- [x] `MemoryRecord` 新增持久化 `revision`，旧 Markdown 缺少字段时兼容迁移为 revision 1；更新和归档时递增
+- [x] `memory.read` 返回当时的 revision；Runtime 同时验证成功读取结果和 revision，Reflection 基于旧版本更新时明确冲突并保持文件不变
+- [x] Reflection UPDATE 现在必须返回完整 title、summary、content；Store 原子更新三者并重建 Index，Recall Cue 不再滞后于正文
+- [x] `MemoryManager` 增加目录级文件锁；同目录的独立 Manager 与 POSIX 进程共享 mutation 临界区，覆盖 create/read/update/archive/Core mutation 与 Index 重建
+- [x] `MemoryManager.create` 和内部 `memory.create` 都执行硬容量检查；只有低层 `MemoryStore` 可用于旧数据迁移和溢出修复测试
+- [x] 新增旧格式 revision 迁移、Index cue 同步、陈旧 update 失败不改文件、Runtime 并发冲突隔离、双 Manager 争抢容量和内部工具不可越限测试
+- [x] 全量验证：`pytest` 371 个用例通过；`ruff`、`compileall` 和 `git diff --check` 通过
+
 ### 完成：普通长期记忆容量维护闭环
 
 #### Bad Case

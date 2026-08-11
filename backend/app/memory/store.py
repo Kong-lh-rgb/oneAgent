@@ -114,22 +114,33 @@ class MemoryStore:
         self,
         memory_id: str,
         *,
+        title: str | None = None,
+        summary: str | None = None,
         content: str,
         reason: str,
+        expected_revision: int | None = None,
     ) -> MemoryRecord:
-        """更新记忆正文，刷新 ``updated_at``。"""
+        """更新记忆与 Recall Cue，并可拒绝基于旧 revision 的覆盖。"""
 
         record = await self.load(memory_id)
         if record is None:
             raise KeyError(f"memory '{memory_id}' not found")
         if record.status is not MemoryStatus.ACTIVE:
             raise ValueError("only active memory can be updated")
+        if expected_revision is not None and record.revision != expected_revision:
+            raise ValueError(
+                f"memory '{record.id}' revision conflict: "
+                f"expected {expected_revision}, current {record.revision}"
+            )
         updated = MemoryRecord(
             **{
                 **record.model_dump(),
+                "title": title if title is not None else record.title,
+                "summary": summary if summary is not None else record.summary,
                 "content": content,
                 "last_update_reason": reason,
                 "updated_at": datetime.now(UTC),
+                "revision": record.revision + 1,
             }
         )
         await self._write(updated)
@@ -149,6 +160,7 @@ class MemoryStore:
                 "status": MemoryStatus.ARCHIVED,
                 "archive_reason": reason,
                 "updated_at": datetime.now(UTC),
+                "revision": record.revision + 1,
             }
         )
         source = self.active_dir / f"{record.id}.md"

@@ -138,10 +138,10 @@ class ReflectionDecision(BaseModel):
             return self
         if not self.memory_id or not _MEMORY_ID_RE.fullmatch(self.memory_id.upper()):
             raise ValueError("update decision requires a valid memory_id")
-        if not self.content:
-            raise ValueError("update decision requires content")
-        if self.title is not None or self.summary is not None:
-            raise ValueError("update decision cannot change title or summary")
+        if not self.title or not self.summary or not self.content:
+            raise ValueError(
+                "update decision requires title, summary, and complete content"
+            )
         return self.model_copy(update={"memory_id": self.memory_id.upper()})
 
 
