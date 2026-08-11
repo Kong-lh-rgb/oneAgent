@@ -20,7 +20,10 @@ from app.memory import (
     MemoryRecord,
     MemoryStatus,
     register_memory_tools,
+    register_memory_write_tools,
 )
+from app.models.types import ToolCall
+from app.tools.hooks import ToolExecutionContext
 from app.tools.registry import ToolRegistry
 
 
@@ -54,6 +57,72 @@ async def test_core_update_and_load_roundtrip(memory_root: Path) -> None:
     await manager.core.update("用户长期偏好：使用中文交流。")
 
     assert "使用中文交流" in await manager.core.load()
+
+
+@pytest.mark.asyncio
+async def test_core_upsert_preserves_legacy_and_other_entries(
+    memory_root: Path,
+) -> None:
+    manager = await _manager(memory_root)
+    await manager.core.update("# Core Memory\n\n人工维护的长期约束。")
+
+    first, first_created = await manager.upsert_core(
+        key="communication.language",
+        value="始终使用中文交流。",
+        reason="用户明确表达长期语言偏好",
+        source_statement="以后都使用中文和我交流",
+    )
+    _, second_created = await manager.upsert_core(
+        key="code.comment_language",
+        value="代码注释使用中文。",
+        reason="用户明确表达长期代码约束",
+        source_statement="以后代码注释都使用中文",
+    )
+    updated, created_again = await manager.upsert_core(
+        key="communication.language",
+        value="默认使用简体中文交流。",
+        reason="用户更新了语言偏好",
+        source_statement="以后默认使用简体中文",
+    )
+
+    visible = await manager.core.load()
+    raw = (memory_root / "CORE.md").read_text(encoding="utf-8")
+    assert first.key == "communication.language"
+    assert first_created is True
+    assert second_created is True
+    assert created_again is False
+    assert updated.value == "默认使用简体中文交流。"
+    assert "人工维护的长期约束" in visible
+    assert "默认使用简体中文交流" in visible
+    assert "代码注释使用中文" in visible
+    assert "始终使用中文交流" not in visible
+    assert "用户更新了语言偏好" in raw
+    assert "以后默认使用简体中文" in raw
+    assert "用户更新了语言偏好" not in visible
+    assert "以后默认使用简体中文" not in visible
+
+
+@pytest.mark.asyncio
+async def test_core_upsert_failure_does_not_change_file(memory_root: Path) -> None:
+    manager = MemoryManager(memory_root, max_core_tokens=20)
+    await manager.initialize()
+    await manager.upsert_core(
+        key="communication.language",
+        value="中文",
+        reason="用户明确要求",
+        source_statement="以后使用中文",
+    )
+    before = (memory_root / "CORE.md").read_text(encoding="utf-8")
+
+    with pytest.raises(ValueError, match="core memory exceeds token limit"):
+        await manager.upsert_core(
+            key="identity.background",
+            value="非常长的身份信息" * 100,
+            reason="用户明确更新身份",
+            source_statement="我的身份背景已经更新",
+        )
+
+    assert (memory_root / "CORE.md").read_text(encoding="utf-8") == before
 
 
 @pytest.mark.asyncio
@@ -401,6 +470,7 @@ async def test_model_directed_maintenance_can_restore_capacity(
     manager = await _manager(memory_root)
     registry = ToolRegistry()
     register_memory_tools(registry, manager)
+    register_memory_write_tools(registry, manager)
     for index in range(25):
         await manager.create(title=f"m{index}", summary=f"s{index}", content="c")
 
@@ -464,12 +534,17 @@ async def test_context_messages_include_core_index_policy(memory_root: Path) -> 
     assert not any(
         "完整正文" in (message.content or "") for message in messages
     )
+    core_message = next(
+        message for message in messages if message.name == CORE_MEMORY_MESSAGE_NAME
+    )
+    assert (core_message.content or "").count("# Core Memory") == 1
 
 
 @pytest.mark.asyncio
 async def test_policy_message_guides_model_directed_recall() -> None:
     assert "memory.read" in MEMORY_POLICY_PROMPT
-    assert "do not store it" in MEMORY_POLICY_PROMPT
+    assert "after the run" in MEMORY_POLICY_PROMPT
+    assert "core_memory.update" in MEMORY_POLICY_PROMPT
     assert "Task" in MEMORY_POLICY_PROMPT
     assert "Skills" in MEMORY_POLICY_PROMPT
 
@@ -494,7 +569,9 @@ def test_write_policy_rejects_transient_and_procedural_content() -> None:
 
 
 @pytest.mark.asyncio
-async def test_register_memory_tools_exposes_five_tools(memory_root: Path) -> None:
+async def test_register_memory_tools_exposes_only_main_agent_tools(
+    memory_root: Path,
+) -> None:
     manager = await _manager(memory_root)
     registry = ToolRegistry()
 
@@ -503,9 +580,8 @@ async def test_register_memory_tools_exposes_five_tools(memory_root: Path) -> No
     assert set(registry.names()) == {
         "memory.read",
         "memory.list",
-        "memory.create",
-        "memory.update",
-        "memory.archive",
+        "core_memory.update",
+        "core_memory.remove",
     }
 
 
@@ -514,6 +590,7 @@ async def test_memory_create_and_read_tools_roundtrip(memory_root: Path) -> None
     manager = await _manager(memory_root)
     registry = ToolRegistry()
     register_memory_tools(registry, manager)
+    register_memory_write_tools(registry, manager)
 
     created = await registry.get("memory.create").execute(
         {
@@ -553,6 +630,7 @@ async def test_memory_update_and_archive_tools(memory_root: Path) -> None:
     manager = await _manager(memory_root)
     registry = ToolRegistry()
     register_memory_tools(registry, manager)
+    register_memory_write_tools(registry, manager)
     record = await manager.create(title="第一", summary="cue-1", content="旧正文")
 
     updated = await registry.get("memory.update").execute(
@@ -572,6 +650,7 @@ async def test_memory_tools_validate_required_arguments(memory_root: Path) -> No
     manager = await _manager(memory_root)
     registry = ToolRegistry()
     register_memory_tools(registry, manager)
+    register_memory_write_tools(registry, manager)
 
     with pytest.raises(ValueError, match="'memory_id'"):
         await registry.get("memory.read").execute({})
@@ -579,3 +658,96 @@ async def test_memory_tools_validate_required_arguments(memory_root: Path) -> No
         await registry.get("memory.create").execute(
             {"title": "t", "summary": "s", "content": ""}
         )
+
+
+@pytest.mark.asyncio
+async def test_core_update_tool_requires_exact_current_user_statement(
+    memory_root: Path,
+) -> None:
+    manager = await _manager(memory_root)
+    registry = ToolRegistry()
+    register_memory_tools(registry, manager)
+    tool = registry.get("core_memory.update")
+    arguments = {
+        "key": "communication.language",
+        "value": "始终使用中文交流。",
+        "reason": "用户明确表达全局长期偏好",
+        "explicit_user_statement": "以后都使用中文和我交流",
+    }
+
+    with pytest.raises(ValueError, match="copied exactly"):
+        await tool.execute_with_context(
+            arguments,
+            ToolExecutionContext(
+                tool_call=ToolCall(id="core-1", name="core_memory.update"),
+                user_input="请帮我检查代码",
+            ),
+        )
+
+    assert await manager.core.load() == ""
+
+
+@pytest.mark.asyncio
+async def test_core_update_tool_writes_through_harness(memory_root: Path) -> None:
+    manager = await _manager(memory_root)
+    registry = ToolRegistry()
+    register_memory_tools(registry, manager)
+    tool = registry.get("core_memory.update")
+    statement = "以后都使用中文和我交流"
+
+    result = await tool.execute_with_context(
+        {
+            "key": "communication.language",
+            "value": "始终使用中文交流。",
+            "reason": "用户明确表达全局长期偏好",
+            "explicit_user_statement": statement,
+        },
+        ToolExecutionContext(
+            tool_call=ToolCall(id="core-1", name="core_memory.update"),
+            user_input=f"请记住，{statement}。",
+        ),
+    )
+
+    assert result["created"] is True
+    assert "始终使用中文交流" in await manager.core.load()
+
+
+@pytest.mark.asyncio
+async def test_core_remove_tool_requires_current_user_revocation(
+    memory_root: Path,
+) -> None:
+    manager = await _manager(memory_root)
+    await manager.upsert_core(
+        key="communication.language",
+        value="始终使用中文交流。",
+        reason="用户明确表达全局长期偏好",
+        source_statement="以后都使用中文和我交流",
+    )
+    registry = ToolRegistry()
+    register_memory_tools(registry, manager)
+    tool = registry.get("core_memory.remove")
+    arguments = {
+        "key": "communication.language",
+        "reason": "用户撤销了长期语言偏好",
+        "explicit_user_statement": "不用再记住语言偏好",
+    }
+
+    with pytest.raises(ValueError, match="copied exactly"):
+        await tool.execute_with_context(
+            arguments,
+            ToolExecutionContext(
+                tool_call=ToolCall(id="core-2", name="core_memory.remove"),
+                user_input="继续检查代码",
+            ),
+        )
+
+    result = await tool.execute_with_context(
+        arguments,
+        ToolExecutionContext(
+            tool_call=ToolCall(id="core-3", name="core_memory.remove"),
+            user_input="不用再记住语言偏好",
+        ),
+    )
+
+    assert result == {"key": "communication.language", "removed": True}
+    assert "始终使用中文交流" not in await manager.core.load()

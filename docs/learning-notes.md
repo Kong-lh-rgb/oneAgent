@@ -660,8 +660,9 @@ Agent 测评同时包含两类证据：模型回答属于非确定性文本，�
 
 ## 18. 长期记忆：Sparse, Model-Directed Long-Term Memory
 
-长期记忆的目标不是做一个 RAG 知识库，而是一个稀疏、增长缓慢、由模型自己决定
-何时回忆 / 创建 / 更新 / 归档的记忆系统。
+长期记忆的目标不是做一个 RAG 知识库，而是一个稀疏、增长缓慢的记忆系统。Main
+Agent 决定何时回忆和处理显式 Core 变更；独立的 Post-Run Reflector 判断普通记忆的
+创建与更新。
 
 ### 18.1 核心原则
 
@@ -687,13 +688,15 @@ Memory Index、暴露语义工具、维护元数据、执行容量管理。
 - INDEX.md 是 Memory Store 的 projection：每次 create/update/archive 后自动重建，
   只含 id + title + Cue，不保存完整正文。
 
-### 18.3 语义工具
+### 18.3 Main Agent 的语义工具
 
 - `memory.read(id)`：读取完整记忆，自动 access_count+1 / last_accessed_at；
 - `memory.list()`：返回 active 记忆的 id/title/summary（Recall Cue），不含正文；
-- `memory.create(title, summary, content)`：创建，遵守 Write Policy；
-- `memory.update(id, content, reason)`：优先更新而非重复创建；
-- `memory.archive(id, reason)`：移到 archive，从 Index 消失。
+- `core_memory.update(key, value, reason, explicit_user_statement)`：模型判断信息应常驻 Core，Harness 验证当前用户原话并按 key 更新；
+- `core_memory.remove(key, reason, explicit_user_statement)`：用户明确撤销 Core 信息时按 key 移除。
+
+`memory.create/update/archive` 的类和 Manager API 仍保留，但不注册到 Main Agent 的默认
+Tool Registry。普通记忆写入由 Post-Run Reflector 通过 Manager 完成。
 
 ### 18.4 Model-directed recall
 
@@ -721,8 +724,8 @@ active 数 > 25 时触发 Maintenance：启发式（最近使用时间 + 使用�
 
 ### 18.7 Markdown Store 的一致性边界
 
-模型可以自主决定 read/create/update/archive，但文件系统不变量仍属于 Harness。所有
-Memory ID 必须先按 `M` 加至少三位数字校验，不能直接拼成路径；active 目录只能存在
+模型负责 recall、Core 归属和 Reflection 的普通记忆语义判断，但文件系统不变量仍属于
+Harness。所有 Memory ID 必须先按 `M` 加至少三位数字校验，不能直接拼成路径；active 目录只能存在
 status=active 且 Front Matter ID 与文件名一致的记录，archived 记录不能通过普通 update
 重新进入 active。模型提供的 update/archive reason 必须写入 Front Matter，不能只在
 一次 ToolCall 参数中短暂出现。
@@ -743,9 +746,66 @@ create 同时分配 M001，或 read 的访问计数覆盖 update 的正文。
 
 容量维护存在一个不可消除的边界：算法不能自动删除，最终 KEEP/MERGE/ARCHIVE 又交给
 模型，因此模型出错或 Run 在 max_steps 处停止时，active 可能暂时大于 25。当前 Policy
-要求模型收到 maintenance_required 后在结束前完成维护，并用闭环测试验证正常路径。
-若未来要求 25 是任何时刻都不可突破的硬不变量，就必须改成“满额时先维护、再创建”或
-让 Runtime 拒绝结束；这属于产品语义选择，不能同时宣称完全模型决策和无条件自动收敛。
+Post-Run Reflector 在第 26 条 CREATE 后复用现有 Maintenance 计算并记录 candidates，但
+V1 不执行 ARCHIVE。若未来要求 25 是任何时刻都不可突破的硬不变量，就必须增加独立
+Maintenance 执行者，或改成“满额时先维护、再创建”；不能在不改变现有语义的情况下
+同时保证无条件自动收敛。
+
+### 18.8 Core Memory：模型决定层级，Harness 约束写入
+
+Core 与普通 Memory 的归属是语义判断，应该由模型通过选择不同工具表达：主题相关的
+历史背景进入普通 Memory；每次 Run 都必须知道的稳定身份、全局长期偏好和跨任务约束
+进入 `core_memory.update`。Harness 不重新用关键词分类，但也不向模型开放整份 CORE.md
+覆盖能力，而是按稳定小写点分 key 执行 upsert。
+
+Core 更新必须携带 `explicit_user_statement`，并逐字出现在本轮 Runtime 保存的原始
+`user_input` 中。这个校验不能证明模型对语义的理解一定正确，但可以证明证据确实来自
+当前用户，而不是旧历史、Assistant 回答、工具输出或模型自己的推断。key/value/reason、
+用户原话和时间写入 CORE.md Front Matter 供审计；实际 System Prompt 只注入生成后的
+可见 Core 正文，避免审计元数据消耗常驻 Token。
+
+按 key 更新同时解决了整文件覆盖问题：修改 `communication.language` 不会删除
+`code.comment_language`，首次结构化更新也会保留用户原先手写的 Core Markdown。
+Harness 在合并完成后对最终可见正文重新执行 2000 Token 校验，只有校验通过才原子替换
+CORE.md；失败时原文件保持不变。同一 Run 通过 ToolResult 知道写入结果，后续 Run 再把
+新 Core 作为临时 System Message 注入，不写入聊天原始历史。
+
+### 18.9 Post-Run Reflection：把“完成任务”和“沉淀过去”拆开
+
+主 Agent 的 step loop 只负责完成当前请求、按需 `memory.read`，以及处理用户本轮明确
+表达的 Core 更新或撤销。只有 Run 以 `FINAL_ANSWER` 正常结束并完成 checkpoint 后，
+Runtime 才同步调用 Post-Run Reflector。MODEL_ERROR、CONTEXT_ERROR、MAX_STEPS、重复
+工具调用、中断和未完成 Run 都不会沉淀普通长期记忆。
+
+Reflector 是独立模型调用，不拥有业务工具，也不继续回答用户。它看到的是有界的本轮
+视图：当前用户输入、最终回答、截断后的工具调用/结果、Core、Index 与当前会话 Task
+快照。它必须返回严格的单动作 JSON：`none`、`create` 或 `update`。V1 不允许一次 Run
+生成多条 mutation，也不让 Reflector 修改 Core、Task、Skill 或主动 archive。
+
+结构化决策仍是不可信输入。Pydantic 禁止额外字段，并按动作校验必填/禁填组合；通过
+后只能调用既有 `MemoryManager.create/update`，不能直接写 Markdown。这样语义自主权在
+模型，ID、长度、状态、原子写入和 INDEX projection 等不变量仍由 Harness 保证。
+
+Reflection 可用 `MEMORY_REFLECTION_PROVIDER/MODEL` 选择独立廉价模型，并单独限制
+temperature、max output、timeout 和工具上下文大小；留空时才回退主模型。provider
+错误、超时、空响应和非法 JSON 只产生 Reflection failed event，已经成功的 AgentResult
+保持成功。同步 V1 会增加 final answer 的可见延迟，但保证下一轮开始前一定看到更新后的
+INDEX；未来若改后台队列，需要重新处理“一致性”和“低延迟”的取舍。
+
+Post-Run 仍属于同一个 Run 生命周期，所以 `AGENT_COMPLETED/FAILED` 必须是最后一个事件，
+不能在 Reflection 之前提前宣告终止。最终顺序是：Agent Loop 产出 Result、checkpoint
+落盘、Reflection 完成或跳过、发射 terminal event、`run()` 返回。这样 CLI 不会先打印
+“完成”再继续工作，Trace 的 `completed_at` 也覆盖完整同步生命周期。
+
+UPDATE 比 CREATE 更危险，因为错误替换会丢失原正文。Prompt 中“只有掌握完整旧记忆才
+更新”不是可靠不变量；Runtime 必须从当前 Run 成功且 `found=true` 的 `memory.read`
+ToolResult 生成 `recalled_memory_ids`。Reflector 只能更新该集合中的 ID，仅看到 INDEX cue
+时即使模型输出合法 UPDATE JSON，Harness 仍拒绝 mutation 并保留原文件。
+
+主任务模型和 Reflection 模型也必须在观测层分开。每条 Reflection event 自己保存
+provider、model、usage、latency 和 error，供 Memory Eval 分析；但 `agent_runs` 汇总表的
+provider/model/Token 只由 Main Agent 生命周期事件更新。否则最后运行的小模型会覆盖
+主模型身份，Reflection Token 较大时还会篡改主任务用量，造成成本和质量分析失真。
 
 ## 19. 模型输出属于不可信输入：摘要稳定性收口
 

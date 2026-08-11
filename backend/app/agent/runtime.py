@@ -15,7 +15,7 @@ from app.checkpoint import (
     render_checkpoint_context,
 )
 from app.context import ContextManager, ConversationSummaryState
-from app.memory import MemoryManager
+from app.memory import MemoryManager, MemoryReflectionInput, PostRunMemoryReflector
 from app.models.registry import ModelAdapterRegistry
 from app.models.types import (
     Message,
@@ -81,6 +81,7 @@ class AgentRuntime:
         task_context_provider: TaskContextProvider | None = None,
         checkpoint_store: SQLiteCheckpointStore | None = None,
         memory_manager: MemoryManager | None = None,
+        memory_reflector: PostRunMemoryReflector | None = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -88,6 +89,8 @@ class AgentRuntime:
             raise ValueError("max_output_tokens must be at least 1")
         if max_tool_rounds is not None and max_tool_rounds < 1:
             raise ValueError("max_tool_rounds must be at least 1")
+        if memory_reflector is not None and memory_manager is None:
+            raise ValueError("memory_reflector requires memory_manager")
 
         self._model_registry = model_registry
         self._tool_registry = tool_registry
@@ -100,6 +103,7 @@ class AgentRuntime:
         self._task_context_provider = task_context_provider
         self._checkpoint_store = checkpoint_store
         self._memory_manager = memory_manager
+        self._memory_reflector = memory_reflector
         self._tool_executor = tool_executor or ToolExecutor(
             tool_registry,
             approval_gate=approval_gate,
@@ -132,6 +136,11 @@ class AgentRuntime:
         """
 
         run_id = uuid4().hex
+        emitter = _EventEmitter(
+            handler=event_handler or NullEventHandler(),
+            run_id=run_id,
+            conversation_id=conversation_id,
+        )
         try:
             recovery_checkpoint: RunCheckpoint | None = None
             if self._checkpoint_store is not None:
@@ -155,7 +164,7 @@ class AgentRuntime:
                     user_input,
                     history=history,
                     conversation_id=conversation_id,
-                    event_handler=event_handler,
+                    emitter=emitter,
                     summary_state=summary_state,
                     recovery_checkpoint=recovery_checkpoint,
                 )
@@ -190,6 +199,25 @@ class AgentRuntime:
                             else None
                         ),
                     )
+            await self._run_post_run_memory_reflection(
+                result,
+                user_input=user_input,
+                conversation_id=conversation_id,
+                emitter=emitter,
+            )
+            await emitter.emit(
+                (
+                    AgentEventType.AGENT_COMPLETED
+                    if result.ok
+                    else AgentEventType.AGENT_FAILED
+                ),
+                step=result.steps or None,
+                message=result.final_message,
+                usage=result.usage,
+                stop_reason=result.stop_reason,
+                error=result.error,
+                result=result,
+            )
             return result
         finally:
             with suppress(Exception):
@@ -202,17 +230,12 @@ class AgentRuntime:
         *,
         history: Sequence[Message],
         conversation_id: str | None,
-        event_handler: AgentEventHandler | None,
+        emitter: _EventEmitter,
         summary_state: ConversationSummaryState | None,
         recovery_checkpoint: RunCheckpoint | None,
     ) -> AgentResult:
         """执行一次已分配 Run ID 的 Agent 循环。"""
 
-        emitter = _EventEmitter(
-            handler=event_handler or NullEventHandler(),
-            run_id=run_id,
-            conversation_id=conversation_id,
-        )
         tool_event_hook = AgentEventHook(emitter)
         user_message = Message(role=MessageRole.USER, content=user_input)
         # 原始消息用于 AgentResult 和数据库持久化，始终保留完整工具协议。
@@ -239,12 +262,10 @@ class AgentRuntime:
             stop_reason: AgentStopReason,
             *,
             step: int,
-            provider: str | None,
-            model: str | None,
         ) -> AgentResult:
-            """构造失败结果并发射统一的 Agent 失败事件。"""
+            """构造失败结果；公共 run() 在后置阶段结束后发射终止事件。"""
 
-            result = self._result(
+            return self._result(
                 run_id=run_id,
                 final_message=self._error_message(error),
                 messages=messages,
@@ -256,18 +277,6 @@ class AgentRuntime:
                 error=error,
                 summary_state=current_summary_state,
             )
-            await emitter.emit(
-                AgentEventType.AGENT_FAILED,
-                step=step,
-                provider=provider,
-                model=model,
-                message=result.final_message,
-                usage=usage,
-                stop_reason=result.stop_reason,
-                error=result.error,
-                result=result,
-            )
-            return result
 
         for step in range(1, self._max_steps + 1):
             if self._checkpoint_store is not None:
@@ -293,8 +302,6 @@ class AgentRuntime:
                     ModelInvocationError(f"{type(exc).__name__}: {exc}"),
                     AgentStopReason.MODEL_ERROR,
                     step=step,
-                    provider=_provider_name(self._provider),
-                    model=self._model,
                 )
 
             try:
@@ -342,8 +349,6 @@ class AgentRuntime:
                     ContextPreparationError(f"{type(exc).__name__}: {exc}"),
                     AgentStopReason.CONTEXT_ERROR,
                     step=step,
-                    provider=resolved_provider,
-                    model=resolved_model,
                 )
 
             try:
@@ -361,8 +366,6 @@ class AgentRuntime:
                     ContextPreparationError(f"{type(exc).__name__}: {exc}"),
                     AgentStopReason.CONTEXT_ERROR,
                     step=step,
-                    provider=resolved_provider,
-                    model=resolved_model,
                 )
 
             current_summary_state = context_decision.summary_state
@@ -412,8 +415,6 @@ class AgentRuntime:
                     ),
                     AgentStopReason.CONTEXT_ERROR,
                     step=step,
-                    provider=resolved_provider,
-                    model=resolved_model,
                 )
 
             try:
@@ -430,8 +431,6 @@ class AgentRuntime:
                     ModelInvocationError(f"{type(exc).__name__}: {exc}"),
                     AgentStopReason.MODEL_ERROR,
                     step=step,
-                    provider=resolved_provider,
-                    model=resolved_model,
                 )
 
             usage = _add_usage(usage, response.usage)
@@ -447,7 +446,7 @@ class AgentRuntime:
             )
             tool_calls_in_message = assistant_message.tool_calls
             if not tool_calls_in_message:
-                result = self._result(
+                return self._result(
                     run_id=run_id,
                     final_message=assistant_message,
                     messages=messages,
@@ -458,17 +457,6 @@ class AgentRuntime:
                     usage=usage,
                     summary_state=current_summary_state,
                 )
-                await emitter.emit(
-                    AgentEventType.AGENT_COMPLETED,
-                    step=step,
-                    provider=response.provider,
-                    model=response.model,
-                    message=assistant_message,
-                    usage=usage,
-                    stop_reason=result.stop_reason,
-                    result=result,
-                )
-                return result
 
             round_records: list[ToolCallRecord] = []
             if self._checkpoint_store is not None:
@@ -487,7 +475,7 @@ class AgentRuntime:
 
                 if repeated_count >= 3:
                     error = RepeatedToolCallError(tool_call.name)
-                    result = self._result(
+                    return self._result(
                         run_id=run_id,
                         final_message=self._error_message(error),
                         messages=messages,
@@ -499,25 +487,13 @@ class AgentRuntime:
                         error=error,
                         summary_state=current_summary_state,
                     )
-                    await emitter.emit(
-                        AgentEventType.AGENT_FAILED,
-                        step=step,
-                        provider=response.provider,
-                        model=response.model,
-                        message=result.final_message,
-                        tool_call=tool_call,
-                        usage=usage,
-                        stop_reason=result.stop_reason,
-                        error=result.error,
-                        result=result,
-                    )
-                    return result
 
                 result = await self._execute_tool(
                     tool_call,
                     context=ToolExecutionContext(
                         run_id=run_id,
                         conversation_id=conversation_id,
+                        user_input=user_input,
                         step=step,
                         tool_call=tool_call,
                     ),
@@ -543,7 +519,7 @@ class AgentRuntime:
             )
 
         error = MaxStepsExceededError(self._max_steps)
-        result = self._result(
+        return self._result(
             run_id=run_id,
             final_message=self._error_message(error),
             messages=messages,
@@ -555,18 +531,101 @@ class AgentRuntime:
             error=error,
             summary_state=current_summary_state,
         )
+
+    async def _run_post_run_memory_reflection(
+        self,
+        result: AgentResult,
+        *,
+        user_input: str,
+        conversation_id: str | None,
+        emitter: _EventEmitter,
+    ) -> None:
+        """正常完成后同步反思普通 Memory；失败不改变主 AgentResult。"""
+
+        reflector = self._memory_reflector
+        if reflector is None:
+            return
+        if not reflector.enabled:
+            await emitter.emit(
+                AgentEventType.MEMORY_REFLECTION_SKIPPED,
+                reflection_triggered=False,
+                reflection_skip_reason="disabled",
+            )
+            return
+        if result.stop_reason is not AgentStopReason.FINAL_ANSWER:
+            await emitter.emit(
+                AgentEventType.MEMORY_REFLECTION_SKIPPED,
+                reflection_triggered=False,
+                reflection_skip_reason=f"stop_reason={result.stop_reason.value}",
+            )
+            return
         await emitter.emit(
-            AgentEventType.AGENT_FAILED,
-            step=self._max_steps,
-            provider=_provider_name(self._provider),
-            model=self._model,
-            message=result.final_message,
-            usage=usage,
-            stop_reason=result.stop_reason,
-            error=result.error,
-            result=result,
+            AgentEventType.MEMORY_REFLECTION_STARTED,
+            reflection_triggered=True,
+            provider=reflector.provider_hint,
+            model=reflector.model_hint,
         )
-        return result
+        try:
+            if self._memory_manager is None:
+                raise RuntimeError("memory manager unavailable")
+            core_memory, memory_index = (
+                await self._memory_manager.reflection_context()
+            )
+            task_context = ""
+            if self._task_context_provider is not None:
+                task_message = await self._task_context_provider.message_for(
+                    conversation_id
+                )
+                if task_message is not None:
+                    task_context = task_message.content or ""
+            reflection_input = MemoryReflectionInput(
+                run_id=result.run_id,
+                conversation_id=conversation_id,
+                user_input=user_input[:8_000],
+                final_answer=(result.final_message.content or "")[:12_000],
+                tool_context=_reflection_tool_context(
+                    result.tool_calls,
+                    max_chars=reflector.config.max_tool_context_chars,
+                ),
+                recalled_memory_ids=_recalled_memory_ids(result.tool_calls),
+                core_memory=core_memory,
+                memory_index=memory_index,
+                task_context=task_context,
+            )
+            outcome = await reflector.run(reflection_input)
+        except Exception as exc:
+            await emitter.emit(
+                AgentEventType.MEMORY_REFLECTION_FAILED,
+                reflection_triggered=True,
+                provider=reflector.provider_hint,
+                model=reflector.model_hint,
+                reflection_error=f"{type(exc).__name__}: {exc}",
+            )
+            return
+        payload = {
+            "reflection_triggered": outcome.triggered,
+            "reflection_action": (
+                outcome.action.value if outcome.action is not None else None
+            ),
+            "reflection_duration_ms": outcome.duration_ms,
+            "reflection_error": outcome.error,
+            "reflection_memory_id": outcome.memory_id,
+            "reflection_maintenance_required": outcome.maintenance_required,
+            "reflection_retention_candidate_ids": (
+                outcome.retention_candidate_ids
+            ),
+            "provider": outcome.provider,
+            "model": outcome.model,
+            "usage": outcome.usage,
+        }
+        await emitter.emit(
+            (
+                AgentEventType.MEMORY_REFLECTION_FAILED
+                if outcome.error is not None
+                else AgentEventType.MEMORY_REFLECTION_COMPLETED
+            ),
+            **payload,
+        )
 
     async def run_stream(
         self,
@@ -713,6 +772,73 @@ def _add_usage(total: ModelUsage, current: ModelUsage) -> ModelUsage:
         output_tokens=total.output_tokens + current.output_tokens,
         total_tokens=total.total_tokens + current.total_tokens,
     )
+
+
+def _reflection_tool_context(
+    records: Sequence[ToolCallRecord],
+    *,
+    max_chars: int,
+) -> tuple[str, ...]:
+    """为 Reflector 提供有界工具摘要，不默认复制全部原始输出。"""
+
+    if max_chars <= 0:
+        return ()
+    remaining = max_chars
+    items: list[str] = []
+    for record in records:
+        payload = json.dumps(
+            {
+                "tool": record.tool_call.name,
+                "arguments": record.tool_call.arguments,
+                "success": record.result.success,
+                "output": record.result.output,
+                "error": record.result.error,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        )
+        if len(payload) > remaining:
+            payload = payload[:remaining]
+        if payload:
+            items.append(payload)
+            remaining -= len(payload)
+        if remaining <= 0:
+            break
+    return tuple(items)
+
+
+def _recalled_memory_ids(records: Sequence[ToolCallRecord]) -> tuple[str, ...]:
+    """返回本轮确实成功读到完整正文的普通 Memory ID。"""
+
+    recalled: list[str] = []
+    for record in records:
+        if record.tool_call.name != "memory.read" or not record.result.success:
+            continue
+        arguments: Any = record.tool_call.arguments
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                continue
+        if not isinstance(arguments, dict):
+            continue
+        memory_id = arguments.get("memory_id")
+        if not isinstance(memory_id, str):
+            continue
+        try:
+            output = json.loads(record.result.output or "")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        normalized = memory_id.strip().upper()
+        if (
+            isinstance(output, dict)
+            and output.get("found") is True
+            and output.get("id") == normalized
+            and normalized not in recalled
+        ):
+            recalled.append(normalized)
+    return tuple(recalled)
 
 
 class _EventEmitter:

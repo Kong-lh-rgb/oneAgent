@@ -35,6 +35,8 @@ from app.memory import (
     CORE_MEMORY_MESSAGE_NAME,
     MEMORY_INDEX_MESSAGE_NAME,
     MEMORY_POLICY_MESSAGE_NAME,
+    MemoryManager,
+    register_memory_tools,
 )
 from app.models.adapter import ModelAdapter
 from app.models.config import ModelSettings, ProviderConfig
@@ -1294,6 +1296,52 @@ async def test_runtime_injects_memory_context_without_persisting() -> None:
         }
         for message in result.messages
     )
+
+
+@pytest.mark.asyncio
+async def test_runtime_core_update_uses_current_user_and_next_run_loads_it(
+    tmp_path,
+) -> None:
+    statement = "以后都使用中文和我交流"
+    core_call = ToolCall(
+        id="core-update-1",
+        name="core_memory.update",
+        arguments={
+            "key": "communication.language",
+            "value": "始终使用中文交流。",
+            "reason": "用户明确表达全局长期偏好",
+            "explicit_user_statement": statement,
+        },
+    )
+    registry, adapter = fake_registry(
+        [
+            model_response(tool_calls=(core_call,)),
+            model_response(content="已经记住你的长期偏好。"),
+            model_response(content="你好，我会继续使用中文。"),
+        ]
+    )
+    memory = MemoryManager(tmp_path / "memory")
+    await memory.initialize()
+    tools = ToolRegistry()
+    register_memory_tools(tools, memory)
+    runtime = AgentRuntime(
+        registry,
+        tools,
+        provider="fake",
+        memory_manager=memory,
+    )
+
+    first = await runtime.run(f"请记住，{statement}。")
+    second = await runtime.run("你好")
+
+    assert first.tool_calls[0].result.success is True
+    assert second.content == "你好，我会继续使用中文。"
+    injected_core = next(
+        message
+        for message in adapter.requests[2].messages
+        if message.name == CORE_MEMORY_MESSAGE_NAME
+    )
+    assert "始终使用中文交流" in (injected_core.content or "")
 
 
 @pytest.mark.asyncio

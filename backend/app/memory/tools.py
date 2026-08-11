@@ -1,8 +1,9 @@
-"""长期记忆语义化工具：供模型主动 Recall / Create / Update / Archive。
+"""长期记忆语义化工具：在线 Recall、显式 Core 操作与内部普通写入。
 
 这些工具不是数据库 CRUD，而是语义化 Memory API。读取是显式的
 （Model-directed Recall）：模型看到 Recall Cue 后决定何时 ``memory.read``。
-Runtime 不做 query-driven 自动检索或 Top-K 注入。
+Runtime 不做 query-driven 自动检索或 Top-K 注入。普通 Memory 写工具保留为
+内部能力，但不注册到 Main Agent 的默认 Tool Registry。
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from typing import Any
 from app.models.types import ToolDefinition
 
 from ..tools.base import BaseTool
+from ..tools.hooks import ToolExecutionContext
 from ..tools.registry import ToolRegistry
 from .manager import MemoryManager
 from .prompts import MEMORY_WRITE_POLICY
@@ -268,24 +270,185 @@ class MemoryArchiveTool(BaseTool):
         return {"id": record.id, "status": record.status.value}
 
 
+class CoreMemoryUpdateTool(BaseTool):
+    """根据当前用户的明确长期陈述，按 key 创建或更新 Core Memory。"""
+
+    def __init__(self, manager: MemoryManager) -> None:
+        self._manager = manager
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="core_memory.update",
+            description=(
+                "按稳定 key 创建或更新一条 Core Memory。是否属于 Core 由你判断，"
+                "但只能用于当前用户明确表达的稳定身份、全局长期偏好或跨任务长期"
+                "约束；项目背景和重要历史决定由 Run 后的 Memory Reflection 处理，"
+                "当前任务状态属于 Task，可复用流程属于 Skills。必须逐字复制当前"
+                "用户消息中的明确原话作为 explicit_user_statement；不要根据推断"
+                "调用。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": (
+                            "稳定的小写点分 key，例如 communication.language。"
+                        ),
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "应在每次 Run 常驻的精简长期事实或约束。",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "为什么该信息属于 Core，以及本次更新原因。",
+                    },
+                    "explicit_user_statement": {
+                        "type": "string",
+                        "description": "从当前用户消息逐字复制的明确长期陈述。",
+                    },
+                },
+                "required": [
+                    "key",
+                    "value",
+                    "reason",
+                    "explicit_user_statement",
+                ],
+                "additionalProperties": False,
+            },
+            strict=False,
+        )
+
+    async def execute(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        raise ValueError("core_memory.update requires the current user message")
+
+    async def execute_with_context(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        key = _required_string(arguments, "key")
+        value = _required_string(arguments, "value")
+        reason = _required_string(arguments, "reason")
+        statement = _required_string(arguments, "explicit_user_statement")
+        user_input = context.user_input
+        if not user_input or statement not in user_input:
+            raise ValueError(
+                "'explicit_user_statement' must be copied exactly from the "
+                "current user message"
+            )
+        entry, created = await self._manager.upsert_core(
+            key=key,
+            value=value,
+            reason=reason,
+            source_statement=statement,
+        )
+        return {
+            "key": entry.key,
+            "value": entry.value,
+            "created": created,
+            "updated": not created,
+        }
+
+
+class CoreMemoryRemoveTool(BaseTool):
+    """根据当前用户明确要求移除一个按 key 管理的 Core 条目。"""
+
+    def __init__(self, manager: MemoryManager) -> None:
+        self._manager = manager
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="core_memory.remove",
+            description=(
+                "移除一个不再成立的 Core Memory 条目。只能在当前用户明确撤销"
+                "身份、全局长期偏好或跨任务约束时调用；必须逐字复制当前用户"
+                "消息中的撤销原话，不要根据推断或旧消息移除。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string",
+                        "description": "要移除的稳定小写点分 key。",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "移除原因（会保留在 Tool/Trace 记录中）。",
+                    },
+                    "explicit_user_statement": {
+                        "type": "string",
+                        "description": "从当前用户消息逐字复制的明确撤销原话。",
+                    },
+                },
+                "required": ["key", "reason", "explicit_user_statement"],
+                "additionalProperties": False,
+            },
+            strict=False,
+        )
+
+    async def execute(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        raise ValueError("core_memory.remove requires the current user message")
+
+    async def execute_with_context(
+        self,
+        arguments: dict[str, Any],
+        context: ToolExecutionContext,
+    ) -> dict[str, Any]:
+        key = _required_string(arguments, "key")
+        _required_string(arguments, "reason")
+        statement = _required_string(arguments, "explicit_user_statement")
+        user_input = context.user_input
+        if not user_input or statement not in user_input:
+            raise ValueError(
+                "'explicit_user_statement' must be copied exactly from the "
+                "current user message"
+            )
+        removed = await self._manager.remove_core(key)
+        return {"key": removed.key, "removed": True}
+
+
 def register_memory_tools(
     registry: ToolRegistry,
     manager: MemoryManager,
 ) -> None:
-    """把长期记忆语义工具注册到本地工具注册表。"""
+    """注册 Main Agent 的在线 Recall 与显式 Core 操作。"""
 
     registry.register(MemoryReadTool(manager))
     registry.register(MemoryListTool(manager))
+    registry.register(CoreMemoryUpdateTool(manager))
+    registry.register(CoreMemoryRemoveTool(manager))
+
+
+def register_memory_write_tools(
+    registry: ToolRegistry,
+    manager: MemoryManager,
+) -> None:
+    """为离线测试或未来内部 Agent 注册普通 Memory mutation 工具。"""
+
     registry.register(MemoryCreateTool(manager))
     registry.register(MemoryUpdateTool(manager))
     registry.register(MemoryArchiveTool(manager))
 
 
+def _required_string(arguments: dict[str, Any], name: str) -> str:
+    value = arguments.get(name)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"'{name}' must be a non-empty string")
+    return value.strip()
+
+
 __all__ = [
+    "CoreMemoryRemoveTool",
+    "CoreMemoryUpdateTool",
     "MemoryArchiveTool",
     "MemoryCreateTool",
     "MemoryListTool",
     "MemoryReadTool",
     "MemoryUpdateTool",
     "register_memory_tools",
+    "register_memory_write_tools",
 ]

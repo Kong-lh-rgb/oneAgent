@@ -34,6 +34,8 @@ from app.conversation import (
 from app.memory import (
     MemoryManager,
     MemoryRecord,
+    MemoryReflectionConfig,
+    PostRunMemoryReflector,
     register_memory_tools,
 )
 from app.task import (
@@ -194,6 +196,18 @@ def _print_agent_event(event: AgentEvent) -> None:
         print(
             f"{prefix} 工具权限检查完成：{event.tool_call.name} · {decision}{rule_text}"
         )
+    elif event.type is AgentEventType.MEMORY_REFLECTION_STARTED:
+        print(f"{prefix} 正在整理本轮长期记忆")
+    elif event.type is AgentEventType.MEMORY_REFLECTION_COMPLETED:
+        action = event.reflection_action or "none"
+        suffix = (
+            f" · {event.reflection_memory_id}"
+            if event.reflection_memory_id is not None
+            else ""
+        )
+        print(f"{prefix} 长期记忆整理完成：{action}{suffix}")
+    elif event.type is AgentEventType.MEMORY_REFLECTION_FAILED:
+        print(f"{prefix} 长期记忆整理失败，已跳过")
     elif event.type is AgentEventType.AGENT_COMPLETED:
         print(f"{prefix} Agent 执行完成")
     elif event.type is AgentEventType.AGENT_FAILED:
@@ -437,7 +451,23 @@ async def _run(args: argparse.Namespace) -> int:
     memory_manager = MemoryManager()
     await memory_manager.initialize()
     register_memory_tools(tool_registry, memory_manager)
-    print("长期记忆：Sparse Model-Directed Memory（CORE + INDEX + 语义工具）")
+    reflection_config = MemoryReflectionConfig()
+    memory_reflector = PostRunMemoryReflector(
+        registry,
+        memory_manager,
+        config=reflection_config,
+        default_provider=provider.value,
+        default_model=model,
+    )
+    reflection_model = memory_reflector.model_hint or "未解析"
+    reflection_provider = memory_reflector.provider_hint or "未解析"
+    reflection_status = "启用" if reflection_config.enabled else "关闭"
+    print(
+        "长期记忆：Sparse Memory（在线 Recall + 显式 Core + Post-Run Reflection）"
+    )
+    print(
+        f"记忆反思：{reflection_status} · {reflection_provider}/{reflection_model}"
+    )
     context_settings = ContextSettings()
     context_summarizer = ModelContextSummarizer(
         registry,
@@ -473,6 +503,7 @@ async def _run(args: argparse.Namespace) -> int:
         task_context_provider=TaskContextProvider(task_store),
         checkpoint_store=checkpoint_store,
         memory_manager=memory_manager,
+        memory_reflector=memory_reflector,
     )
     try:
         if args.message is not None:

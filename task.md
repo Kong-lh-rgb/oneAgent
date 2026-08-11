@@ -8,6 +8,51 @@
 
 ## 2026-08-11
 
+### 完成：普通长期记忆迁移至 Post-Run Memory Reflection
+
+#### Bad Case
+- [x] Main Agent 同时完成任务和判断普通 Memory CREATE/UPDATE/ARCHIVE，职责竞争会消耗 Agent Loop 步数并干扰最终任务
+- [x] 普通 Memory 写工具常驻 Main Agent Registry，模型可能在任务尚未完成时过早沉淀临时状态
+- [x] Reflection 若复用并写死主模型，无法用独立低成本模型，也无法单独限制输出和超时
+- [x] Reflection provider error、timeout 或非法 JSON 若沿主调用链抛出，会把已经成功的用户任务错误标成失败
+- [x] Reflection 输入若复制完整历史和全部原始工具输出，会形成新的上下文与 Token 膨胀
+- [x] `AGENT_COMPLETED/FAILED` 先于 Reflection 发出，Trace 与 CLI 会出现“Run 已结束但仍继续产生后置事件”的生命周期倒置
+- [x] UPDATE 的“必须掌握旧记忆完整正文”只写在 Prompt 中，模型仅凭 INDEX cue 也可能覆盖并丢失旧正文
+- [x] Trace 汇总无差别接受 Reflection provider/model/usage，会把 Main Agent Run 错误显示成反思小模型并污染主任务 Token 摘要
+- [ ] Reflection V1 只允许 NOOP/CREATE/UPDATE；第 26 条 CREATE 会产生现有 Maintenance 信号和 retention candidates，但普通 archive 已不在 Main Agent Registry，尚无自动收敛执行者
+
+#### 实现结果
+- [x] Main Agent 默认工具收口为 `memory.read`、可选 `memory.list`、`core_memory.update`、`core_memory.remove`；普通 create/update/archive 类保留为内部能力但不默认注册
+- [x] 新增同步 `PostRunMemoryReflector`；仅 `FINAL_ANSWER` 且 checkpoint 完成后运行，不进入 Agent step loop，其他停止原因明确记录 skipped
+- [x] Reflection 接收当前用户输入、最终回答、有界工具摘要、Core、Index 和当前会话 Task Context；严格输出单个 none/create/update 决策
+- [x] 普通写入统一复用 `MemoryManager.create/update`，保留 Markdown Store、原子写入、访问元数据、INDEX rebuild、Maintenance 与 retention 算法
+- [x] 新增独立 `MEMORY_REFLECTION_*` 配置；未指定 provider/model 时回退 Main Agent，独立限制 temperature、max output、timeout 与工具上下文字符数
+- [x] Reflection 失败只产生 failed event，不覆盖成功的 AgentResult；事件记录 action、provider/model、latency、usage、error、memory ID 和容量信号
+- [x] Agent 终止事件移动到 checkpoint 与 Reflection 之后，成为 Run 事件流中真正的最后一个 terminal event
+- [x] Runtime 从成功且 `found=true` 的 `memory.read` ToolResult 生成 `recalled_memory_ids`；Reflector UPDATE 未命中该集合时拒绝写入并保持原文件不变
+- [x] Trace 仍完整保存 Reflection 事件明细，但 Run 汇总的 provider/model/usage 只由 Main Agent 生命周期事件更新
+- [x] Core 增加显式 remove 闭环；update/remove 均要求当前用户原话证据，Harness 只修改目标 key
+- [x] 离线测试覆盖触发/跳过、默认工具边界、Core remove、NOOP/CREATE/UPDATE、独立模型、provider/JSON/timeout 隔离、INDEX rebuild 与第 26 条容量信号
+- [x] 全量验证：`pytest` 355 个用例通过；`ruff`、`compileall` 和 `git diff --check` 通过
+
+### 完成：Core Memory 模型决策与 Harness 写入闭环
+
+#### Bad Case
+- [x] CoreMemoryManager 虽能更新整份 CORE.md，但没有 Runtime 工具入口，模型只能把明确的全局长期偏好错误地写进普通 Memory
+- [x] 直接向模型暴露整份 CORE.md 覆盖能力会让一次错误调用破坏其他 Core 条目和人工维护内容
+- [x] 只让模型声称“用户明确说过”无法形成证据边界，模型可能根据旧消息、Assistant 文本或自身推断修改 Core
+- [x] 结构化 CORE.md 如果把 reason、用户原话和运行元数据全部注入模型，会浪费每次 Run 的常驻 Token
+- [x] Core 正文已经包含 `# Core Memory` 时，Manager 再次添加标题会形成重复 System Prompt 标题
+
+#### 实现结果
+- [x] 新增 `core_memory.update(key, value, reason, explicit_user_statement)`；模型判断 Core 层级，Harness 验证并执行写入
+- [x] Runtime 将当前 `user_input` 放入 ToolExecutionContext；Harness 要求 explicit_user_statement 必须逐字出现在当前用户消息中，拒绝旧消息、工具结果和模型推断作为 Core 证据
+- [x] Core 按小写点分 key 执行 upsert，只更新目标条目并保留其他结构化条目与既有人工 Markdown，不向模型暴露整文件覆盖工具
+- [x] CORE.md Front Matter 保存 value、reason、用户原话和 updated_at；每次 Run 只注入可见 Core 正文，不注入审计元数据
+- [x] 更新后重新校验 2000 Token 上限并使用原子替换；超限失败不修改原 CORE.md
+- [x] 同一 Run 通过 ToolResult 获得更新结果，下一 Run 自动加载新 Core；修复 Core 标题重复注入
+- [x] 全量验证：`pytest` 338 个用例通过；`ruff`、`compileall` 和 `git diff --check` 通过
+
 ### 收口：Sparse Memory 实现复核与文件一致性修补
 
 #### Bad Case
@@ -27,7 +72,7 @@
 - [x] archive 改为更新状态后执行同文件系统原子移动；启动时自动修复移动阶段中断留下的错位 archived 文件
 - [x] Memory 文件增加 512KB 写入上限，标题和 Recall Cue 增加紧凑长度限制；CORE.md 加载时也执行 Token 上限检查
 - [x] 普通 Memory 正文限制为 12000 字符，低于 ToolExecutor 的 20000 字符输出上限，避免创建后无法通过 memory.read 完整取回
-- [x] Memory Policy 明确要求模型在结束 Run 前处理 Maintenance；增加 26 条后由模型归档并恢复至 25 条的闭环测试
+- [x] 初版由 Main Agent 在结束 Run 前处理 Maintenance；Post-Run 重构后保留候选算法与容量信号，自动归档执行者列为未解决 Bad Case
 - [x] ToolRegistry 只允许合法的点分工具名，保留 `memory.read` 等语义命名而不放宽为任意点号组合
 - [x] 全量验证：`pytest` 333 个用例通过；`ruff`、`compileall` 和 `git diff --check` 通过
 
@@ -96,7 +141,7 @@
 - [x] 持久化改用 Markdown 文件：`CORE.md` / `INDEX.md` / `active/Mxxx.md` / `archive/`，不使用 SQLite / FTS / Embedding / Vector Search
 - [x] 只两层：Core Memory（每次 Run 注入，≤2000 tokens，不参与淘汰）+ 普通长期记忆（≤25 条）
 - [x] `INDEX.md` 是 Memory Store 的 projection，只含 Recall Cue（id+title+summary），create/update/archive 后自动重建
-- [x] 语义工具：`memory.read` / `memory.list` / `memory.create` / `memory.update` / `memory.archive`；Runtime 不做自动检索、不注入完整正文
+- [x] 初版曾向 Main Agent 暴露全部普通 Memory 写工具；现已由 Post-Run Reflection 取代，Runtime 仍不做自动检索、不注入完整正文
 - [x] 容量维护：active >25 触发，启发式选 3~5 个候选，KEEP/MERGE/ARCHIVE 由模型决定
 - [x] Core 受控更新（`CoreMemoryManager`），模型不能随意改 Core
 

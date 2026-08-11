@@ -25,6 +25,10 @@ class AgentEventType(StrEnum):
     TOOL_COMPLETED = "tool_completed"
     TOOL_APPROVAL_REQUIRED = "tool_approval_required"
     TOOL_APPROVAL_COMPLETED = "tool_approval_completed"
+    MEMORY_REFLECTION_STARTED = "memory_reflection_started"
+    MEMORY_REFLECTION_COMPLETED = "memory_reflection_completed"
+    MEMORY_REFLECTION_FAILED = "memory_reflection_failed"
+    MEMORY_REFLECTION_SKIPPED = "memory_reflection_skipped"
     AGENT_COMPLETED = "agent_completed"
     AGENT_FAILED = "agent_failed"
 
@@ -76,6 +80,14 @@ class AgentEvent(BaseModel):
     summarized_conversation_blocks: int | None = Field(default=None, ge=0)
     summary_usage: ModelUsage | None = None
     summary_error: str | None = None
+    reflection_triggered: bool | None = None
+    reflection_action: str | None = None
+    reflection_duration_ms: float | None = Field(default=None, ge=0.0)
+    reflection_error: str | None = None
+    reflection_skip_reason: str | None = None
+    reflection_memory_id: str | None = None
+    reflection_maintenance_required: bool | None = None
+    reflection_retention_candidate_ids: tuple[str, ...] = ()
 
     @field_validator("run_id")
     @classmethod

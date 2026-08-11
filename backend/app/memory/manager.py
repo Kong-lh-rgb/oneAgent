@@ -3,7 +3,7 @@
 Runtime 不直接操作文件路径，统一通过 ``MemoryManager``：
 
 - 加载 Core Memory、Memory Index 与 Memory Policy；
-- 暴露 memory.read / list / create / update / archive；
+- 为在线 Recall、显式 Core 写入与 Post-Run Reflection 提供统一 API；
 - 维护运行时元数据（access_count、last_accessed_at、updated_at）；
 - 执行容量管理与 INDEX 重建；
 - 不做任何 query-driven 自动检索或 Top-K 注入。
@@ -16,7 +16,7 @@ from pathlib import Path
 
 from app.models.types import Message, MessageRole
 
-from .core import DEFAULT_MAX_CORE_TOKENS, CoreMemoryManager
+from .core import DEFAULT_MAX_CORE_TOKENS, CoreMemoryEntry, CoreMemoryManager
 from .index import MemoryIndex
 from .maintenance import MemoryMaintenance
 from .models import MemoryRecord
@@ -72,11 +72,14 @@ class MemoryManager:
             messages: list[Message] = []
             core_text = await self.core.load()
             if core_text.strip():
+                core_content = core_text.strip()
+                if not core_content.startswith(CORE_MEMORY_HEADER):
+                    core_content = f"{CORE_MEMORY_HEADER}\n\n{core_content}"
                 messages.append(
                     Message(
                         role=MessageRole.SYSTEM,
                         name=CORE_MEMORY_MESSAGE_NAME,
-                        content=f"{CORE_MEMORY_HEADER}\n\n{core_text.strip()}",
+                        content=core_content,
                     )
                 )
             index_text = await self.index.load()
@@ -96,6 +99,14 @@ class MemoryManager:
                 )
             )
             return tuple(messages)
+
+    async def reflection_context(self) -> tuple[str, str]:
+        """返回 Post-Run Reflection 使用的 Core 正文与当前 Index。"""
+
+        async with self._lock:
+            core_text = await self.core.load()
+            index_text = await self.index.load()
+            return core_text, index_text or ""
 
     # ------------------------------------------------------------------
     # 语义 Memory API（由模型工具调用）
@@ -156,6 +167,30 @@ class MemoryManager:
             record = await self.store.archive(memory_id, reason=reason)
             await self._rebuild_index()
             return record
+
+    async def upsert_core(
+        self,
+        *,
+        key: str,
+        value: str,
+        reason: str,
+        source_statement: str,
+    ) -> tuple[CoreMemoryEntry, bool]:
+        """按 key 更新 Core；模型不能覆盖整份 CORE.md。"""
+
+        async with self._lock:
+            return await self.core.upsert(
+                key=key,
+                value=value,
+                reason=reason,
+                source_statement=source_statement,
+            )
+
+    async def remove_core(self, key: str) -> CoreMemoryEntry:
+        """移除单个 Core 条目；调用方负责验证当前用户明确证据。"""
+
+        async with self._lock:
+            return await self.core.remove(key)
 
     # ------------------------------------------------------------------
     # 容量管理

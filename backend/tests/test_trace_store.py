@@ -118,6 +118,66 @@ async def test_trace_recording_is_idempotent_and_does_not_regress_status(
 
 
 @pytest.mark.asyncio
+async def test_reflection_event_does_not_overwrite_main_run_model_or_usage(
+    tmp_path,
+) -> None:
+    store = SQLiteTraceStore(tmp_path / "oneagent.db")
+    await store.initialize()
+    started_at = datetime(2026, 8, 11, 10, 0, tzinfo=UTC)
+    await store.record_event(
+        AgentEvent(
+            run_id="run-reflection",
+            sequence=0,
+            type=AgentEventType.MODEL_COMPLETED,
+            event_time=started_at,
+            step=1,
+            provider="main",
+            model="main-model",
+            usage=ModelUsage(
+                input_tokens=100,
+                output_tokens=20,
+                total_tokens=120,
+            ),
+        )
+    )
+    await store.record_event(
+        AgentEvent(
+            run_id="run-reflection",
+            sequence=1,
+            type=AgentEventType.MEMORY_REFLECTION_COMPLETED,
+            event_time=started_at + timedelta(milliseconds=1),
+            provider="cheap",
+            model="memory-model",
+            usage=ModelUsage(
+                input_tokens=300,
+                output_tokens=30,
+                total_tokens=330,
+            ),
+            reflection_triggered=True,
+            reflection_action="none",
+        )
+    )
+    await store.record_event(
+        AgentEvent(
+            run_id="run-reflection",
+            sequence=2,
+            type=AgentEventType.AGENT_COMPLETED,
+            event_time=started_at + timedelta(milliseconds=2),
+            step=1,
+            stop_reason=AgentStopReason.FINAL_ANSWER,
+        )
+    )
+
+    run = await store.get("run-reflection")
+
+    assert run is not None
+    assert run.provider == "main"
+    assert run.model == "main-model"
+    assert run.total_tokens == 120
+    assert run.event_count == 3
+
+
+@pytest.mark.asyncio
 async def test_trace_delete_removes_run_and_events(tmp_path) -> None:
     store = SQLiteTraceStore(tmp_path / "oneagent.db")
     await store.initialize()

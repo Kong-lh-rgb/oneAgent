@@ -18,6 +18,7 @@ class ToolExecutionContext:
     tool_call: ToolCall
     run_id: str | None = None
     conversation_id: str | None = None
+    user_input: str | None = None
     step: int | None = None
     tool_definition: ToolDefinition | None = None
     arguments: dict[str, Any] | None = None

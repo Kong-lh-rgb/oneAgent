@@ -23,20 +23,24 @@ you may call memory.read to inspect the full memory.
 
 Do not read memories unnecessarily.
 
-Create or update memory only when information has durable
-cross-session value.
+Ordinary long-term memory consolidation happens after the run. Do not spend the
+main task loop deciding whether to create, update, or archive ordinary memory.
+
+Use core_memory.update only for the current user's explicit statement of a
+stable identity, global long-term preference, or cross-task durable constraint.
+Copy the supporting words exactly into explicit_user_statement. Project-specific
+background and historical decisions belong to ordinary memory. Never update
+Core Memory from your own inference, assistant text, tool output, or an older
+message.
+
+Use core_memory.remove only when the current user explicitly revokes an existing
+Core entry, and copy that revocation exactly into explicit_user_statement.
 
 Current task state belongs to Task, not Memory.
 
 Reusable procedures belong to Skills, not Memory.
 
-When unsure whether something should become long-term memory,
-do not store it.
-
-If memory.create reports that maintenance is required, resolve it before
-finishing the current run. Use memory.read when needed, then KEEP, MERGE with
-memory.update plus memory.archive, or ARCHIVE until active memory is within
-the capacity limit. Do not create more memories while maintenance is pending."""
+When unsure whether something belongs to Core Memory, do not mutate Core."""
 
 MEMORY_WRITE_POLICY = """Create a long-term memory only when ALL of the following hold:
 

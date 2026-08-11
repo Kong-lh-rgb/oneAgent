@@ -220,7 +220,16 @@ class SQLiteTraceStore:
             status = RunStatus.FAILED
             completed_at = event.event_time.isoformat()
 
-        usage = event.usage
+        updates_main_model = event.type in {
+            AgentEventType.AGENT_STARTED,
+            AgentEventType.MODEL_STARTED,
+            AgentEventType.MODEL_COMPLETED,
+            AgentEventType.AGENT_COMPLETED,
+            AgentEventType.AGENT_FAILED,
+        }
+        provider = event.provider if updates_main_model else None
+        model = event.model if updates_main_model else None
+        usage = event.usage if updates_main_model else None
         await database.execute(
             """
             UPDATE agent_runs
@@ -244,8 +253,8 @@ class SQLiteTraceStore:
                 event.conversation_id,
                 status.value if status else None,
                 completed_at,
-                event.provider,
-                event.model,
+                provider,
+                model,
                 event.step or 0,
                 event.stop_reason.value if event.stop_reason else None,
                 usage.input_tokens if usage else 0,
