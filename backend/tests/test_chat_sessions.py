@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Sequence
+from datetime import UTC, datetime
 
 import pytest
 
@@ -13,9 +14,13 @@ from app.context import (
     SQLiteConversationSummaryStore,
 )
 from app.conversation import SQLiteConversationStore
+from app.memory import MemoryItem, MemorySource, MemoryStatus, MemoryType
 from app.models.chat import (
     _load_or_create_conversation,
     _parse_args,
+    _parse_memory_statuses,
+    _print_memories,
+    _print_memory,
     _print_permission_rules,
     _remove_permission_rule,
     _send_message,
@@ -353,3 +358,42 @@ def test_cli_accepts_explicit_output_tokens(monkeypatch) -> None:
     args = _parse_args()
 
     assert args.max_output_tokens == 8192
+
+
+def test_cli_parses_memory_status_filter() -> None:
+    assert _parse_memory_statuses("") == (
+        MemoryStatus.CANDIDATE,
+        MemoryStatus.ACTIVE,
+    )
+    assert _parse_memory_statuses("archived") == (MemoryStatus.ARCHIVED,)
+    assert set(_parse_memory_statuses("all")) == set(MemoryStatus)
+    with pytest.raises(ValueError, match="未知记忆状态"):
+        _parse_memory_statuses("unknown")
+
+
+def test_cli_prints_memory_list_and_details(capsys) -> None:
+    now = datetime.now(UTC)
+    memory = MemoryItem(
+        id="a" * 32,
+        namespace="project:oneagent",
+        memory_type=MemoryType.FACT,
+        key="project.database",
+        content="OneAgent 使用 SQLite",
+        normalized_content="oneagent使用sqlite",
+        fingerprint="f" * 64,
+        status=MemoryStatus.CANDIDATE,
+        importance=0.8,
+        confidence=0.9,
+        source=MemorySource(session_id="session-1", run_id="run-1"),
+        created_at=now,
+        updated_at=now,
+    )
+
+    _print_memories((memory,))
+    _print_memory(memory)
+
+    output = capsys.readouterr().out
+    assert "aaaaaaaa" in output
+    assert "[candidate]" in output
+    assert "project.database" in output
+    assert "来源 Run: run-1" in output

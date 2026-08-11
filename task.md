@@ -6,6 +6,29 @@
 
 ---
 
+## 2026-08-11
+
+### 完成：Memory CLI 管理闭环
+
+#### Bad Case
+- [x] Candidate 已能持久化，但用户无法在终端查看和确认，生命周期只有内部 API，没有可操作入口
+- [x] 若直接按全库 ID 前缀查询，配置范围之外的 namespace 会参与歧义判断，甚至泄露记忆存在性
+- [x] 已经 active 的记忆可被重复 confirm，已 archived 的记忆可重复 archive，导致 revision 和确认计数失真
+- [x] 管理操作如果不携带 expected_revision，可能覆盖刚刚发生的状态变化
+
+#### 实现结果
+- [x] CLI 新增 `/memories [状态|all]`；默认展示 candidate + active，也可按 candidate/active/superseded/archived 过滤
+- [x] CLI 新增 `/memory <ID>`，展示完整 ID、状态、类型、namespace、key、revision、重要度/置信度、访问/使用/确认次数、来源和替代链
+- [x] CLI 新增 `/memory-confirm <ID>` 和 `/memory-archive <ID>`；Memory 未启用时给出明确配置提示，不把命令发送给模型
+- [x] Store 增加受 namespace 限制的完整 ID/唯一前缀解析，先过滤允许范围再判断唯一性；标识符只接受 4–32 位十六进制
+- [x] 生命周期收紧为 candidate 才能 confirm，candidate/active 才能 archive；superseded/archived 不能通过管理入口恢复或重复归档
+- [x] CLI 状态修改先解析当前记忆，再携带 revision 作为 expected_revision，保留并发冲突检测
+- [x] 模型仍没有 Memory 管理工具；确认和归档目前只属于用户终端权限
+- [x] 新增 namespace 同前缀隔离、非法生命周期、状态过滤和终端渲染测试
+- [x] 全量验证：`pytest` 313 个用例通过；`ruff`、`compileall`、CLI help 和 `git diff --check` 通过
+
+---
+
 ## 2026-08-09
 
 ### 完成：Memory V1 生命周期与混合检索闭环

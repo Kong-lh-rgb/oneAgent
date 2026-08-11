@@ -8,7 +8,13 @@ from collections.abc import Sequence
 from app.models.types import Message, MessageRole
 
 from .extractor import MemoryExtractor, RuleMemoryFilter
-from .models import MemoryDraft, MemoryItem, MemorySearchResult, MemorySource
+from .models import (
+    MemoryDraft,
+    MemoryItem,
+    MemorySearchResult,
+    MemorySource,
+    MemoryStatus,
+)
 from .retriever import HybridMemoryRetriever
 from .writer import MemoryWriter, MemoryWriteResult
 
@@ -127,6 +133,40 @@ class MemoryManager:
         """候选经真实任务采用后晋升。"""
 
         return await self._writer.promote_after_use(
+            memory_id,
+            expected_revision=expected_revision,
+        )
+
+    async def list(
+        self,
+        *,
+        namespaces: Sequence[str],
+        statuses: Sequence[MemoryStatus],
+        limit: int = 100,
+    ) -> tuple[MemoryItem, ...]:
+        """列出用户当前有权管理的记忆。"""
+
+        return await self._writer.list(
+            namespaces=namespaces,
+            statuses=statuses,
+            limit=limit,
+        )
+
+    async def resolve(
+        self,
+        identifier: str,
+        *,
+        namespaces: Sequence[str],
+    ) -> MemoryItem | None:
+        return await self._writer.resolve(identifier, namespaces=namespaces)
+
+    async def archive(
+        self,
+        memory_id: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> MemoryItem:
+        return await self._writer.archive(
             memory_id,
             expected_revision=expected_revision,
         )

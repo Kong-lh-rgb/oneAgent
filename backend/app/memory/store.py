@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager, suppress
@@ -23,6 +24,8 @@ from .models import (
     MemoryType,
     utc_now,
 )
+
+_MEMORY_IDENTIFIER_RE = re.compile(r"^[0-9a-f]{4,32}$")
 
 
 class SQLiteMemoryStore:
@@ -162,6 +165,33 @@ class SQLiteMemoryStore:
             row = await cursor.fetchone()
         return _from_row(row) if row else None
 
+    async def resolve(
+        self,
+        identifier: str,
+        *,
+        namespaces: Sequence[str],
+    ) -> MemoryItem | None:
+        """只在允许的 namespace 中解析完整 ID 或唯一前缀。"""
+
+        normalized = identifier.strip().lower()
+        if not _MEMORY_IDENTIFIER_RE.fullmatch(normalized):
+            raise ValueError("memory identifier must be 4-32 hexadecimal characters")
+        if not namespaces:
+            return None
+        placeholders = ",".join("?" for _ in namespaces)
+        async with self._connect() as database:
+            rows = await (
+                await database.execute(
+                    _SELECT
+                    + f""" WHERE namespace IN ({placeholders}) AND id LIKE ?
+                        ORDER BY updated_at DESC LIMIT 2""",
+                    (*namespaces, f"{normalized}%"),
+                )
+            ).fetchall()
+        if len(rows) > 1:
+            raise ValueError(f"记忆 ID 前缀不唯一：{identifier}")
+        return _from_row(rows[0]) if rows else None
+
     async def list(
         self,
         *,
@@ -238,9 +268,9 @@ class SQLiteMemoryStore:
         async with self._transaction() as database:
             current = await self._require_database(database, memory_id)
             _require_revision(current, expected_revision)
-            if current.status in {MemoryStatus.SUPERSEDED, MemoryStatus.ARCHIVED}:
-                raise ValueError("inactive memory cannot be restored")
             if status is MemoryStatus.ACTIVE:
+                if current.status is not MemoryStatus.CANDIDATE:
+                    raise ValueError("only candidate memory can be confirmed")
                 if current.memory_type is MemoryType.FACT and not current.key:
                     raise ValueError("active FACT memory requires a key")
                 conflict = await self._find_active_fact_database(
@@ -250,6 +280,11 @@ class SQLiteMemoryStore:
                 )
                 if conflict is not None and conflict.id != current.id:
                     raise MemoryConflictError("an active FACT already owns this key")
+            elif current.status not in {
+                MemoryStatus.CANDIDATE,
+                MemoryStatus.ACTIVE,
+            }:
+                raise ValueError("only candidate or active memory can be archived")
             now = utc_now()
             updated = _copy_item(
                 current,

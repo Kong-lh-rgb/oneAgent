@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -134,6 +135,43 @@ class MemoryWriter:
             MemoryStatus.ACTIVE,
             expected_revision=expected_revision,
             confirmed=False,
+        )
+
+    async def list(
+        self,
+        *,
+        namespaces: Sequence[str],
+        statuses: Sequence[MemoryStatus],
+        limit: int = 100,
+    ) -> tuple[MemoryItem, ...]:
+        """列出管理范围内的记忆。"""
+
+        return await self._store.list(
+            namespaces=namespaces,
+            statuses=statuses,
+            limit=limit,
+        )
+
+    async def resolve(
+        self,
+        identifier: str,
+        *,
+        namespaces: Sequence[str],
+    ) -> MemoryItem | None:
+        return await self._store.resolve(identifier, namespaces=namespaces)
+
+    async def archive(
+        self,
+        memory_id: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> MemoryItem:
+        """把候选或有效记忆移出正常检索。"""
+
+        return await self._store.change_status(
+            memory_id,
+            MemoryStatus.ARCHIVED,
+            expected_revision=expected_revision,
         )
 
     async def _budget_error(self, draft: MemoryDraft) -> str | None:

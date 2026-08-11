@@ -307,3 +307,71 @@ def test_source_message_requires_session() -> None:
 
 def test_memory_timestamps_are_utc() -> None:
     assert datetime.now(UTC).utcoffset().total_seconds() == 0
+
+
+async def test_resolve_prefix_filters_namespace_before_uniqueness(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    identifiers = iter(
+        (
+            "abcde000000000000000000000000000",
+            "abcde111111111111111111111111111",
+        )
+    )
+
+    class _Identifier:
+        def __init__(self, value: str) -> None:
+            self.hex = value
+
+    monkeypatch.setattr(
+        "app.memory.store.uuid4",
+        lambda: _Identifier(next(identifiers)),
+    )
+    embedder = HashMemoryEmbedder(16)
+    store = SQLiteMemoryStore(tmp_path / "memory.db", embedding_dimensions=16)
+    await store.initialize()
+    writer = MemoryWriter(store, embedder)
+    first = await writer.write(_draft("项目一使用 SQLite"))
+    second = await writer.write(
+        _draft(
+            "项目二使用 SQLite",
+            namespace="project:other",
+            run_id="run-2",
+        )
+    )
+
+    assert await store.resolve(
+        "abcde",
+        namespaces=("project:oneagent",),
+    ) == first.memory
+    assert await store.resolve(
+        "abcde",
+        namespaces=("project:other",),
+    ) == second.memory
+    with pytest.raises(ValueError, match="前缀不唯一"):
+        await store.resolve(
+            "abcde",
+            namespaces=("project:oneagent", "project:other"),
+        )
+
+
+async def test_confirm_and_archive_enforce_lifecycle(memory_system) -> None:
+    store, writer, _ = memory_system
+    candidate = await writer.write(
+        _draft(
+            "候选操作经验",
+            key=None,
+            status=MemoryStatus.CANDIDATE,
+            memory_type=MemoryType.PROCEDURE,
+        )
+    )
+    confirmed = await writer.promote(candidate.memory.id, expected_revision=1)
+
+    with pytest.raises(ValueError, match="only candidate"):
+        await writer.promote(confirmed.id, expected_revision=2)
+    archived = await writer.archive(confirmed.id, expected_revision=2)
+    assert archived.status is MemoryStatus.ARCHIVED
+    with pytest.raises(ValueError, match="only candidate or active"):
+        await writer.archive(archived.id, expected_revision=3)
+    assert await store.get(archived.id) == archived

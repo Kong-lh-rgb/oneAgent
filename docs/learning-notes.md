@@ -710,3 +710,23 @@ sqlite-vec 是 pre-v1 依赖，因此固定版本并在初始化时验证 vec_ve
 维度。Embedding 通过独立接口隔离：离线测试使用 HashMemoryEmbedder，生产使用独立的
 OpenAI 兼容 Embeddings API。Embedding 模型或维度变化不能直接复用旧向量表，后续需要
 显式 reindex/migration，而不是静默混用不同向量空间。
+
+## 20. Memory 管理面：模型使用权和用户治理权分离
+
+长期记忆不能只有自动写入和自动召回，还必须提供人类可检查的治理入口。当前 CLI 将
+管理能力分为 list、get、confirm 和 archive：默认列表同时展示 candidate 与 active，
+让待确认项不会悄悄堆积；superseded 和 archived 只有显式请求 `all` 或对应状态时出现，
+避免历史记录干扰日常管理。
+
+ID 前缀解析同样属于安全边界。Store 先按 CLI 配置允许的 namespace 过滤，再判断前缀
+是否唯一，因此不在管理范围内的记忆既不会制造歧义，也不会通过“前缀不唯一”泄露存在
+性。确认和归档先读取当前对象，再携带 revision 写入；列表看到的旧状态不能静默覆盖
+并发更新。
+
+状态转换必须放在 Store 领域路径，而不能只依赖命令参数校验。candidate 才能 confirm，
+candidate/active 才能 archive，superseded 与 archived 不允许通过普通管理入口恢复。
+这保证未来加入 API、前端或 Memory Tool 时，换一个入口也不能绕过生命周期。
+
+当前模型只有 Memory 的召回使用权和受控观察写入权，没有 confirm/archive 治理权。
+用户通过 CLI 掌握最终确认和退出检索的权限。若未来增加 Memory Tool，应首先区分只读
+工具与状态修改工具，并让确认/归档进入人工审批，而不是简单暴露 Manager 全部方法。

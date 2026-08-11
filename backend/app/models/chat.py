@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -32,8 +33,10 @@ from app.conversation import (
 )
 from app.memory import (
     HybridMemoryRetriever,
+    MemoryItem,
     MemoryManager,
     MemorySettings,
+    MemoryStatus,
     MemoryWriter,
     ModelMemoryExtractor,
     OpenAICompatibleMemoryEmbedder,
@@ -351,6 +354,71 @@ async def _remove_permission_rule(
     return await store.remove(matched[0].id)
 
 
+def _parse_memory_statuses(argument: str) -> tuple[MemoryStatus, ...]:
+    """解析 /memories 的可选状态；默认显示待处理和当前生效项。"""
+
+    normalized = argument.strip().lower()
+    if not normalized:
+        return (MemoryStatus.CANDIDATE, MemoryStatus.ACTIVE)
+    if normalized == "all":
+        return tuple(MemoryStatus)
+    try:
+        return (MemoryStatus(normalized),)
+    except ValueError as exc:
+        allowed = ", ".join([status.value for status in MemoryStatus] + ["all"])
+        raise ValueError(f"未知记忆状态：{argument}；可选：{allowed}") from exc
+
+
+def _print_memories(memories: Sequence[MemoryItem]) -> None:
+    """输出适合终端快速浏览的记忆列表。"""
+
+    if not memories:
+        print("没有符合条件的记忆。")
+        return
+    for memory in memories:
+        content = memory.content.replace("\n", " ")
+        if len(content) > 80:
+            content = content[:77] + "..."
+        print(
+            f"{memory.id[:8]}  [{memory.status.value}] "
+            f"[{memory.memory_type.value}] {memory.namespace}  "
+            f"rev={memory.revision}  {content}"
+        )
+
+
+def _print_memory(memory: MemoryItem) -> None:
+    """输出单条记忆及其审计信息。"""
+
+    source = memory.source
+    print(
+        f"ID: {memory.id}\n"
+        f"状态: {memory.status.value}\n"
+        f"类型: {memory.memory_type.value}\n"
+        f"Namespace: {memory.namespace}\n"
+        f"Key: {memory.key or '-'}\n"
+        f"Revision: {memory.revision}\n"
+        f"重要度/置信度: {memory.importance:.2f}/{memory.confidence:.2f}\n"
+        f"访问/使用/确认: {memory.access_count}/{memory.use_count}/"
+        f"{memory.confirmation_count}\n"
+        f"来源 Session: {source.session_id or '-'}\n"
+        f"来源 Run: {source.run_id or '-'}\n"
+        f"替代自: {memory.supersedes_id or '-'}\n"
+        f"创建时间: {memory.created_at.astimezone().isoformat()}\n"
+        f"内容:\n{memory.content}"
+    )
+
+
+async def _resolve_managed_memory(
+    manager: MemoryManager,
+    identifier: str,
+    *,
+    namespaces: Sequence[str],
+) -> MemoryItem | None:
+    """按配置允许的 namespace 解析用户输入的记忆 ID。"""
+
+    return await manager.resolve(identifier, namespaces=namespaces)
+
+
 async def _run(args: argparse.Namespace) -> int:
     settings = ModelSettings()
     try:
@@ -414,7 +482,9 @@ async def _run(args: argparse.Namespace) -> int:
     registry = ModelAdapterRegistry(settings)
     memory_settings = MemorySettings()
     memory_manager: MemoryManager | None = None
+    memory_namespaces: tuple[str, ...] = ()
     try:
+        memory_namespaces = memory_settings.parsed_namespaces()
         if memory_settings.memory_enabled:
             memory_embedder = OpenAICompatibleMemoryEmbedder(
                 api_key=memory_settings.api_key_value(),
@@ -478,7 +548,7 @@ async def _run(args: argparse.Namespace) -> int:
         task_context_provider=TaskContextProvider(task_store),
         checkpoint_store=checkpoint_store,
         memory_manager=memory_manager,
-        memory_namespaces=memory_settings.parsed_namespaces(),
+        memory_namespaces=memory_namespaces,
         memory_write_namespace=memory_settings.memory_write_namespace,
     )
     try:
@@ -499,7 +569,7 @@ async def _run(args: argparse.Namespace) -> int:
         print(
             "命令：/new 新建会话，/sessions 查看会话，/use <id> 切换会话，"
             "/runs 查看运行，/checkpoints 查看恢复点，/trace <id> 查看轨迹，"
-            "/permissions 查看审批规则，"
+            "/permissions 查看审批规则，/memories 查看长期记忆，"
             "/clear 清空当前会话，/help 查看帮助，/exit 退出"
         )
         while True:
@@ -528,6 +598,100 @@ async def _run(args: argparse.Namespace) -> int:
                     await conversation_store.list(),
                     conversation.id,
                 )
+                continue
+            if content == "/memories" or content.startswith("/memories "):
+                if memory_manager is None:
+                    print("长期记忆未启用；请先配置 MEMORY_ENABLED=true。")
+                    continue
+                argument = content.removeprefix("/memories").strip()
+                try:
+                    statuses = _parse_memory_statuses(argument)
+                    memories = await memory_manager.list(
+                        namespaces=memory_namespaces,
+                        statuses=statuses,
+                    )
+                except ValueError as exc:
+                    print(exc)
+                    continue
+                _print_memories(memories)
+                continue
+            if content == "/memory" or content.startswith("/memory "):
+                if memory_manager is None:
+                    print("长期记忆未启用；请先配置 MEMORY_ENABLED=true。")
+                    continue
+                identifier = content.removeprefix("/memory").strip()
+                if not identifier:
+                    print("用法：/memory <记忆ID>")
+                    continue
+                try:
+                    memory = await _resolve_managed_memory(
+                        memory_manager,
+                        identifier,
+                        namespaces=memory_namespaces,
+                    )
+                except ValueError as exc:
+                    print(exc)
+                    continue
+                if memory is None:
+                    print(f"找不到记忆：{identifier}")
+                    continue
+                _print_memory(memory)
+                continue
+            if content == "/memory-confirm" or content.startswith(
+                "/memory-confirm "
+            ):
+                if memory_manager is None:
+                    print("长期记忆未启用；请先配置 MEMORY_ENABLED=true。")
+                    continue
+                identifier = content.removeprefix("/memory-confirm").strip()
+                if not identifier:
+                    print("用法：/memory-confirm <记忆ID>")
+                    continue
+                try:
+                    memory = await _resolve_managed_memory(
+                        memory_manager,
+                        identifier,
+                        namespaces=memory_namespaces,
+                    )
+                    if memory is None:
+                        print(f"找不到记忆：{identifier}")
+                        continue
+                    confirmed = await memory_manager.confirm(
+                        memory.id,
+                        expected_revision=memory.revision,
+                    )
+                except (ValueError, KeyError) as exc:
+                    print(exc)
+                    continue
+                print(f"已确认记忆：{confirmed.id[:8]} · active")
+                continue
+            if content == "/memory-archive" or content.startswith(
+                "/memory-archive "
+            ):
+                if memory_manager is None:
+                    print("长期记忆未启用；请先配置 MEMORY_ENABLED=true。")
+                    continue
+                identifier = content.removeprefix("/memory-archive").strip()
+                if not identifier:
+                    print("用法：/memory-archive <记忆ID>")
+                    continue
+                try:
+                    memory = await _resolve_managed_memory(
+                        memory_manager,
+                        identifier,
+                        namespaces=memory_namespaces,
+                    )
+                    if memory is None:
+                        print(f"找不到记忆：{identifier}")
+                        continue
+                    archived = await memory_manager.archive(
+                        memory.id,
+                        expected_revision=memory.revision,
+                    )
+                except (ValueError, KeyError) as exc:
+                    print(exc)
+                    continue
+                print(f"已归档记忆：{archived.id[:8]} · archived")
                 continue
             if content == "/permissions":
                 rules = await rule_store.list(scope_ids=(conversation.id,))
@@ -637,6 +801,10 @@ async def _run(args: argparse.Namespace) -> int:
                     "/permissions 查看当前会话的审批规则\n"
                     "/permission remove <规则ID> 删除一条审批规则\n"
                     "/permissions clear 清除当前会话的全部审批规则\n"
+                    "/memories [状态|all] 查看长期记忆\n"
+                    "/memory <记忆ID> 查看记忆详情\n"
+                    "/memory-confirm <记忆ID> 确认候选记忆\n"
+                    "/memory-archive <记忆ID> 归档记忆\n"
                     "/clear 清空当前会话\n"
                     "/exit 退出聊天"
                 )
