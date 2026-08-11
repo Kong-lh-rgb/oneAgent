@@ -25,11 +25,6 @@ class AgentEventType(StrEnum):
     TOOL_COMPLETED = "tool_completed"
     TOOL_APPROVAL_REQUIRED = "tool_approval_required"
     TOOL_APPROVAL_COMPLETED = "tool_approval_completed"
-    MEMORY_RETRIEVAL_STARTED = "memory_retrieval_started"
-    MEMORY_RETRIEVAL_COMPLETED = "memory_retrieval_completed"
-    MEMORY_OBSERVATION_STARTED = "memory_observation_started"
-    MEMORY_OBSERVATION_COMPLETED = "memory_observation_completed"
-    MEMORY_OBSERVATION_FAILED = "memory_observation_failed"
     AGENT_COMPLETED = "agent_completed"
     AGENT_FAILED = "agent_failed"
 
@@ -81,11 +76,6 @@ class AgentEvent(BaseModel):
     summarized_conversation_blocks: int | None = Field(default=None, ge=0)
     summary_usage: ModelUsage | None = None
     summary_error: str | None = None
-    memory_ids: tuple[str, ...] = ()
-    memory_actions: tuple[str, ...] = ()
-    memory_namespace: str | None = None
-    memory_duration_ms: float | None = Field(default=None, ge=0.0)
-    memory_error: str | None = None
 
     @field_validator("run_id")
     @classmethod

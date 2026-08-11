@@ -14,10 +14,10 @@ OneAgent 当前是一个运行在本地终端中的 Tool-Calling Agent，已经�
 - 工具 Hook、人工审批和可记忆权限规则；
 - SQLite 会话、消息、运行轨迹和权限规则持久化；
 - Token 估算、模型上下文预算、工具消息压缩和滚动摘要；
-- 会话私有 Task、Run Checkpoint 和长期 Memory 存储；
+- 会话私有 Task、Run Checkpoint；
+- Sparse, Model-Directed 长期记忆（Markdown 文件，模型自主 Recall）；
 - 结构化 AgentResult 和 AgentEvent。
 
-Memory 当前只完成领域模型与 SQLite 存储，尚未接入 Runtime、工具或模型上下文。
 Subagent、MCP、Scheduler、FastAPI 和前端仍未实现；这些能力不应该提前把职责
 塞进 Runtime。
 
@@ -658,7 +658,96 @@ Agent 测评同时包含两类证据：模型回答属于非确定性文本，�
 “换模型 / 关思考 / 加预算”看成互斥替代，而是按需求组合：结构化摘要这类任务优先
 关思考；主 agent 深度推理保留 reasoning 但要给足预算。
 
-## 18. 模型输出属于不可信输入：摘要稳定性收口
+## 18. 长期记忆：Sparse, Model-Directed Long-Term Memory
+
+长期记忆的目标不是做一个 RAG 知识库，而是一个稀疏、增长缓慢、由模型自己决定
+何时回忆 / 创建 / 更新 / 归档的记忆系统。
+
+### 18.1 核心原则
+
+> Default is forget. Memory is the exception.
+
+只有未来跨 Session 仍明显有价值的信息才进入长期记忆。Runtime 不再根据当前
+query 做关键词 / 向量检索并注入 Top-K Memory；它只负责加载 Core Memory 与
+Memory Index、暴露语义工具、维护元数据、执行容量管理。
+
+### 18.2 分层与文件布局
+
+```text
+.oneagent/memory/
+├── CORE.md           每次 Run 注入 System Prompt，仅身份/稳定偏好/长期约束
+├── INDEX.md          Memory Index（Recall Cue 投影，自动重建）
+├── active/Mxxx.md    普通长期记忆（最多 25 条，Markdown + Front Matter）
+└── archive/          归档记忆，不进 Index、不进上下文
+```
+
+- Core Memory：<= 2000 tokens，不参与淘汰，只有用户明确长期信息时受控更新；
+- 普通 Memory：每个带 Front Matter（id/title/summary/时间戳/access_count/status），
+  正文按 ## Summary / ## Memory 组织；
+- INDEX.md 是 Memory Store 的 projection：每次 create/update/archive 后自动重建，
+  只含 id + title + Cue，不保存完整正文。
+
+### 18.3 语义工具
+
+- `memory.read(id)`：读取完整记忆，自动 access_count+1 / last_accessed_at；
+- `memory.list()`：返回 active 记忆的 id/title/summary（Recall Cue），不含正文；
+- `memory.create(title, summary, content)`：创建，遵守 Write Policy；
+- `memory.update(id, content, reason)`：优先更新而非重复创建；
+- `memory.archive(id, reason)`：移到 archive，从 Index 消失。
+
+### 18.4 Model-directed recall
+
+```text
+System Prompt = Core Memory + Memory Index + Memory Policy
+        ↓
+    模型判断是否需要过去信息
+        ├─ 不需要 → 继续
+        └─ 需要 → memory.read(Mxxx)
+```
+
+外部系统提供 Recall Cue，模型决定何时真正 Recall。普通记忆完整正文绝不自动注入。
+
+### 18.5 容量维护
+
+active 数 > 25 时触发 Maintenance：启发式（最近使用时间 + 使用次数 + 最近更新时间）
+只负责选出 3~5 个候选，最终 KEEP / MERGE / ARCHIVE 由模型决定。
+
+### 18.6 边界
+
+- 当前任务状态属于 Task，可复用流程属于 Skills，都不应写入 Memory；
+- 不使用 SQLite / FTS / Embedding / Vector Search / Knowledge Graph / 自动 Top-K；
+- Memory 与 Task / Skill 严格区分：Task 回答“当前正在做什么”，Memory 回答“关于用户和
+  过去未来还应知道什么”，Skill 回答“以后遇到这种任务应该怎么做”。
+
+### 18.7 Markdown Store 的一致性边界
+
+模型可以自主决定 read/create/update/archive，但文件系统不变量仍属于 Harness。所有
+Memory ID 必须先按 `M` 加至少三位数字校验，不能直接拼成路径；active 目录只能存在
+status=active 且 Front Matter ID 与文件名一致的记录，archived 记录不能通过普通 update
+重新进入 active。模型提供的 update/archive reason 必须写入 Front Matter，不能只在
+一次 ToolCall 参数中短暂出现。
+
+INDEX 是 active Store 的 projection，因此不能只依赖每次 mutation 后的增量重建。进程
+可能在 Memory 文件成功写入、INDEX 更新前中断，用户也可能直接编辑 Markdown。Manager
+初始化时应重新扫描 active 并完整 rebuild INDEX；正常 create/update/archive 则在统一锁
+内修改 Store 和重建投影。这样 INDEX 可丢弃、可重建，不会成为第二份权威事实。
+
+归档涉及“修改 Front Matter 状态”和“移动目录”两个动作。实现先原子替换源文件内容，
+再用同文件系统 `os.replace` 原子移动；初始化时识别 active/ 中 status=archived 的短暂
+中断状态并完成移动。并发创建、读取计数和更新也由 MemoryManager 串行化，避免两个
+create 同时分配 M001，或 read 的访问计数覆盖 update 的正文。
+
+文件可写不代表模型可完整读回。ToolExecutor 对统一 ToolResult 有 20000 字符上限，因此
+普通 Memory 正文限制为 12000 字符，并另外限制 title/summary 长度；否则系统可能成功
+保存 512KB 文件，却在每次 memory.read 时固定截断，形成模型无法维护的半可见记忆。
+
+容量维护存在一个不可消除的边界：算法不能自动删除，最终 KEEP/MERGE/ARCHIVE 又交给
+模型，因此模型出错或 Run 在 max_steps 处停止时，active 可能暂时大于 25。当前 Policy
+要求模型收到 maintenance_required 后在结束前完成维护，并用闭环测试验证正常路径。
+若未来要求 25 是任何时刻都不可突破的硬不变量，就必须改成“满额时先维护、再创建”或
+让 Runtime 拒绝结束；这属于产品语义选择，不能同时宣称完全模型决策和无条件自动收敛。
+
+## 19. 模型输出属于不可信输入：摘要稳定性收口
 
 摘要模型即使返回合法 JSON，也不代表该输出适合替换原历史。Prompt 中“建议 5 条、
 每条 80 字、必须更短”包含软目标，因此生成结果还要经过代码级安全上限校验，并在替换后
@@ -678,7 +767,10 @@ CLI 参数默认值不应覆盖 Provider 配置。用户未传 `--max-output-tok
 使用当前 Provider 的 `default_max_output_tokens`；只有显式参数才覆盖。这样 reasoning
 模型可以保留足够输出预算，非 reasoning 模型也不必被全局硬编码绑死。
 
-## 19. Memory V1：候选、混合召回与使用后学习
+## 20. Memory V1（历史）：候选、混合召回与使用后学习
+
+> 本章记录已被 18 章 Sparse, Model-Directed 长期记忆替换的旧架构（SQLite + FTS5
+> + sqlite-vec + RRF），保留作为设计演进参考。
 
 Memory 与聊天历史、Task、Checkpoint 的职责不同：聊天历史记录完整交流，Task 保存
 长任务进度，Checkpoint 保存一次 Run 的可恢复边界，Memory 只保存跨会话仍可能改变

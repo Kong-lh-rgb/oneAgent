@@ -8,6 +8,29 @@
 
 ## 2026-08-11
 
+### 收口：Sparse Memory 实现复核与文件一致性修补
+
+#### Bad Case
+- [x] `memory.update/archive` 虽要求 reason，但 Manager/Store 丢弃该字段，所谓“留痕”只存在于工具参数
+- [x] archived 记录仍可通过普通 update 写回 `active/`，形成 archive 与 active 双份文件并重新进入 Index
+- [x] Memory ID 直接拼接文件路径且未按 `M\d{3,}` 校验，模型输入可能成为路径穿越载体
+- [x] INDEX 只在写操作后重建；缺失、人工改动或上次中断造成的陈旧 Index 会在后续 Run 持续注入
+- [x] 并发 create 可同时计算出相同的下一个 ID，导致 Markdown 文件互相覆盖
+- [x] archive 先写目标再删除源文件，中断窗口可能同时保留 active 与 archive 两份记录
+- [x] CORE.md 只在 API update 时检查 Token，人工编辑可绕过 2000 Token 上限
+- [ ] active 超限后的最终收敛仍依赖模型遵守 Maintenance 指令；模型错误或 max_steps 耗尽时不能在“不自动归档”的前提下机械保证立即回到 25 条
+
+#### 修补结果
+- [x] update/archive reason 写入 Front Matter；归档记录禁止普通更新，目录、Front Matter status 与文件名 ID 必须一致
+- [x] 所有模型输入的 Memory ID 先严格规范化，拒绝路径分隔符、前缀和非法字符
+- [x] MemoryManager 串行化读写；启动时按 active 文件重建 INDEX，保证 INDEX 始终是 Store projection
+- [x] archive 改为更新状态后执行同文件系统原子移动；启动时自动修复移动阶段中断留下的错位 archived 文件
+- [x] Memory 文件增加 512KB 写入上限，标题和 Recall Cue 增加紧凑长度限制；CORE.md 加载时也执行 Token 上限检查
+- [x] 普通 Memory 正文限制为 12000 字符，低于 ToolExecutor 的 20000 字符输出上限，避免创建后无法通过 memory.read 完整取回
+- [x] Memory Policy 明确要求模型在结束 Run 前处理 Maintenance；增加 26 条后由模型归档并恢复至 25 条的闭环测试
+- [x] ToolRegistry 只允许合法的点分工具名，保留 `memory.read` 等语义命名而不放宽为任意点号组合
+- [x] 全量验证：`pytest` 333 个用例通过；`ruff`、`compileall` 和 `git diff --check` 通过
+
 ### 决定：冻结 Memory V1，等待重新设计
 
 #### Bad Case
@@ -24,7 +47,7 @@
 - [x] 旧 Memory CLI 命令不再出现在帮助信息中；直接输入时明确提示 V1 已冻结
 - [x] 保留 SQLite、FTS5、sqlite-vec、领域模型和离线测试，作为后续设计取舍与回归参考，不进行破坏性删除
 - [x] 全量验证：`pytest` 317 个用例通过；`ruff`、`compileall` 和 `git diff --check` 通过
-- [ ] 明确新架构后重新定义模型自主操作、Harness 数据不变量、用户控制权和可恢复边界
+- [x] 已由 Sparse, Model-Directed Memory 重构重新定义模型自主操作与 Harness 文件一致性边界
 
 ### 完成：Memory V1 稳定性收口
 
@@ -65,6 +88,27 @@
 - [x] 模型仍没有 Memory 管理工具；确认和归档目前只属于用户终端权限
 - [x] 新增 namespace 同前缀隔离、非法生命周期、状态过滤和终端渲染测试
 - [x] 全量验证：`pytest` 313 个用例通过；`ruff`、`compileall`、CLI help 和 `git diff --check` 通过
+
+### 完成：重构长期记忆为 Sparse, Model-Directed 系统
+
+#### 设计（替换 Memory V1）
+- [x] 删除 SQLite Memory Store、FTS5、sqlite-vec、Embedding、RRF、query-driven 自动检索与 before_run Top-K 注入（覆盖此前“保留 V1 作参考”的决定）
+- [x] 持久化改用 Markdown 文件：`CORE.md` / `INDEX.md` / `active/Mxxx.md` / `archive/`，不使用 SQLite / FTS / Embedding / Vector Search
+- [x] 只两层：Core Memory（每次 Run 注入，≤2000 tokens，不参与淘汰）+ 普通长期记忆（≤25 条）
+- [x] `INDEX.md` 是 Memory Store 的 projection，只含 Recall Cue（id+title+summary），create/update/archive 后自动重建
+- [x] 语义工具：`memory.read` / `memory.list` / `memory.create` / `memory.update` / `memory.archive`；Runtime 不做自动检索、不注入完整正文
+- [x] 容量维护：active >25 触发，启发式选 3~5 个候选，KEEP/MERGE/ARCHIVE 由模型决定
+- [x] Core 受控更新（`CoreMemoryManager`），模型不能随意改 Core
+
+#### 模块与集成
+- [x] `app/memory/`：models.py、store.py、index.py、core.py、maintenance.py、tools.py、manager.py、prompts.py
+- [x] Runtime 移除自动 `context_message(query)` 检索注入与后台 `observe`；改为一次性注入 Core + Index + Policy（ephemeral，不持久化），memory 故障不阻塞 agent
+- [x] 移除 `MEMORY_RETRIEVAL` / `MEMORY_OBSERVATION` 事件与字段；`requirements.txt` 移除 `sqlite-vec`、加入 `PyYAML`
+
+#### 测试
+- [x] 新增 `tests/test_memory_system.py`（28 例：Core/CRUD/元数据/Index/容量/Runtime 注入/Policy/工具）
+- [x] 适配 `test_agent_runtime.py`（FakeMemoryManager → context_messages）与 `test_chat_sessions.py`
+- [x] 全量验证：`pytest` 通过、`ruff`、`compileall`、CLI help 通过
 
 ---
 

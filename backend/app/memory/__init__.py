@@ -1,60 +1,61 @@
-"""OneAgent 长期记忆 V1 的冻结实现。
+"""长期记忆：Sparse, Model-Directed Long-Term Memory System。
 
-V1 当前不再由 CLI 装配运行，仅保留领域模型、存储和检索代码作为后续重构的
-设计样本。新架构确定前不要继续扩展这套候选审批式流程。
+设计要点：
+
+- 持久化介质为 Markdown 文件（``CORE.md`` / ``INDEX.md`` / ``active/Mxxx.md``），
+  不使用 SQLite / FTS / Embedding / Vector Search；
+- 模型决定何时 Recall、创建、更新、归档（Model-directed recall with cues）；
+- Runtime 只加载 Core Memory 与 Memory Index、暴露语义工具、维护元数据，
+  不做 query-driven 自动检索或 Top-K 注入。
 """
 
-from .config import MemorySettings
-from .embedder import (
-    HashMemoryEmbedder,
-    MemoryEmbedder,
-    OpenAICompatibleMemoryEmbedder,
+from .core import DEFAULT_MAX_CORE_TOKENS, CoreMemoryManager
+from .index import MemoryIndex
+from .maintenance import MemoryMaintenance
+from .manager import (
+    CORE_MEMORY_MESSAGE_NAME,
+    MEMORY_INDEX_MESSAGE_NAME,
+    MEMORY_POLICY_MESSAGE_NAME,
+    MemoryManager,
 )
-from .errors import MemoryConflictError, MemoryRevisionConflictError, MemoryStoreError
-from .extractor import MemoryExtractor, ModelMemoryExtractor, RuleMemoryFilter
-from .manager import MEMORY_CONTEXT_MESSAGE_NAME, MemoryManager
 from .models import (
-    MemoryDraft,
-    MemoryItem,
-    MemorySearchResult,
-    MemorySource,
+    MemoryRecord,
     MemoryStatus,
-    MemoryType,
+    next_memory_id,
+    parse_memory_markdown,
 )
-from .retriever import HybridMemoryRetriever
-from .router import MemoryNamespaceRouter
-from .store import SQLiteMemoryStore
-from .writer import (
-    MemoryWriteAction,
-    MemoryWriteBudget,
-    MemoryWriter,
-    MemoryWriteResult,
+from .prompts import MEMORY_POLICY_PROMPT, MEMORY_WRITE_POLICY
+from .store import DEFAULT_MEMORY_DIR, MemoryStore
+from .tools import (
+    MemoryArchiveTool,
+    MemoryCreateTool,
+    MemoryListTool,
+    MemoryReadTool,
+    MemoryUpdateTool,
+    register_memory_tools,
 )
 
 __all__ = [
-    "MEMORY_CONTEXT_MESSAGE_NAME",
-    "HashMemoryEmbedder",
-    "HybridMemoryRetriever",
-    "MemoryConflictError",
-    "MemoryDraft",
-    "MemoryEmbedder",
-    "MemoryExtractor",
-    "MemoryItem",
+    "CORE_MEMORY_MESSAGE_NAME",
+    "CoreMemoryManager",
+    "DEFAULT_MAX_CORE_TOKENS",
+    "DEFAULT_MEMORY_DIR",
+    "MEMORY_INDEX_MESSAGE_NAME",
+    "MEMORY_POLICY_MESSAGE_NAME",
+    "MEMORY_POLICY_PROMPT",
+    "MEMORY_WRITE_POLICY",
+    "MemoryArchiveTool",
+    "MemoryCreateTool",
+    "MemoryIndex",
+    "MemoryListTool",
+    "MemoryMaintenance",
     "MemoryManager",
-    "MemoryNamespaceRouter",
-    "MemoryRevisionConflictError",
-    "MemorySearchResult",
-    "MemorySettings",
-    "MemorySource",
+    "MemoryReadTool",
+    "MemoryRecord",
     "MemoryStatus",
-    "MemoryStoreError",
-    "MemoryType",
-    "MemoryWriteAction",
-    "MemoryWriteBudget",
-    "MemoryWriteResult",
-    "MemoryWriter",
-    "ModelMemoryExtractor",
-    "OpenAICompatibleMemoryEmbedder",
-    "RuleMemoryFilter",
-    "SQLiteMemoryStore",
+    "MemoryStore",
+    "MemoryUpdateTool",
+    "next_memory_id",
+    "parse_memory_markdown",
+    "register_memory_tools",
 ]

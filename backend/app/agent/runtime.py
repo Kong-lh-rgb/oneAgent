@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
 from collections.abc import AsyncIterator, Sequence
 from contextlib import suppress
 from typing import Any
@@ -16,7 +15,7 @@ from app.checkpoint import (
     render_checkpoint_context,
 )
 from app.context import ContextManager, ConversationSummaryState
-from app.memory import MemoryManager, MemorySource
+from app.memory import MemoryManager
 from app.models.registry import ModelAdapterRegistry
 from app.models.types import (
     Message,
@@ -82,8 +81,6 @@ class AgentRuntime:
         task_context_provider: TaskContextProvider | None = None,
         checkpoint_store: SQLiteCheckpointStore | None = None,
         memory_manager: MemoryManager | None = None,
-        memory_namespaces: Sequence[str] = ("global", "user:local"),
-        memory_write_namespace: str = "user:local",
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -103,9 +100,6 @@ class AgentRuntime:
         self._task_context_provider = task_context_provider
         self._checkpoint_store = checkpoint_store
         self._memory_manager = memory_manager
-        self._memory_namespaces = tuple(memory_namespaces)
-        self._memory_write_namespace = memory_write_namespace
-        self._background_tasks: set[asyncio.Task[None]] = set()
         self._tool_executor = tool_executor or ToolExecutor(
             tool_registry,
             approval_gate=approval_gate,
@@ -230,7 +224,7 @@ class AgentRuntime:
         tool_calls: list[ToolCallRecord] = []
         usage = ModelUsage()
         current_summary_state = summary_state
-        memory_context_message: Message | None = None
+        memory_context_messages: tuple[Message, ...] = ()
         memory_context_loaded = False
 
         await emitter.emit(
@@ -307,31 +301,14 @@ class AgentRuntime:
                 ephemeral_messages: list[Message] = []
                 if self._memory_manager is not None and not memory_context_loaded:
                     memory_context_loaded = True
-                    await emitter.emit(AgentEventType.MEMORY_RETRIEVAL_STARTED)
-                    memory_started = time.perf_counter()
                     try:
-                        memory_context_message = (
-                            await self._memory_manager.context_message(
-                                user_input,
-                                namespaces=self._memory_namespaces,
-                            )
+                        memory_context_messages = (
+                            await self._memory_manager.context_messages()
                         )
-                        await emitter.emit(
-                            AgentEventType.MEMORY_RETRIEVAL_COMPLETED,
-                            memory_duration_ms=(
-                                (time.perf_counter() - memory_started) * 1000
-                            ),
-                        )
-                    except Exception as exc:
-                        await emitter.emit(
-                            AgentEventType.MEMORY_RETRIEVAL_COMPLETED,
-                            memory_duration_ms=(
-                                (time.perf_counter() - memory_started) * 1000
-                            ),
-                            memory_error=f"{type(exc).__name__}: {exc}",
-                        )
-                if memory_context_message is not None:
-                    ephemeral_messages.append(memory_context_message)
+                    except Exception:
+                        memory_context_messages = ()
+                if memory_context_messages:
+                    ephemeral_messages.extend(memory_context_messages)
                 if recovery_checkpoint is not None:
                     ephemeral_messages.append(
                         render_checkpoint_context(recovery_checkpoint)
@@ -470,22 +447,6 @@ class AgentRuntime:
             )
             tool_calls_in_message = assistant_message.tool_calls
             if not tool_calls_in_message:
-                if self._memory_manager is not None:
-                    observation = (
-                        f"用户请求：{user_input}\n"
-                        f"Agent 回答：{assistant_message.content or ''}"
-                    )
-                    task = asyncio.create_task(
-                        self._observe_memory(
-                            emitter=emitter,
-                            observation=observation,
-                            user_input=user_input,
-                            conversation_id=conversation_id,
-                            run_id=run_id,
-                        )
-                    )
-                    self._background_tasks.add(task)
-                    task.add_done_callback(self._background_tasks.discard)
                 result = self._result(
                     run_id=run_id,
                     final_message=assistant_message,
@@ -606,59 +567,6 @@ class AgentRuntime:
             result=result,
         )
         return result
-
-    async def _observe_memory(
-        self,
-        *,
-        emitter: _EventEmitter,
-        observation: str,
-        user_input: str,
-        conversation_id: str | None,
-        run_id: str,
-    ) -> None:
-        if self._memory_manager is None:
-            return
-        started = time.perf_counter()
-        try:
-            namespace = self._memory_manager.route_namespace(
-                user_input,
-                allowed_namespaces=self._memory_namespaces,
-                default_namespace=self._memory_write_namespace,
-            )
-            await emitter.emit(
-                AgentEventType.MEMORY_OBSERVATION_STARTED,
-                memory_namespace=namespace,
-            )
-            writes = await self._memory_manager.observe(
-                observation,
-                namespace=namespace,
-                source=MemorySource(session_id=conversation_id, run_id=run_id),
-                explicit_user_text=user_input,
-            )
-            await emitter.emit(
-                AgentEventType.MEMORY_OBSERVATION_COMPLETED,
-                memory_namespace=namespace,
-                memory_ids=tuple(
-                    result.memory.id
-                    for result in writes
-                    if result.memory is not None
-                ),
-                memory_actions=tuple(result.action.value for result in writes),
-                memory_duration_ms=(time.perf_counter() - started) * 1000,
-                usage=self._memory_manager.extraction_usage,
-            )
-        except Exception as exc:
-            await emitter.emit(
-                AgentEventType.MEMORY_OBSERVATION_FAILED,
-                memory_duration_ms=(time.perf_counter() - started) * 1000,
-                memory_error=f"{type(exc).__name__}: {exc}",
-            )
-
-    async def drain_memory_observations(self) -> None:
-        """等待已提交的记忆观察，供进程关闭和确定性测试使用。"""
-
-        if self._background_tasks:
-            await asyncio.gather(*tuple(self._background_tasks))
 
     async def run_stream(
         self,

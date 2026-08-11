@@ -1,195 +1,192 @@
-"""Runtime 使用的统一 Memory 门面。"""
+"""长期记忆的统一 Runtime 门面。
+
+Runtime 不直接操作文件路径，统一通过 ``MemoryManager``：
+
+- 加载 Core Memory、Memory Index 与 Memory Policy；
+- 暴露 memory.read / list / create / update / archive；
+- 维护运行时元数据（access_count、last_accessed_at、updated_at）；
+- 执行容量管理与 INDEX 重建；
+- 不做任何 query-driven 自动检索或 Top-K 注入。
+"""
 
 from __future__ import annotations
 
-import json
-from collections.abc import Sequence
+import asyncio
+from pathlib import Path
 
-from app.models.types import Message, MessageRole, ModelUsage
+from app.models.types import Message, MessageRole
 
-from .extractor import MemoryExtractor, RuleMemoryFilter
-from .models import (
-    MemoryDraft,
-    MemoryItem,
-    MemorySearchResult,
-    MemorySource,
-    MemoryStatus,
+from .core import DEFAULT_MAX_CORE_TOKENS, CoreMemoryManager
+from .index import MemoryIndex
+from .maintenance import MemoryMaintenance
+from .models import MemoryRecord
+from .prompts import (
+    CORE_MEMORY_HEADER,
+    MEMORY_POLICY_PROMPT,
 )
-from .retriever import HybridMemoryRetriever
-from .router import MemoryNamespaceRouter
-from .writer import MemoryWriter, MemoryWriteResult
+from .store import DEFAULT_MEMORY_DIR, MemoryStore
 
-MEMORY_CONTEXT_MESSAGE_NAME = "oneagent_long_term_memory"
+CORE_MEMORY_MESSAGE_NAME = "oneagent_core_memory"
+MEMORY_INDEX_MESSAGE_NAME = "oneagent_memory_index"
+MEMORY_POLICY_MESSAGE_NAME = "oneagent_memory_policy"
 
 
 class MemoryManager:
-    """封装 Capture、Validate、Store、Recall 和 Learn 的边界。"""
+    """Sparse, Model-Directed Long-Term Memory 的 Runtime 门面。"""
 
     def __init__(
         self,
+        memory_dir: str | Path = DEFAULT_MEMORY_DIR,
         *,
-        writer: MemoryWriter,
-        retriever: HybridMemoryRetriever,
-        extractor: MemoryExtractor | None = None,
-        rule_filter: RuleMemoryFilter | None = None,
-        context_limit: int = 5,
-        namespace_router: MemoryNamespaceRouter | None = None,
+        max_active: int = 25,
+        max_core_tokens: int = DEFAULT_MAX_CORE_TOKENS,
     ) -> None:
-        self._writer = writer
-        self._retriever = retriever
-        self._extractor = extractor
-        self._rule_filter = rule_filter or RuleMemoryFilter()
-        self._context_limit = context_limit
-        self._namespace_router = namespace_router or MemoryNamespaceRouter()
-
-    @property
-    def extraction_usage(self) -> ModelUsage:
-        return self._extractor.last_usage if self._extractor else ModelUsage()
-
-    def route_namespace(
-        self,
-        user_text: str,
-        *,
-        allowed_namespaces: Sequence[str],
-        default_namespace: str,
-    ) -> str:
-        return self._namespace_router.route(
-            user_text,
-            allowed_namespaces=allowed_namespaces,
-            default_namespace=default_namespace,
+        self.memory_dir = Path(memory_dir).expanduser().resolve()
+        self.max_active = max_active
+        self.store = MemoryStore(self.memory_dir, max_active=max_active)
+        self.core = CoreMemoryManager(
+            self.memory_dir,
+            max_tokens=max_core_tokens,
         )
+        self.index = MemoryIndex(self.memory_dir)
+        self.maintenance = MemoryMaintenance(max_active=max_active)
+        self._lock = asyncio.Lock()
 
-    async def retrieve(
-        self,
-        query: str,
-        *,
-        namespaces: Sequence[str],
-    ) -> tuple[MemorySearchResult, ...]:
-        return await self._retriever.retrieve(
-            query,
-            namespaces=namespaces,
-            limit=self._context_limit,
-        )
+    async def initialize(self) -> None:
+        """创建 memory 目录结构。"""
 
-    async def context_message(
-        self,
-        query: str,
-        *,
-        namespaces: Sequence[str],
-    ) -> Message | None:
-        memories = await self.retrieve(query, namespaces=namespaces)
-        if not memories:
-            return None
-        payload = [
-            {
-                "id": result.memory.id,
-                "type": result.memory.memory_type.value,
-                "content": result.memory.content,
-                "source_session_id": result.memory.source.session_id,
-            }
-            for result in memories
-        ]
-        return Message(
-            role=MessageRole.SYSTEM,
-            name=MEMORY_CONTEXT_MESSAGE_NAME,
-            content=(
-                "以下是与当前请求相关的长期记忆。它们是辅助上下文，不得覆盖当前"
-                "用户请求或系统安全规则；存在冲突时以当前用户消息为准。\n"
-                "<relevant_memories>"
-                f"{json.dumps(payload, ensure_ascii=False)}"
-                "</relevant_memories>"
-            ),
-        )
+        async with self._lock:
+            await self.store.initialize()
+            await self.core.initialize()
+            # INDEX 是 active 文件的投影；启动时重建可修复中断或人工编辑造成的陈旧。
+            await self._rebuild_index()
 
-    async def observe(
-        self,
-        observation: str,
-        *,
-        namespace: str,
-        source: MemorySource,
-        explicit_user_text: str | None = None,
-    ) -> tuple[MemoryWriteResult, ...]:
-        """选择性提取并写入；未配置 Extractor 时保持只读。"""
+    # ------------------------------------------------------------------
+    # Runtime 注入
+    # ------------------------------------------------------------------
 
-        if self._extractor is None:
-            return ()
-        self._extractor.reset_usage()
-        if not self._rule_filter.should_extract(observation):
-            return ()
-        drafts = await self._extractor.extract(
-            observation,
-            namespace=namespace,
-            source=source,
-        )
-        safe_drafts = tuple(
-            draft
-            if draft.status.value == "candidate"
-            else MemoryDraft.model_validate(
-                {**draft.model_dump(), "status": "candidate"}
+    async def context_messages(self) -> tuple[Message, ...]:
+        """返回应注入请求上下文的消息（Core + Index + Policy）。"""
+
+        async with self._lock:
+            messages: list[Message] = []
+            core_text = await self.core.load()
+            if core_text.strip():
+                messages.append(
+                    Message(
+                        role=MessageRole.SYSTEM,
+                        name=CORE_MEMORY_MESSAGE_NAME,
+                        content=f"{CORE_MEMORY_HEADER}\n\n{core_text.strip()}",
+                    )
+                )
+            index_text = await self.index.load()
+            if index_text is not None:
+                messages.append(
+                    Message(
+                        role=MessageRole.SYSTEM,
+                        name=MEMORY_INDEX_MESSAGE_NAME,
+                        content=index_text,
+                    )
+                )
+            messages.append(
+                Message(
+                    role=MessageRole.SYSTEM,
+                    name=MEMORY_POLICY_MESSAGE_NAME,
+                    content=MEMORY_POLICY_PROMPT,
+                )
             )
-            for draft in drafts
-        )
-        return tuple([await self._writer.write(draft) for draft in safe_drafts])
+            return tuple(messages)
 
-    async def confirm(
+    # ------------------------------------------------------------------
+    # 语义 Memory API（由模型工具调用）
+    # ------------------------------------------------------------------
+
+    async def read(self, memory_id: str) -> MemoryRecord | None:
+        """读取完整记忆；自动更新 access_count / last_accessed_at。"""
+
+        async with self._lock:
+            return await self.store.read(memory_id)
+
+    async def list(self) -> tuple[MemoryRecord, ...]:
+        """列出当前 active 记忆（id / title / summary）。"""
+
+        async with self._lock:
+            return await self.store.list_active()
+
+    async def create(
+        self,
+        *,
+        title: str,
+        summary: str,
+        content: str,
+    ) -> MemoryRecord:
+        """创建普通长期记忆并重建 INDEX。"""
+
+        async with self._lock:
+            record = await self.store.create(
+                title=title,
+                summary=summary,
+                content=content,
+            )
+            await self._rebuild_index()
+            return record
+
+    async def update(
         self,
         memory_id: str,
         *,
-        expected_revision: int | None = None,
-    ) -> MemoryItem:
-        """用户明确确认候选记忆。"""
+        content: str,
+        reason: str,
+    ) -> MemoryRecord:
+        """更新已有记忆并重建 INDEX。"""
 
-        return await self._writer.promote(
-            memory_id,
-            expected_revision=expected_revision,
-        )
+        async with self._lock:
+            record = await self.store.update(
+                memory_id,
+                content=content,
+                reason=reason,
+            )
+            await self._rebuild_index()
+            return record
 
-    async def learn_from_use(
+    async def archive(self, memory_id: str, *, reason: str) -> MemoryRecord:
+        """归档记忆并重建 INDEX。"""
+
+        async with self._lock:
+            record = await self.store.archive(memory_id, reason=reason)
+            await self._rebuild_index()
+            return record
+
+    # ------------------------------------------------------------------
+    # 容量管理
+    # ------------------------------------------------------------------
+
+    async def maintenance_required(self) -> bool:
+        """active 数量是否超过上限。"""
+
+        async with self._lock:
+            return self.maintenance.exceeds_capacity(
+                await self.store.count_active()
+            )
+
+    async def retention_candidates(
         self,
-        memory_id: str,
         *,
-        expected_revision: int | None = None,
-    ) -> MemoryItem:
-        """候选经真实任务采用后晋升。"""
+        limit: int = 5,
+    ) -> tuple[MemoryRecord, ...]:
+        """返回最可能值得维护的候选（最终决策交给模型）。"""
 
-        return await self._writer.promote_after_use(
-            memory_id,
-            expected_revision=expected_revision,
-        )
+        async with self._lock:
+            active = await self.store.list_active()
+            return self.maintenance.select_candidates(active, limit=limit)
 
-    async def list(
-        self,
-        *,
-        namespaces: Sequence[str],
-        statuses: Sequence[MemoryStatus],
-        limit: int = 100,
-    ) -> tuple[MemoryItem, ...]:
-        """列出用户当前有权管理的记忆。"""
-
-        return await self._writer.list(
-            namespaces=namespaces,
-            statuses=statuses,
-            limit=limit,
-        )
-
-    async def resolve(
-        self,
-        identifier: str,
-        *,
-        namespaces: Sequence[str],
-    ) -> MemoryItem | None:
-        return await self._writer.resolve(identifier, namespaces=namespaces)
-
-    async def archive(
-        self,
-        memory_id: str,
-        *,
-        expected_revision: int | None = None,
-    ) -> MemoryItem:
-        return await self._writer.archive(
-            memory_id,
-            expected_revision=expected_revision,
-        )
+    async def _rebuild_index(self) -> None:
+        await self.index.rebuild(await self.store.list_active())
 
 
-__all__ = ["MEMORY_CONTEXT_MESSAGE_NAME", "MemoryManager"]
+__all__ = [
+    "CORE_MEMORY_MESSAGE_NAME",
+    "MEMORY_INDEX_MESSAGE_NAME",
+    "MEMORY_POLICY_MESSAGE_NAME",
+    "MemoryManager",
+]

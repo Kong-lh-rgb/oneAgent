@@ -1,688 +1,261 @@
-"""SQLite、FTS5 与 sqlite-vec 组成的本地记忆存储。"""
+"""长期记忆的 Markdown 文件存储。
+
+目录结构：
+
+```text
+.oneagent/memory/
+├── CORE.md
+├── INDEX.md
+├── active/M001.md ...
+└── archive/Mxxx.md
+```
+
+每个普通记忆是一个带 Front Matter 的 Markdown 文件。写入采用
+"临时文件 + 原子替换"，避免进程中断产生损坏文件。
+"""
 
 from __future__ import annotations
 
-import json
-import re
-import sqlite3
-from collections.abc import AsyncIterator, Sequence
-from contextlib import asynccontextmanager, suppress
-from datetime import datetime
+import asyncio
+import logging
+import os
+from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
 
-import aiosqlite
-import sqlite_vec
-
-from app.conversation import DEFAULT_DATABASE_PATH
-
-from .errors import MemoryConflictError, MemoryRevisionConflictError
 from .models import (
-    MemoryDraft,
-    MemoryItem,
+    MemoryRecord,
     MemoryStatus,
-    MemoryType,
-    utc_now,
+    next_memory_id,
+    normalize_memory_id,
+    parse_memory_markdown,
 )
 
-_MEMORY_IDENTIFIER_RE = re.compile(r"^[0-9a-f]{4,32}$")
+DEFAULT_MEMORY_DIR = Path(__file__).resolve().parents[2] / ".oneagent" / "memory"
+_MAX_MEMORY_FILE_BYTES = 512_000
+
+logger = logging.getLogger("oneagent.memory.store")
 
 
-class SQLiteMemoryStore:
-    """在一个事务中维护事实行、全文索引和向量索引。"""
+class MemoryStore:
+    """普通长期记忆的 Markdown 文件 CRUD。"""
 
     def __init__(
         self,
-        database_path: str | Path = DEFAULT_DATABASE_PATH,
+        memory_dir: str | Path = DEFAULT_MEMORY_DIR,
         *,
-        embedding_dimensions: int = 384,
+        max_active: int = 25,
     ) -> None:
-        if embedding_dimensions < 1:
-            raise ValueError("embedding_dimensions must be positive")
-        self.database_path = Path(database_path).expanduser().resolve()
-        self.embedding_dimensions = embedding_dimensions
+        self.memory_dir = Path(memory_dir).expanduser().resolve()
+        self.active_dir = self.memory_dir / "active"
+        self.archive_dir = self.memory_dir / "archive"
+        self.max_active = max_active
+        if max_active <= 0:
+            raise ValueError("max_active must be greater than zero")
 
     async def initialize(self) -> None:
-        """加载 sqlite-vec，并创建主表与两个检索索引。"""
+        """创建目录，并修复归档中断留下的错位文件。"""
 
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
-        async with self._connect() as database:
-            await database.executescript(_base_schema())
-            await database.execute(
-                "INSERT OR IGNORE INTO memory_meta(key, value) VALUES (?, ?)",
-                ("embedding_dimensions", str(self.embedding_dimensions)),
-            )
-            cursor = await database.execute(
-                "SELECT value FROM memory_meta WHERE key = 'embedding_dimensions'"
-            )
-            stored_dimensions = int((await cursor.fetchone())[0])
-            if stored_dimensions != self.embedding_dimensions:
-                raise ValueError(
-                    "memory embedding dimensions do not match existing database: "
-                    f"expected {stored_dimensions}, got {self.embedding_dimensions}"
-                )
-            await self._initialize_vector_index(database)
-            await database.commit()
-
-    async def _initialize_vector_index(
-        self,
-        database: aiosqlite.Connection,
-    ) -> None:
-        """创建带过滤列的 vec0，并迁移早期无过滤列索引。"""
-
-        await database.execute(
-            f"""CREATE VIRTUAL TABLE IF NOT EXISTS memory_vectors_v2 USING vec0(
-                memory_id TEXT PRIMARY KEY,
-                embedding float[{self.embedding_dimensions}] distance_metric=cosine,
-                namespace TEXT PARTITION KEY,
-                status TEXT
-            )"""
-        )
-        old_exists = await _table_exists(database, "memory_vectors")
-        if not old_exists:
-            return
-        new_count = (
-            await (
-                await database.execute("SELECT COUNT(*) FROM memory_vectors_v2")
-            ).fetchone()
-        )[0]
-        if new_count == 0:
-            rows = await (
-                await database.execute(
-                    """SELECT v.memory_id, v.embedding, m.namespace, m.status
-                       FROM memory_vectors v JOIN memories m ON m.id=v.memory_id"""
-                )
-            ).fetchall()
-            await database.executemany(
-                """INSERT INTO memory_vectors_v2(
-                       memory_id, embedding, namespace, status
-                   ) VALUES(?,?,?,?)""",
-                rows,
-            )
-        await database.execute("DROP TABLE memory_vectors")
+        await asyncio.to_thread(self.active_dir.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(self.archive_dir.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(self._repair_interrupted_archives)
 
     async def create(
         self,
-        draft: MemoryDraft,
         *,
-        normalized_content: str,
-        fingerprint: str,
-        embedding: Sequence[float],
-        supersedes_id: str | None = None,
-    ) -> MemoryItem:
-        """原子写入主表、FTS5 和 vec0。"""
+        title: str,
+        summary: str,
+        content: str,
+    ) -> MemoryRecord:
+        """创建一个普通长期记忆。"""
 
-        self._validate_embedding(embedding)
-        now = utc_now()
-        item = MemoryItem(
-            id=uuid4().hex,
-            namespace=draft.namespace,
-            memory_type=draft.memory_type,
-            key=draft.key,
-            content=draft.content,
-            normalized_content=normalized_content,
-            fingerprint=fingerprint,
-            status=draft.status,
-            importance=draft.importance,
-            confidence=draft.confidence,
-            source=draft.source,
-            supersedes_id=supersedes_id,
-            metadata=draft.metadata,
+        existing_ids = await self._all_ids()
+        now = datetime.now(UTC)
+        record = MemoryRecord(
+            id=next_memory_id(existing_ids),
+            title=title,
+            summary=summary,
+            content=content,
             created_at=now,
             updated_at=now,
+            last_accessed_at=now,
         )
-        async with self._transaction() as database:
-            try:
-                await self._insert_database(database, item, embedding)
-            except sqlite3.IntegrityError as exc:
-                raise MemoryConflictError(
-                    "memory fingerprint or active key conflicts"
-                ) from exc
-        return item
+        await self._write(record)
+        return record
 
-    async def replace(
-        self,
-        memory_id: str,
-        draft: MemoryDraft,
-        *,
-        normalized_content: str,
-        fingerprint: str,
-        embedding: Sequence[float],
-        expected_revision: int | None = None,
-    ) -> tuple[MemoryItem, MemoryItem]:
-        """原子停用旧事实并写入新事实。"""
+    async def load(self, memory_id: str) -> MemoryRecord | None:
+        """按 ID 加载记忆（不更新任何元数据）。"""
 
-        self._validate_embedding(embedding)
-        async with self._transaction() as database:
-            current = await self._require_database(database, memory_id)
-            _require_revision(current, expected_revision)
-            if current.status is not MemoryStatus.ACTIVE:
-                raise ValueError("only active memory can be superseded")
-            if draft.namespace != current.namespace or draft.key != current.key:
-                raise ValueError("replacement must keep namespace and key")
-            now = utc_now()
-            retired = _copy_item(
-                current,
-                status=MemoryStatus.SUPERSEDED,
-                status_changed_at=now,
-                updated_at=now,
-                revision=current.revision + 1,
-            )
-            await self._persist_status(database, retired, current.revision)
-            replacement = MemoryItem(
-                id=uuid4().hex,
-                namespace=draft.namespace,
-                memory_type=draft.memory_type,
-                key=draft.key,
-                content=draft.content,
-                normalized_content=normalized_content,
-                fingerprint=fingerprint,
-                status=draft.status,
-                importance=draft.importance,
-                confidence=draft.confidence,
-                source=draft.source,
-                supersedes_id=current.id,
-                metadata=draft.metadata,
-                created_at=now,
-                updated_at=now,
-            )
-            await self._insert_database(database, replacement, embedding)
-        return retired, replacement
-
-    async def get(self, memory_id: str) -> MemoryItem | None:
-        async with self._connect() as database:
-            cursor = await database.execute(
-                _SELECT + " WHERE id = ?",
-                (memory_id.strip().lower(),),
-            )
-            row = await cursor.fetchone()
-        return _from_row(row) if row else None
-
-    async def resolve(
-        self,
-        identifier: str,
-        *,
-        namespaces: Sequence[str],
-    ) -> MemoryItem | None:
-        """只在允许的 namespace 中解析完整 ID 或唯一前缀。"""
-
-        normalized = identifier.strip().lower()
-        if not _MEMORY_IDENTIFIER_RE.fullmatch(normalized):
-            raise ValueError("memory identifier must be 4-32 hexadecimal characters")
-        if not namespaces:
+        normalized = normalize_memory_id(memory_id)
+        path = await self._resolve_path(normalized)
+        if path is None or not await asyncio.to_thread(path.is_file):
             return None
-        placeholders = ",".join("?" for _ in namespaces)
-        async with self._connect() as database:
-            rows = await (
-                await database.execute(
-                    _SELECT
-                    + f""" WHERE namespace IN ({placeholders}) AND id LIKE ?
-                        ORDER BY updated_at DESC LIMIT 2""",
-                    (*namespaces, f"{normalized}%"),
-                )
-            ).fetchall()
-        if len(rows) > 1:
-            raise ValueError(f"记忆 ID 前缀不唯一：{identifier}")
-        return _from_row(rows[0]) if rows else None
+        return await asyncio.to_thread(_read_record, path)
 
-    async def list(
-        self,
-        *,
-        namespaces: Sequence[str] | None = None,
-        statuses: Sequence[MemoryStatus] | None = None,
-        memory_type: MemoryType | None = None,
-        limit: int = 100,
-    ) -> tuple[MemoryItem, ...]:
-        if not 1 <= limit <= 500:
-            raise ValueError("limit must be between 1 and 500")
-        clauses: list[str] = []
-        values: list[object] = []
-        _append_in_filter(clauses, values, "namespace", namespaces)
-        _append_in_filter(
-            clauses,
-            values,
-            "status",
-            [status.value for status in statuses] if statuses else None,
+    async def read(self, memory_id: str) -> MemoryRecord | None:
+        """读取 active 记忆并自动维护 ``access_count`` / ``last_accessed_at``。
+
+        归档记忆不进入模型上下文，因此不可通过语义 read 读取。
+        """
+
+        record = await self.load(memory_id)
+        if record is None or record.status is MemoryStatus.ARCHIVED:
+            return None
+        updated = MemoryRecord(
+            **{
+                **record.model_dump(),
+                "access_count": record.access_count + 1,
+                "last_accessed_at": datetime.now(UTC),
+            }
         )
-        if memory_type is not None:
-            clauses.append("memory_type = ?")
-            values.append(memory_type.value)
-        statement = _SELECT
-        if clauses:
-            statement += " WHERE " + " AND ".join(clauses)
-        statement += " ORDER BY updated_at DESC LIMIT ?"
-        values.append(limit)
-        async with self._connect() as database:
-            rows = await (await database.execute(statement, values)).fetchall()
-        return tuple(_from_row(row) for row in rows)
-
-    async def find_by_fingerprint(
-        self,
-        fingerprint: str,
-    ) -> MemoryItem | None:
-        async with self._connect() as database:
-            row = await (
-                await database.execute(
-                    _SELECT
-                    + """ WHERE fingerprint = ?
-                        AND status IN ('candidate','active') LIMIT 1""",
-                    (fingerprint,),
-                )
-            ).fetchone()
-        return _from_row(row) if row else None
-
-    async def find_active_fact(
-        self,
-        *,
-        namespace: str,
-        key: str,
-    ) -> MemoryItem | None:
-        async with self._connect() as database:
-            row = await (
-                await database.execute(
-                    _SELECT
-                    + """ WHERE namespace = ? AND memory_type = 'fact'
-                        AND memory_key = ? AND status = 'active' LIMIT 1""",
-                    (namespace, key),
-                )
-            ).fetchone()
-        return _from_row(row) if row else None
-
-    async def change_status(
-        self,
-        memory_id: str,
-        status: MemoryStatus,
-        *,
-        expected_revision: int | None = None,
-        confirmed: bool = False,
-    ) -> MemoryItem:
-        if status not in {MemoryStatus.ACTIVE, MemoryStatus.ARCHIVED}:
-            raise ValueError("ordinary status change only supports active or archived")
-        async with self._transaction() as database:
-            current = await self._require_database(database, memory_id)
-            _require_revision(current, expected_revision)
-            if status is MemoryStatus.ACTIVE:
-                if current.status is not MemoryStatus.CANDIDATE:
-                    raise ValueError("only candidate memory can be confirmed")
-                if current.memory_type is MemoryType.FACT and not current.key:
-                    raise ValueError("active FACT memory requires a key")
-                conflict = await self._find_active_fact_database(
-                    database,
-                    current.namespace,
-                    current.key,
-                )
-                if conflict is not None and conflict.id != current.id:
-                    raise MemoryConflictError("an active FACT already owns this key")
-            elif current.status not in {
-                MemoryStatus.CANDIDATE,
-                MemoryStatus.ACTIVE,
-            }:
-                raise ValueError("only candidate or active memory can be archived")
-            now = utc_now()
-            updated = _copy_item(
-                current,
-                status=status,
-                status_changed_at=(now if status is MemoryStatus.ARCHIVED else None),
-                confirmation_count=(
-                    current.confirmation_count + 1
-                    if status is MemoryStatus.ACTIVE and confirmed
-                    else current.confirmation_count
-                ),
-                updated_at=now,
-                revision=current.revision + 1,
-            )
-            await self._persist_status(database, updated, current.revision)
+        await self._write(updated)
         return updated
 
-    async def record_access(
+    async def update(
         self,
-        memory_ids: Sequence[str],
-        *,
-        used: bool = False,
-    ) -> None:
-        """记录召回或真实使用；遥测不推进 revision。"""
-
-        if not memory_ids:
-            return
-        now = _time_text(utc_now())
-        placeholders = ",".join("?" for _ in memory_ids)
-        async with self._transaction() as database:
-            await database.execute(
-                f"""UPDATE memories SET access_count = access_count + 1,
-                    use_count = use_count + ?, last_accessed_at = ?
-                    WHERE id IN ({placeholders})""",
-                (int(used), now, *memory_ids),
-            )
-
-    async def count_writes(
-        self,
-        *,
-        since: datetime,
-        source_session_id: str | None = None,
-        source_run_id: str | None = None,
-    ) -> int:
-        clauses = ["created_at >= ?"]
-        values: list[object] = [_time_text(since)]
-        if source_session_id is not None:
-            clauses.append("source_session_id = ?")
-            values.append(source_session_id)
-        if source_run_id is not None:
-            clauses.append("source_run_id = ?")
-            values.append(source_run_id)
-        async with self._connect() as database:
-            row = await (
-                await database.execute(
-                    "SELECT COUNT(*) FROM memories WHERE " + " AND ".join(clauses),
-                    values,
-                )
-            ).fetchone()
-        return int(row[0])
-
-    async def lexical_search(
-        self,
-        query: str,
-        *,
-        namespaces: Sequence[str],
-        limit: int = 20,
-    ) -> tuple[tuple[MemoryItem, float], ...]:
-        expression = _fts_expression(query)
-        if not expression or not namespaces:
-            return ()
-        placeholders = ",".join("?" for _ in namespaces)
-        statement = f"""
-            SELECT m.*, bm25(memory_fts) AS search_score
-            FROM memory_fts JOIN memories m ON m.id = memory_fts.memory_id
-            WHERE memory_fts MATCH ? AND m.namespace IN ({placeholders})
-              AND m.status = 'active'
-            ORDER BY search_score LIMIT ?
-        """
-        async with self._connect() as database:
-            rows = await (
-                await database.execute(statement, (expression, *namespaces, limit))
-            ).fetchall()
-        return tuple((_from_row(row), float(row["search_score"])) for row in rows)
-
-    async def vector_search(
-        self,
-        embedding: Sequence[float],
-        *,
-        namespaces: Sequence[str],
-        limit: int = 20,
-    ) -> tuple[tuple[MemoryItem, float], ...]:
-        self._validate_embedding(embedding)
-        if not namespaces:
-            return ()
-        async with self._connect() as database:
-            vector_rows: list[aiosqlite.Row] = []
-            serialized = sqlite_vec.serialize_float32(embedding)
-            for namespace in dict.fromkeys(namespaces):
-                rows = await (
-                    await database.execute(
-                        """SELECT memory_id, distance FROM memory_vectors_v2
-                           WHERE embedding MATCH ? AND k = ?
-                             AND namespace = ? AND status = 'active'
-                           ORDER BY distance""",
-                        (serialized, limit, namespace),
-                    )
-                ).fetchall()
-                vector_rows.extend(rows)
-            vector_rows.sort(key=lambda row: float(row["distance"]))
-            results: list[tuple[MemoryItem, float]] = []
-            for vector_row in vector_rows[:limit]:
-                memory = await self._require_database(
-                    database,
-                    vector_row["memory_id"],
-                )
-                results.append((memory, float(vector_row["distance"])))
-        return tuple(results)
-
-    async def _insert_database(
-        self,
-        database: aiosqlite.Connection,
-        item: MemoryItem,
-        embedding: Sequence[float],
-    ) -> None:
-        await database.execute(
-            """INSERT INTO memories (
-                id, namespace, memory_type, memory_key, content,
-                normalized_content, fingerprint, status, importance, confidence,
-                source_session_id, source_run_id, source_message_id, access_count,
-                use_count, confirmation_count, last_accessed_at, supersedes_id,
-                metadata_json, created_at, updated_at, status_changed_at, revision
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            _item_values(item),
-        )
-        await database.execute(
-            """INSERT INTO memory_fts(memory_id, content, normalized_content)
-               VALUES(?,?,?)""",
-            (item.id, item.content, item.normalized_content),
-        )
-        await database.execute(
-            """INSERT INTO memory_vectors_v2(
-                   memory_id, embedding, namespace, status
-               ) VALUES(?,?,?,?)""",
-            (
-                item.id,
-                sqlite_vec.serialize_float32(embedding),
-                item.namespace,
-                item.status.value,
-            ),
-        )
-
-    async def _persist_status(
-        self,
-        database: aiosqlite.Connection,
-        item: MemoryItem,
-        previous_revision: int,
-    ) -> None:
-        cursor = await database.execute(
-            """UPDATE memories SET status=?, confirmation_count=?, updated_at=?,
-               status_changed_at=?, revision=? WHERE id=? AND revision=?""",
-            (
-                item.status.value,
-                item.confirmation_count,
-                _time_text(item.updated_at),
-                _time_text(item.status_changed_at),
-                item.revision,
-                item.id,
-                previous_revision,
-            ),
-        )
-        if cursor.rowcount != 1:
-            raise MemoryRevisionConflictError("memory revision changed")
-        await database.execute(
-            "UPDATE memory_vectors_v2 SET status=? WHERE memory_id=?",
-            (item.status.value, item.id),
-        )
-
-    async def _require_database(
-        self,
-        database: aiosqlite.Connection,
         memory_id: str,
-    ) -> MemoryItem:
-        row = await (
-            await database.execute(_SELECT + " WHERE id = ?", (memory_id,))
-        ).fetchone()
-        if row is None:
-            raise KeyError(f"记忆不存在：{memory_id}")
-        return _from_row(row)
+        *,
+        content: str,
+        reason: str,
+    ) -> MemoryRecord:
+        """更新记忆正文，刷新 ``updated_at``。"""
 
-    async def _find_active_fact_database(
-        self,
-        database: aiosqlite.Connection,
-        namespace: str,
-        key: str | None,
-    ) -> MemoryItem | None:
-        if key is None:
-            return None
-        row = await (
-            await database.execute(
-                _SELECT
-                + """ WHERE namespace=? AND memory_type='fact'
-                    AND memory_key=? AND status='active' LIMIT 1""",
-                (namespace, key),
-            )
-        ).fetchone()
-        return _from_row(row) if row else None
+        record = await self.load(memory_id)
+        if record is None:
+            raise KeyError(f"memory '{memory_id}' not found")
+        if record.status is not MemoryStatus.ACTIVE:
+            raise ValueError("only active memory can be updated")
+        updated = MemoryRecord(
+            **{
+                **record.model_dump(),
+                "content": content,
+                "last_update_reason": reason,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        await self._write(updated)
+        return updated
 
-    def _validate_embedding(self, embedding: Sequence[float]) -> None:
-        if len(embedding) != self.embedding_dimensions:
-            raise ValueError(
-                f"embedding must contain {self.embedding_dimensions} dimensions"
-            )
+    async def archive(self, memory_id: str, *, reason: str) -> MemoryRecord:
+        """把记忆从 ``active/`` 移到 ``archive/``。"""
 
-    @asynccontextmanager
-    async def _connect(self) -> AsyncIterator[aiosqlite.Connection]:
-        database = await aiosqlite.connect(self.database_path)
-        database.row_factory = aiosqlite.Row
-        await database.execute("PRAGMA foreign_keys = ON")
-        await database.enable_load_extension(True)
+        record = await self.load(memory_id)
+        if record is None:
+            raise KeyError(f"memory '{memory_id}' not found")
+        if record.status is MemoryStatus.ARCHIVED:
+            return record
+        updated = MemoryRecord(
+            **{
+                **record.model_dump(),
+                "status": MemoryStatus.ARCHIVED,
+                "archive_reason": reason,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        source = self.active_dir / f"{record.id}.md"
+        target = self.archive_dir / f"{record.id}.md"
+        # 先原子更新源文件状态，再在同一文件系统中原子移动；正常路径不会留下
+        # active/archive 双份记录。若第二步失败，尽力恢复原 active 文件。
+        await asyncio.to_thread(self._write_bytes, updated.render_markdown(), source)
         try:
-            await database.load_extension(sqlite_vec.loadable_path())
-        except Exception as exc:
-            await database.close()
-            raise RuntimeError("无法加载 sqlite-vec 扩展") from exc
-        finally:
-            with suppress(Exception):
-                await database.enable_load_extension(False)
-        try:
-            yield database
-        finally:
-            await database.close()
+            await asyncio.to_thread(os.replace, source, target)
+        except BaseException:
+            await asyncio.to_thread(self._write_bytes, record.render_markdown(), source)
+            raise
+        return updated
 
-    @asynccontextmanager
-    async def _transaction(self) -> AsyncIterator[aiosqlite.Connection]:
-        async with self._connect() as database:
-            await database.execute("BEGIN IMMEDIATE")
+    async def list_active(self) -> tuple[MemoryRecord, ...]:
+        """列出所有 active 记忆，按 ID 升序。"""
+
+        records: list[MemoryRecord] = []
+        for path in sorted(self.active_dir.glob("M*.md")):
+            if await asyncio.to_thread(path.is_symlink):
+                continue
             try:
-                yield database
-                await database.commit()
-            except BaseException:
-                await database.rollback()
-                raise
+                record = await asyncio.to_thread(_read_record, path)
+                if record.status is MemoryStatus.ACTIVE:
+                    records.append(record)
+            except (ValueError, OSError) as exc:
+                logger.warning("skip unreadable memory %s: %s", path.name, exc)
+        return tuple(sorted(records, key=lambda record: record.id))
+
+    async def count_active(self) -> int:
+        return len(await self.list_active())
+
+    async def _all_ids(self) -> set[str]:
+        ids: set[str] = set()
+        for directory in (self.active_dir, self.archive_dir):
+            for path in directory.glob("M*.md"):
+                record = await self.load(path.stem)
+                if record is not None:
+                    ids.add(record.id)
+        return ids
+
+    async def _resolve_path(self, memory_id: str) -> Path | None:
+        for directory in (self.active_dir, self.archive_dir):
+            path = directory / f"{memory_id}.md"
+            if await asyncio.to_thread(path.is_file) and not await asyncio.to_thread(
+                path.is_symlink
+            ):
+                return path
+        return None
+
+    async def _write(self, record: MemoryRecord) -> None:
+        if record.status is not MemoryStatus.ACTIVE:
+            raise ValueError("inactive memory cannot be written to active directory")
+        target = self.active_dir / f"{record.id}.md"
+        await asyncio.to_thread(self._write_bytes, record.render_markdown(), target)
+
+    def _write_bytes(self, content: str, target: Path) -> None:
+        encoded = content.encode("utf-8")
+        if len(encoded) > _MAX_MEMORY_FILE_BYTES:
+            raise ValueError(
+                f"memory file exceeds {_MAX_MEMORY_FILE_BYTES} bytes: {target.name}"
+            )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f".{target.name}.tmp-{os.getpid()}")
+        temporary.write_bytes(encoded)
+        os.replace(temporary, target)
+
+    def _repair_interrupted_archives(self) -> None:
+        """把已标记 archived 但仍位于 active/ 的文件移回 archive/。"""
+
+        for path in self.active_dir.glob("M*.md"):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                if path.stat().st_size > _MAX_MEMORY_FILE_BYTES:
+                    continue
+                record = parse_memory_markdown(path.read_text(encoding="utf-8"))
+                if record.id != path.stem or record.status is not MemoryStatus.ARCHIVED:
+                    continue
+                os.replace(path, self.archive_dir / path.name)
+            except (OSError, ValueError) as exc:
+                logger.warning(
+                    "failed to repair interrupted memory archive %s: %s",
+                    path.name,
+                    exc,
+                )
 
 
-def _base_schema() -> str:
-    return """
-    CREATE TABLE IF NOT EXISTS memory_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS memories(
-      id TEXT PRIMARY KEY, namespace TEXT NOT NULL, memory_type TEXT NOT NULL,
-      memory_key TEXT, content TEXT NOT NULL, normalized_content TEXT NOT NULL,
-      fingerprint TEXT NOT NULL, status TEXT NOT NULL,
-      importance REAL NOT NULL, confidence REAL NOT NULL,
-      source_session_id TEXT, source_run_id TEXT, source_message_id TEXT,
-      access_count INTEGER NOT NULL DEFAULT 0, use_count INTEGER NOT NULL DEFAULT 0,
-      confirmation_count INTEGER NOT NULL DEFAULT 0, last_accessed_at TEXT,
-      supersedes_id TEXT, metadata_json TEXT NOT NULL DEFAULT '{}',
-      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, status_changed_at TEXT,
-      revision INTEGER NOT NULL, FOREIGN KEY(supersedes_id) REFERENCES memories(id)
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_active_fact_key
-      ON memories(namespace, memory_key)
-      WHERE memory_type='fact' AND status='active' AND memory_key IS NOT NULL;
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_live_fingerprint
-      ON memories(fingerprint) WHERE status IN ('candidate','active');
-    CREATE INDEX IF NOT EXISTS idx_memory_retrieval
-      ON memories(namespace, status, updated_at DESC);
-    CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
-      memory_id UNINDEXED, content, normalized_content, tokenize='unicode61'
-    );
-    """
-
-
-_SELECT = "SELECT * FROM memories"
-
-
-def _item_values(item: MemoryItem) -> tuple[object, ...]:
-    return (
-        item.id, item.namespace, item.memory_type.value, item.key, item.content,
-        item.normalized_content, item.fingerprint, item.status.value,
-        item.importance, item.confidence, item.source.session_id, item.source.run_id,
-        item.source.message_id, item.access_count, item.use_count,
-        item.confirmation_count, _time_text(item.last_accessed_at),
-        item.supersedes_id, json.dumps(item.metadata, ensure_ascii=False),
-        _time_text(item.created_at), _time_text(item.updated_at),
-        _time_text(item.status_changed_at), item.revision,
-    )
-
-
-def _from_row(row: aiosqlite.Row) -> MemoryItem:
-    from .models import MemorySource
-
-    return MemoryItem(
-        id=row["id"],
-        namespace=row["namespace"],
-        memory_type=row["memory_type"],
-        key=row["memory_key"],
-        content=row["content"],
-        normalized_content=row["normalized_content"],
-        fingerprint=row["fingerprint"],
-        status=row["status"],
-        importance=row["importance"],
-        confidence=row["confidence"],
-        source=MemorySource(
-            session_id=row["source_session_id"],
-            run_id=row["source_run_id"],
-            message_id=row["source_message_id"],
-        ),
-        access_count=row["access_count"],
-        use_count=row["use_count"],
-        confirmation_count=row["confirmation_count"],
-        last_accessed_at=_parse_time(row["last_accessed_at"]),
-        supersedes_id=row["supersedes_id"],
-        metadata=json.loads(row["metadata_json"]),
-        created_at=_parse_time(row["created_at"]),
-        updated_at=_parse_time(row["updated_at"]),
-        status_changed_at=_parse_time(row["status_changed_at"]),
-        revision=row["revision"],
-    )
-
-
-def _copy_item(item: MemoryItem, **updates: object) -> MemoryItem:
-    values = item.model_dump()
-    values.update(updates)
-    return MemoryItem.model_validate(values)
-
-
-def _require_revision(item: MemoryItem, expected: int | None) -> None:
-    if expected is not None and item.revision != expected:
-        raise MemoryRevisionConflictError(
-            f"memory revision conflict: expected {expected}, current {item.revision}"
+def _read_record(path: Path) -> MemoryRecord:
+    if path.stat().st_size > _MAX_MEMORY_FILE_BYTES:
+        raise ValueError(f"memory file too large: {path.name}")
+    text = path.read_text(encoding="utf-8")
+    record = parse_memory_markdown(text)
+    if record.id != path.stem:
+        raise ValueError(
+            f"memory id does not match filename: {record.id} != {path.stem}"
         )
-
-
-def _append_in_filter(
-    clauses: list[str],
-    values: list[object],
-    column: str,
-    selected: Sequence[str] | None,
-) -> None:
-    if selected:
-        clauses.append(f"{column} IN ({','.join('?' for _ in selected)})")
-        values.extend(selected)
-
-
-def _fts_expression(query: str) -> str:
-    tokens = [token.replace('"', '""') for token in query.split() if token]
-    return " OR ".join(f'"{token}"' for token in tokens[:20])
-
-
-def _time_text(value: datetime | None) -> str | None:
-    return value.isoformat() if value else None
-
-
-def _parse_time(value: str | None) -> datetime | None:
-    return datetime.fromisoformat(value) if value else None
-
-
-async def _table_exists(database: aiosqlite.Connection, name: str) -> bool:
-    row = await (
-        await database.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-            (name,),
+    expected_status = (
+        MemoryStatus.ARCHIVED
+        if path.parent.name == "archive"
+        else MemoryStatus.ACTIVE
+    )
+    if record.status is not expected_status:
+        raise ValueError(
+            f"memory status does not match directory: {record.status.value}"
         )
-    ).fetchone()
-    return row is not None
+    return record
 
 
-__all__ = ["SQLiteMemoryStore"]
+__all__ = ["DEFAULT_MEMORY_DIR", "MemoryStore"]

@@ -32,9 +32,9 @@ from app.conversation import (
     SQLiteConversationStore,
 )
 from app.memory import (
-    MemoryItem,
     MemoryManager,
-    MemoryStatus,
+    MemoryRecord,
+    register_memory_tools,
 )
 from app.task import (
     DEFAULT_TASKS_DIR,
@@ -348,69 +348,29 @@ async def _remove_permission_rule(
     return await store.remove(matched[0].id)
 
 
-def _parse_memory_statuses(argument: str) -> tuple[MemoryStatus, ...]:
-    """解析 /memories 的可选状态；默认显示待处理和当前生效项。"""
-
-    normalized = argument.strip().lower()
-    if not normalized:
-        return (MemoryStatus.CANDIDATE, MemoryStatus.ACTIVE)
-    if normalized == "all":
-        return tuple(MemoryStatus)
-    try:
-        return (MemoryStatus(normalized),)
-    except ValueError as exc:
-        allowed = ", ".join([status.value for status in MemoryStatus] + ["all"])
-        raise ValueError(f"未知记忆状态：{argument}；可选：{allowed}") from exc
-
-
-def _print_memories(memories: Sequence[MemoryItem]) -> None:
-    """输出适合终端快速浏览的记忆列表。"""
+def _print_memories(memories: Sequence[MemoryRecord]) -> None:
+    """输出适合终端快速浏览的长期记忆列表（Recall Cue）。"""
 
     if not memories:
-        print("没有符合条件的记忆。")
+        print("没有长期记忆。")
         return
     for memory in memories:
-        content = memory.content.replace("\n", " ")
-        if len(content) > 80:
-            content = content[:77] + "..."
-        print(
-            f"{memory.id[:8]}  [{memory.status.value}] "
-            f"[{memory.memory_type.value}] {memory.namespace}  "
-            f"rev={memory.revision}  {content}"
-        )
+        cue = " ".join(memory.summary.split())
+        print(f"{memory.id}  [{memory.status.value}]  {memory.title}")
+        print(f"  Cue: {cue}")
 
 
-def _print_memory(memory: MemoryItem) -> None:
-    """输出单条记忆及其审计信息。"""
+def _print_memory(memory: MemoryRecord) -> None:
+    """输出单条长期记忆的完整内容。"""
 
-    source = memory.source
     print(
         f"ID: {memory.id}\n"
         f"状态: {memory.status.value}\n"
-        f"类型: {memory.memory_type.value}\n"
-        f"Namespace: {memory.namespace}\n"
-        f"Key: {memory.key or '-'}\n"
-        f"Revision: {memory.revision}\n"
-        f"重要度/置信度: {memory.importance:.2f}/{memory.confidence:.2f}\n"
-        f"访问/使用/确认: {memory.access_count}/{memory.use_count}/"
-        f"{memory.confirmation_count}\n"
-        f"来源 Session: {source.session_id or '-'}\n"
-        f"来源 Run: {source.run_id or '-'}\n"
-        f"替代自: {memory.supersedes_id or '-'}\n"
+        f"标题: {memory.title}\n"
+        f"访问次数: {memory.access_count}\n"
         f"创建时间: {memory.created_at.astimezone().isoformat()}\n"
-        f"内容:\n{memory.content}"
+        f"内容:\n{memory.render_full()}"
     )
-
-
-async def _resolve_managed_memory(
-    manager: MemoryManager,
-    identifier: str,
-    *,
-    namespaces: Sequence[str],
-) -> MemoryItem | None:
-    """按配置允许的 namespace 解析用户输入的记忆 ID。"""
-
-    return await manager.resolve(identifier, namespaces=namespaces)
 
 
 async def _run(args: argparse.Namespace) -> int:
@@ -474,12 +434,10 @@ async def _run(args: argparse.Namespace) -> int:
             print("联网搜索：DuckDuckGo（配置 TAVILY_API_KEY 可启用 Tavily）")
 
     registry = ModelAdapterRegistry(settings)
-    # Memory V1 已冻结，等待重新确定“模型自主记忆 + Harness 领域约束”的架构。
-    # 保留底层实现和离线测试作为设计样本，但 CLI 不再装配旧 Manager，避免旧的
-    # 自动召回、后台提取和全量 Candidate 策略继续影响真实对话。
-    memory_manager: MemoryManager | None = None
-    memory_namespaces: tuple[str, ...] = ()
-    print("长期记忆：Memory V1 已冻结，等待新架构设计")
+    memory_manager = MemoryManager()
+    await memory_manager.initialize()
+    register_memory_tools(tool_registry, memory_manager)
+    print("长期记忆：Sparse Model-Directed Memory（CORE + INDEX + 语义工具）")
     context_settings = ContextSettings()
     context_summarizer = ModelContextSummarizer(
         registry,
@@ -515,7 +473,6 @@ async def _run(args: argparse.Namespace) -> int:
         task_context_provider=TaskContextProvider(task_store),
         checkpoint_store=checkpoint_store,
         memory_manager=memory_manager,
-        memory_namespaces=memory_namespaces,
     )
     try:
         if args.message is not None:
@@ -566,98 +523,18 @@ async def _run(args: argparse.Namespace) -> int:
                 )
                 continue
             if content == "/memories" or content.startswith("/memories "):
-                if memory_manager is None:
-                    print("长期记忆 V1 已冻结，等待新架构设计。")
-                    continue
-                argument = content.removeprefix("/memories").strip()
-                try:
-                    statuses = _parse_memory_statuses(argument)
-                    memories = await memory_manager.list(
-                        namespaces=memory_namespaces,
-                        statuses=statuses,
-                    )
-                except ValueError as exc:
-                    print(exc)
-                    continue
-                _print_memories(memories)
+                _print_memories(await memory_manager.list())
                 continue
             if content == "/memory" or content.startswith("/memory "):
-                if memory_manager is None:
-                    print("长期记忆 V1 已冻结，等待新架构设计。")
-                    continue
                 identifier = content.removeprefix("/memory").strip()
                 if not identifier:
                     print("用法：/memory <记忆ID>")
                     continue
-                try:
-                    memory = await _resolve_managed_memory(
-                        memory_manager,
-                        identifier,
-                        namespaces=memory_namespaces,
-                    )
-                except ValueError as exc:
-                    print(exc)
-                    continue
+                memory = await memory_manager.read(identifier)
                 if memory is None:
                     print(f"找不到记忆：{identifier}")
                     continue
                 _print_memory(memory)
-                continue
-            if content == "/memory-confirm" or content.startswith(
-                "/memory-confirm "
-            ):
-                if memory_manager is None:
-                    print("长期记忆 V1 已冻结，等待新架构设计。")
-                    continue
-                identifier = content.removeprefix("/memory-confirm").strip()
-                if not identifier:
-                    print("用法：/memory-confirm <记忆ID>")
-                    continue
-                try:
-                    memory = await _resolve_managed_memory(
-                        memory_manager,
-                        identifier,
-                        namespaces=memory_namespaces,
-                    )
-                    if memory is None:
-                        print(f"找不到记忆：{identifier}")
-                        continue
-                    confirmed = await memory_manager.confirm(
-                        memory.id,
-                        expected_revision=memory.revision,
-                    )
-                except (ValueError, KeyError) as exc:
-                    print(exc)
-                    continue
-                print(f"已确认记忆：{confirmed.id[:8]} · active")
-                continue
-            if content == "/memory-archive" or content.startswith(
-                "/memory-archive "
-            ):
-                if memory_manager is None:
-                    print("长期记忆 V1 已冻结，等待新架构设计。")
-                    continue
-                identifier = content.removeprefix("/memory-archive").strip()
-                if not identifier:
-                    print("用法：/memory-archive <记忆ID>")
-                    continue
-                try:
-                    memory = await _resolve_managed_memory(
-                        memory_manager,
-                        identifier,
-                        namespaces=memory_namespaces,
-                    )
-                    if memory is None:
-                        print(f"找不到记忆：{identifier}")
-                        continue
-                    archived = await memory_manager.archive(
-                        memory.id,
-                        expected_revision=memory.revision,
-                    )
-                except (ValueError, KeyError) as exc:
-                    print(exc)
-                    continue
-                print(f"已归档记忆：{archived.id[:8]} · archived")
                 continue
             if content == "/permissions":
                 rules = await rule_store.list(scope_ids=(conversation.id,))
@@ -784,7 +661,6 @@ async def _run(args: argparse.Namespace) -> int:
                 summary_store=summary_store,
             )
     finally:
-        await runtime.drain_memory_observations()
         await registry.close()
 
 

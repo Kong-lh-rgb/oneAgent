@@ -19,6 +19,6 @@ tiktoken==0.13.0
 
 # Persistence, scheduling, and logging
 aiosqlite==0.22.1
-sqlite-vec==0.1.9
+PyYAML==6.0.3
 APScheduler==3.11.3
 structlog==26.1.0

@@ -31,7 +31,11 @@ from app.context import (
     RollingConversationSummary,
     SummaryGenerationResult,
 )
-from app.memory import MEMORY_CONTEXT_MESSAGE_NAME
+from app.memory import (
+    CORE_MEMORY_MESSAGE_NAME,
+    MEMORY_INDEX_MESSAGE_NAME,
+    MEMORY_POLICY_MESSAGE_NAME,
+)
 from app.models.adapter import ModelAdapter
 from app.models.config import ModelSettings, ProviderConfig
 from app.models.registry import ModelAdapterRegistry
@@ -173,58 +177,29 @@ class FailingEventHandler(AgentEventHandler):
 
 
 class FakeMemoryManager:
-    """验证 Runtime 只依赖 Memory 门面，不接触检索实现。"""
+    """验证 Runtime 只依赖 Memory 门面（CORE+INDEX+Policy 注入）。"""
 
     def __init__(self) -> None:
-        self.observations: list[tuple[str, str, object]] = []
-
-    @property
-    def extraction_usage(self) -> ModelUsage:
-        return ModelUsage(input_tokens=4, output_tokens=2, total_tokens=6)
-
-    async def context_message(self, query, *, namespaces):
-        return Message(
-            role=MessageRole.SYSTEM,
-            name=MEMORY_CONTEXT_MESSAGE_NAME,
-            content="用户偏好中文",
+        self.messages = (
+            Message(
+                role=MessageRole.SYSTEM,
+                name=CORE_MEMORY_MESSAGE_NAME,
+                content="# Core Memory\n\n用户偏好中文",
+            ),
+            Message(
+                role=MessageRole.SYSTEM,
+                name=MEMORY_INDEX_MESSAGE_NAME,
+                content="# Long-term Memory Index\n\n[M001] demo\nCue: demo",
+            ),
+            Message(
+                role=MessageRole.SYSTEM,
+                name=MEMORY_POLICY_MESSAGE_NAME,
+                content="Long-term memory is intentionally sparse.",
+            ),
         )
 
-    def route_namespace(
-        self,
-        user_text,
-        *,
-        allowed_namespaces,
-        default_namespace,
-    ):
-        return default_namespace
-
-    async def observe(self, observation, *, namespace, source, explicit_user_text=None):
-        self.observations.append((observation, namespace, source))
-        return ()
-
-
-class BlockingMemoryManager(FakeMemoryManager):
-    def __init__(self) -> None:
-        super().__init__()
-        self.started = asyncio.Event()
-        self.release = asyncio.Event()
-
-    async def observe(
-        self,
-        observation,
-        *,
-        namespace,
-        source,
-        explicit_user_text=None,
-    ):
-        self.started.set()
-        await self.release.wait()
-        return await super().observe(
-            observation,
-            namespace=namespace,
-            source=source,
-            explicit_user_text=explicit_user_text,
-        )
+    async def context_messages(self) -> tuple[Message, ...]:
+        return self.messages
 
 
 class BlockingModelAdapter(ModelAdapter):
@@ -1293,70 +1268,48 @@ async def test_runtime_injects_interrupted_checkpoint_without_persisting_it(
 
 
 @pytest.mark.asyncio
-async def test_runtime_recalls_and_observes_memory_without_persisting_context() -> None:
+async def test_runtime_injects_memory_context_without_persisting() -> None:
     registry, adapter = fake_registry([model_response(content="我会使用中文回答")])
     memory = FakeMemoryManager()
-    events = InMemoryEventHandler()
     runtime = AgentRuntime(
         registry,
         ToolRegistry(),
         provider="fake",
         memory_manager=memory,
-        memory_namespaces=("user:local", "project:oneagent"),
-        memory_write_namespace="user:local",
     )
-    result = await runtime.run(
-        "继续回答",
-        conversation_id="conv-1",
-        event_handler=events,
-    )
-    assert len(memory.observations) == 0
-    await runtime.drain_memory_observations()
+    result = await runtime.run("继续回答", conversation_id="conv-1")
 
-    injected = next(
-        message
-        for message in adapter.requests[0].messages
-        if message.name == MEMORY_CONTEXT_MESSAGE_NAME
-    )
-    assert injected.content == "用户偏好中文"
+    request_names = [
+        message.name for message in adapter.requests[0].messages
+    ]
+    assert CORE_MEMORY_MESSAGE_NAME in request_names
+    assert MEMORY_INDEX_MESSAGE_NAME in request_names
+    assert MEMORY_POLICY_MESSAGE_NAME in request_names
+    # 记忆上下文只是请求视图，不进入最终结果（不持久化）。
     assert not any(
-        message.name == MEMORY_CONTEXT_MESSAGE_NAME for message in result.messages
+        message.name in {
+            CORE_MEMORY_MESSAGE_NAME,
+            MEMORY_INDEX_MESSAGE_NAME,
+            MEMORY_POLICY_MESSAGE_NAME,
+        }
+        for message in result.messages
     )
-    assert len(memory.observations) == 1
-    observation, namespace, source = memory.observations[0]
-    assert "继续回答" in observation
-    assert "我会使用中文回答" in observation
-    assert namespace == "user:local"
-    assert source.session_id == "conv-1"
-    assert source.run_id == result.run_id
-    event_types = [event.type for event in events.events]
-    assert AgentEventType.MEMORY_RETRIEVAL_STARTED in event_types
-    assert AgentEventType.MEMORY_RETRIEVAL_COMPLETED in event_types
-    assert AgentEventType.MEMORY_OBSERVATION_STARTED in event_types
-    completed = next(
-        event
-        for event in events.events
-        if event.type is AgentEventType.MEMORY_OBSERVATION_COMPLETED
-    )
-    assert completed.usage.total_tokens == 6
 
 
 @pytest.mark.asyncio
-async def test_memory_observation_does_not_block_agent_result() -> None:
+async def test_memory_context_failure_does_not_block_agent_result() -> None:
     registry, _ = fake_registry([model_response(content="最终回答")])
-    memory = BlockingMemoryManager()
+
+    class FailingMemoryManager:
+        async def context_messages(self) -> tuple[Message, ...]:
+            raise RuntimeError("memory unavailable")
+
     runtime = AgentRuntime(
         registry,
         ToolRegistry(),
         provider="fake",
-        memory_manager=memory,
+        memory_manager=FailingMemoryManager(),
     )
 
-    result = await asyncio.wait_for(runtime.run("记住这个偏好"), timeout=0.2)
-    await memory.started.wait()
-
+    result = await asyncio.wait_for(runtime.run("继续"), timeout=5)
     assert result.content == "最终回答"
-    assert memory.observations == []
-    memory.release.set()
-    await runtime.drain_memory_observations()
-    assert len(memory.observations) == 1

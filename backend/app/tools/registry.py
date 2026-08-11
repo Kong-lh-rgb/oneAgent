@@ -8,7 +8,7 @@ from app.models.types import ToolDefinition
 
 from .base import BaseTool
 
-_INVALID_NAME_CHARS = re.compile(r"[^a-zA-Z0-9_]")
+_VALID_NAME = re.compile(r"^[a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)*$")
 
 
 class ToolRegistry:
@@ -19,9 +19,9 @@ class ToolRegistry:
         name = tool.definition.name
         if not name:
             raise ValueError("Tool name cannot be empty.")
-        if _INVALID_NAME_CHARS.search(name):
+        if not _VALID_NAME.fullmatch(name):
             raise ValueError(
-                "Tool name must only contain letters, digits, and underscores: "
+                "Tool name must use dot-separated letters, digits, or underscores: "
                 f"{name!r}"
             )
         if name in self._tools:
