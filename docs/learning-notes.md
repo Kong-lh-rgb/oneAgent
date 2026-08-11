@@ -931,3 +931,47 @@ SQLite、FTS5、sqlite-vec、领域模型和测试暂时保留，它们是基础
 样本，不代表最终架构。后续重构前应先回答：哪些记忆操作是模型可自主执行的低风险
 动作，哪些操作需要用户明确授权，自动召回与主动搜索如何配合，以及怎样依靠审计和
 撤销替代令人反感的逐项确认。
+
+## 23. Memory Capacity：写入前腾位，语义选择与并发不变量分离
+
+普通 Memory 的 25 条上限不能只在第 26 条写入后返回一个提示。Main Agent 已不再持有
+普通 archive 工具，Post-Run Reflector V1 也只负责 none/create/update，因此“超限后
+给出 candidates”没有实际执行者。容量闭环必须发生在 CREATE 之前：若 active 已满，
+先尝试安全归档一个候选；只有真正腾出空位后才允许创建。维护模型选择 defer、调用失败
+或无法证明候选未变化时，本次 CREATE 被跳过，旧记忆保持不变。
+
+Reflection 与 mutation 应当分层。`PostRunMemoryReflector` 只把有界 Run 上下文转换成
+严格决策，Runtime 再验证 UPDATE 的 recall 证据或协调 CREATE 容量，最终由
+MemoryManager 写入。容量语义由独立 `MemoryMaintenanceReflector` 判断，它只看到现有
+Retention 算法选出的少量完整候选，只能输出 archive/defer。Archive 是移动到保留
+Front Matter 的 `archive/`，不是删除；V1 不实现需要“更新保留项 + 归档来源项”的 Merge。
+
+候选评分只负责缩小模型输入，不能直接成为删除规则。当前算法优先挑选长期未访问、长期
+未更新且访问较少的记录，但小时级时间负分远大于 `log1p(access_count)`，整体仍明显偏重
+时间。Maintenance 模型必须读取候选完整正文，判断是否过时、重复或已被替代；信息不足
+就 defer。后续优化评分应通过评测数据完成，不应为了容量闭环顺便重写 retention 语义。
+
+模型调用期间存在并发窗口。只比较 `updated_at` 不够可靠，因为 Markdown 当前按秒保存
+时间戳，同一秒内更新可能保持相同时间；并发 `memory.read` 还会改变 access_count 和
+last_accessed_at，却不改变 updated_at。归档前因此要重新加载并比较完整 MemoryRecord
+快照，任意正文或 retention metadata 变化都视为陈旧决策。CREATE 则通过
+`create_if_capacity` 在 MemoryManager 同一把锁里再次检查数量和写入，避免两个 Run
+同时抢到最后一个空位。
+
+Maintenance 只在正常 FINAL_ANSWER 后运行，且每个 Run 默认最多执行 3 个 archive
+动作。历史遗留 26+ 条可以逐轮恢复；达到动作上限仍未收敛时记录 remaining_overflow，
+不无限调用小模型。provider error、timeout、非法 JSON、候选外 ID、陈旧快照和 defer
+都不会改变主任务成功结果。Maintenance 事件单独记录 provider/model/usage/latency，
+Trace 的 Main Agent 汇总仍只统计主模型。
+
+最终链路为：
+
+```text
+FINAL_ANSWER
+→ Checkpoint complete
+→ Reflection 决策
+→ UPDATE：验证当前 Run 已 read 后更新
+→ CREATE：校验内容 → 必要时 Maintenance archive → 原子容量检查并创建
+→ 若存在历史超限，执行有界 Maintenance
+→ AGENT_COMPLETED
+```

@@ -6,6 +6,34 @@
 
 ---
 
+## 2026-08-12
+
+### 完成：普通长期记忆容量维护闭环
+
+#### Bad Case
+- [x] Reflection CREATE 先写入第 26 条再发出维护信号，active 上限只是软提示，默认 Main Agent 又没有 archive 工具，容量无法自动收敛
+- [x] Reflection 同时承担模型判断和 Markdown mutation，难以在 CREATE 前插入容量协调，也不利于隔离模型语义与 Harness 不变量
+- [x] 仅比较 `updated_at` 无法可靠发现维护模型调用期间的并发变化；Markdown 时间戳保存到秒，同一秒内更新可能绕过检查
+- [x] Reflection 或 Maintenance 小模型的 provider/JSON/timeout 错误不应让已成功的 Main Agent Run 失败
+- [x] 两个并发 Run 都看到最后一个空位时，普通的“先检查、后创建”可能同时写入并突破 25 条
+- [ ] Retention Score 仍明显偏重时间信号，access_count 的保护较弱；当前只用于生成候选，不直接机械归档
+- [ ] Maintenance V1 只实现 recoverable archive/defer，不实现需要多文件一致性的 Merge；archive 文件也尚无正式 restore API
+
+#### 实现结果
+- [x] `PostRunMemoryReflector` 收口为纯决策组件，只输出严格 none/create/update；Runtime/Harness 负责校验和应用 mutation
+- [x] 新增独立 `MemoryMaintenanceReflector`，输入最多 5 条候选完整正文与 retention metadata，只能输出 archive/defer，不能修改正文、Merge 或选择候选外 ID
+- [x] Reflection CREATE 在写入前检查容量；满 25 条时先归档一个未变化候选再创建，正常路径最终仍为 25 条；defer/失败时跳过新建且不删除旧记忆
+- [x] `MemoryManager.create_if_capacity` 在同一锁内执行容量检查与创建，两个并发 CREATE 最多一个成功
+- [x] 维护归档使用完整 `MemoryRecord` 乐观快照；正文、访问次数、访问时间或更新时间任一变化都拒绝陈旧归档
+- [x] CREATE 内容在维护前完成领域模型校验，避免先归档旧记忆后才发现新记忆标题、摘要或正文非法
+- [x] 已有 26+ 条的历史状态在正常 FINAL_ANSWER 后最多执行 3 次单动作维护，逐步恢复；达到动作上限会记录 remaining_overflow
+- [x] Maintenance 可独立于 Reflection 处理既有超限；所有异常统一降级为事件，不改变 Main AgentResult
+- [x] 新增 `MEMORY_MAINTENANCE_*` 独立模型、超时、候选数与动作数配置，默认继承 Reflection provider/model
+- [x] 新增 maintenance started/completed/failed/skipped 事件；Trace 保存小模型明细但不污染 Main Agent provider/model/Token 汇总
+- [x] CLI 展示 Reflection 与容量维护模型配置及实时维护状态
+- [x] 离线测试覆盖满额归档后创建、defer、provider/JSON/timeout、越界 ID、陈旧快照、非法 CREATE、历史超限收敛、动作上限和并发 CREATE
+- [x] 全量验证：`pytest` 366 个用例通过；`ruff`、`compileall` 和 `git diff --check` 通过
+
 ## 2026-08-11
 
 ### 完成：普通长期记忆迁移至 Post-Run Memory Reflection
@@ -19,7 +47,7 @@
 - [x] `AGENT_COMPLETED/FAILED` 先于 Reflection 发出，Trace 与 CLI 会出现“Run 已结束但仍继续产生后置事件”的生命周期倒置
 - [x] UPDATE 的“必须掌握旧记忆完整正文”只写在 Prompt 中，模型仅凭 INDEX cue 也可能覆盖并丢失旧正文
 - [x] Trace 汇总无差别接受 Reflection provider/model/usage，会把 Main Agent Run 错误显示成反思小模型并污染主任务 Token 摘要
-- [ ] Reflection V1 只允许 NOOP/CREATE/UPDATE；第 26 条 CREATE 会产生现有 Maintenance 信号和 retention candidates，但普通 archive 已不在 Main Agent Registry，尚无自动收敛执行者
+- [x] Reflection V1 的第 26 条容量缺口已由 2026-08-12 的独立 Memory Maintenance Reflector 闭环
 
 #### 实现结果
 - [x] Main Agent 默认工具收口为 `memory.read`、可选 `memory.list`、`core_memory.update`、`core_memory.remove`；普通 create/update/archive 类保留为内部能力但不默认注册

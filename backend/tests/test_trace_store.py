@@ -118,7 +118,7 @@ async def test_trace_recording_is_idempotent_and_does_not_regress_status(
 
 
 @pytest.mark.asyncio
-async def test_reflection_event_does_not_overwrite_main_run_model_or_usage(
+async def test_memory_post_run_events_do_not_overwrite_main_model_or_usage(
     tmp_path,
 ) -> None:
     store = SQLiteTraceStore(tmp_path / "oneagent.db")
@@ -161,8 +161,25 @@ async def test_reflection_event_does_not_overwrite_main_run_model_or_usage(
         AgentEvent(
             run_id="run-reflection",
             sequence=2,
-            type=AgentEventType.AGENT_COMPLETED,
+            type=AgentEventType.MEMORY_MAINTENANCE_COMPLETED,
             event_time=started_at + timedelta(milliseconds=2),
+            provider="cheap",
+            model="maintenance-model",
+            usage=ModelUsage(
+                input_tokens=400,
+                output_tokens=40,
+                total_tokens=440,
+            ),
+            maintenance_triggered=True,
+            maintenance_action="defer",
+        )
+    )
+    await store.record_event(
+        AgentEvent(
+            run_id="run-reflection",
+            sequence=3,
+            type=AgentEventType.AGENT_COMPLETED,
+            event_time=started_at + timedelta(milliseconds=3),
             step=1,
             stop_reason=AgentStopReason.FINAL_ANSWER,
         )
@@ -174,7 +191,7 @@ async def test_reflection_event_does_not_overwrite_main_run_model_or_usage(
     assert run.provider == "main"
     assert run.model == "main-model"
     assert run.total_tokens == 120
-    assert run.event_count == 3
+    assert run.event_count == 4
 
 
 @pytest.mark.asyncio

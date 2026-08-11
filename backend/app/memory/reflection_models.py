@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
@@ -146,28 +145,23 @@ class ReflectionDecision(BaseModel):
         return self.model_copy(update={"memory_id": self.memory_id.upper()})
 
 
-class MemoryReflectionOutcome(BaseModel):
-    """用于 Runtime 事件和测试的 Reflection 执行结果。"""
+class MemoryReflectionProposal(BaseModel):
+    """Reflection 模型调用结果；是否真正写入由 Runtime 协调。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    triggered: bool
-    action: ReflectionAction | None = None
+    decision: ReflectionDecision | None = None
     provider: str | None = None
     model: str | None = None
     duration_ms: float = Field(default=0.0, ge=0.0)
     usage: ModelUsage = Field(default_factory=ModelUsage)
     error: str | None = None
-    memory_id: str | None = None
-    maintenance_required: bool = False
-    retention_candidate_ids: tuple[str, ...] = ()
-    completed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 __all__ = [
     "MemoryReflectionConfig",
     "MemoryReflectionInput",
-    "MemoryReflectionOutcome",
+    "MemoryReflectionProposal",
     "ReflectionAction",
     "ReflectionDecision",
 ]

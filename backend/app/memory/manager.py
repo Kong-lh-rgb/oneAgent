@@ -12,6 +12,7 @@ Runtime 不直接操作文件路径，统一通过 ``MemoryManager``：
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.models.types import Message, MessageRole
@@ -142,6 +143,46 @@ class MemoryManager:
             await self._rebuild_index()
             return record
 
+    async def create_if_capacity(
+        self,
+        *,
+        title: str,
+        summary: str,
+        content: str,
+    ) -> MemoryRecord | None:
+        """在同一临界区检查容量并创建，避免并发突破 active 上限。"""
+
+        async with self._lock:
+            if await self.store.count_active() >= self.max_active:
+                return None
+            record = await self.store.create(
+                title=title,
+                summary=summary,
+                content=content,
+            )
+            await self._rebuild_index()
+            return record
+
+    @staticmethod
+    def validate_create(
+        *,
+        title: str,
+        summary: str,
+        content: str,
+    ) -> None:
+        """在容量维护前验证 CREATE 内容，避免先归档后才发现输入非法。"""
+
+        now = datetime.now(UTC)
+        MemoryRecord(
+            id="M000",
+            title=title,
+            summary=summary,
+            content=content,
+            created_at=now,
+            updated_at=now,
+            last_accessed_at=now,
+        )
+
     async def update(
         self,
         memory_id: str,
@@ -164,6 +205,27 @@ class MemoryManager:
         """归档记忆并重建 INDEX。"""
 
         async with self._lock:
+            record = await self.store.archive(memory_id, reason=reason)
+            await self._rebuild_index()
+            return record
+
+    async def archive_if_unchanged(
+        self,
+        memory_id: str,
+        *,
+        expected_record: MemoryRecord,
+        reason: str,
+    ) -> MemoryRecord:
+        """候选快照仍为最新时归档，拒绝维护模型基于陈旧内容执行。"""
+
+        async with self._lock:
+            current = await self.store.load(memory_id)
+            if current is None:
+                raise KeyError(f"memory '{memory_id}' not found")
+            if current != expected_record:
+                raise ValueError(
+                    f"memory '{memory_id}' changed since maintenance snapshot"
+                )
             record = await self.store.archive(memory_id, reason=reason)
             await self._rebuild_index()
             return record
@@ -203,6 +265,21 @@ class MemoryManager:
             return self.maintenance.exceeds_capacity(
                 await self.store.count_active()
             )
+
+    async def active_count(self) -> int:
+        """返回当前 active Memory 数量。"""
+
+        async with self._lock:
+            return await self.store.count_active()
+
+    async def has_capacity(self, *, required_slots: int = 1) -> bool:
+        """判断是否能在不超过硬上限的情况下容纳指定新记录数。"""
+
+        if required_slots < 0:
+            raise ValueError("required_slots cannot be negative")
+        async with self._lock:
+            active_count = await self.store.count_active()
+            return active_count + required_slots <= self.max_active
 
     async def retention_candidates(
         self,

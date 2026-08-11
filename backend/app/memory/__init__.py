@@ -13,6 +13,15 @@
 from .core import DEFAULT_MAX_CORE_TOKENS, CoreMemoryEntry, CoreMemoryManager
 from .index import MemoryIndex
 from .maintenance import MemoryMaintenance
+from .maintenance_models import (
+    MaintenanceAction,
+    MemoryMaintenanceCandidate,
+    MemoryMaintenanceConfig,
+    MemoryMaintenanceDecision,
+    MemoryMaintenanceInput,
+    MemoryMaintenanceProposal,
+)
+from .maintenance_reflection import MemoryMaintenanceReflector
 from .manager import (
     CORE_MEMORY_MESSAGE_NAME,
     MEMORY_INDEX_MESSAGE_NAME,
@@ -30,7 +39,7 @@ from .reflection import PostRunMemoryReflector
 from .reflection_models import (
     MemoryReflectionConfig,
     MemoryReflectionInput,
-    MemoryReflectionOutcome,
+    MemoryReflectionProposal,
     ReflectionAction,
     ReflectionDecision,
 )
@@ -59,9 +68,16 @@ __all__ = [
     "MEMORY_POLICY_MESSAGE_NAME",
     "MEMORY_POLICY_PROMPT",
     "MEMORY_WRITE_POLICY",
+    "MaintenanceAction",
+    "MemoryMaintenanceCandidate",
+    "MemoryMaintenanceConfig",
+    "MemoryMaintenanceDecision",
+    "MemoryMaintenanceInput",
+    "MemoryMaintenanceProposal",
+    "MemoryMaintenanceReflector",
     "MemoryReflectionConfig",
     "MemoryReflectionInput",
-    "MemoryReflectionOutcome",
+    "MemoryReflectionProposal",
     "MemoryArchiveTool",
     "MemoryCreateTool",
     "MemoryIndex",

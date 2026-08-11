@@ -29,6 +29,10 @@ class AgentEventType(StrEnum):
     MEMORY_REFLECTION_COMPLETED = "memory_reflection_completed"
     MEMORY_REFLECTION_FAILED = "memory_reflection_failed"
     MEMORY_REFLECTION_SKIPPED = "memory_reflection_skipped"
+    MEMORY_MAINTENANCE_STARTED = "memory_maintenance_started"
+    MEMORY_MAINTENANCE_COMPLETED = "memory_maintenance_completed"
+    MEMORY_MAINTENANCE_FAILED = "memory_maintenance_failed"
+    MEMORY_MAINTENANCE_SKIPPED = "memory_maintenance_skipped"
     AGENT_COMPLETED = "agent_completed"
     AGENT_FAILED = "agent_failed"
 
@@ -86,8 +90,20 @@ class AgentEvent(BaseModel):
     reflection_error: str | None = None
     reflection_skip_reason: str | None = None
     reflection_memory_id: str | None = None
+    reflection_mutation_applied: bool | None = None
     reflection_maintenance_required: bool | None = None
     reflection_retention_candidate_ids: tuple[str, ...] = ()
+    maintenance_triggered: bool | None = None
+    maintenance_action: str | None = None
+    maintenance_duration_ms: float | None = Field(default=None, ge=0.0)
+    maintenance_error: str | None = None
+    maintenance_skip_reason: str | None = None
+    maintenance_memory_id: str | None = None
+    maintenance_reason: str | None = None
+    maintenance_active_count: int | None = Field(default=None, ge=0)
+    maintenance_max_active: int | None = Field(default=None, gt=0)
+    maintenance_candidate_ids: tuple[str, ...] = ()
+    maintenance_remaining_overflow: int | None = Field(default=None, ge=0)
 
     @field_validator("run_id")
     @classmethod

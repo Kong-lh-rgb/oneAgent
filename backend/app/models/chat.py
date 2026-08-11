@@ -32,6 +32,8 @@ from app.conversation import (
     SQLiteConversationStore,
 )
 from app.memory import (
+    MemoryMaintenanceConfig,
+    MemoryMaintenanceReflector,
     MemoryManager,
     MemoryRecord,
     MemoryReflectionConfig,
@@ -208,6 +210,18 @@ def _print_agent_event(event: AgentEvent) -> None:
         print(f"{prefix} 长期记忆整理完成：{action}{suffix}")
     elif event.type is AgentEventType.MEMORY_REFLECTION_FAILED:
         print(f"{prefix} 长期记忆整理失败，已跳过")
+    elif event.type is AgentEventType.MEMORY_MAINTENANCE_STARTED:
+        print(f"{prefix} 长期记忆容量不足，正在选择可归档候选")
+    elif event.type is AgentEventType.MEMORY_MAINTENANCE_COMPLETED:
+        action = event.maintenance_action or "unknown"
+        suffix = (
+            f" · {event.maintenance_memory_id}"
+            if event.maintenance_memory_id is not None
+            else ""
+        )
+        print(f"{prefix} 长期记忆容量维护完成：{action}{suffix}")
+    elif event.type is AgentEventType.MEMORY_MAINTENANCE_FAILED:
+        print(f"{prefix} 长期记忆容量维护失败，未执行归档")
     elif event.type is AgentEventType.AGENT_COMPLETED:
         print(f"{prefix} Agent 执行完成")
     elif event.type is AgentEventType.AGENT_FAILED:
@@ -454,7 +468,6 @@ async def _run(args: argparse.Namespace) -> int:
     reflection_config = MemoryReflectionConfig()
     memory_reflector = PostRunMemoryReflector(
         registry,
-        memory_manager,
         config=reflection_config,
         default_provider=provider.value,
         default_model=model,
@@ -462,11 +475,25 @@ async def _run(args: argparse.Namespace) -> int:
     reflection_model = memory_reflector.model_hint or "未解析"
     reflection_provider = memory_reflector.provider_hint or "未解析"
     reflection_status = "启用" if reflection_config.enabled else "关闭"
+    maintenance_config = MemoryMaintenanceConfig()
+    memory_maintenance_reflector = MemoryMaintenanceReflector(
+        registry,
+        config=maintenance_config,
+        default_provider=reflection_provider,
+        default_model=reflection_model,
+    )
+    maintenance_provider = memory_maintenance_reflector.provider_hint or "未解析"
+    maintenance_model = memory_maintenance_reflector.model_hint or "未解析"
+    maintenance_status = "启用" if maintenance_config.enabled else "关闭"
     print(
         "长期记忆：Sparse Memory（在线 Recall + 显式 Core + Post-Run Reflection）"
     )
     print(
         f"记忆反思：{reflection_status} · {reflection_provider}/{reflection_model}"
+    )
+    print(
+        f"容量维护：{maintenance_status} · "
+        f"{maintenance_provider}/{maintenance_model}"
     )
     context_settings = ContextSettings()
     context_summarizer = ModelContextSummarizer(
@@ -504,6 +531,7 @@ async def _run(args: argparse.Namespace) -> int:
         checkpoint_store=checkpoint_store,
         memory_manager=memory_manager,
         memory_reflector=memory_reflector,
+        memory_maintenance_reflector=memory_maintenance_reflector,
     )
     try:
         if args.message is not None:
