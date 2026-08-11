@@ -32,15 +32,9 @@ from app.conversation import (
     SQLiteConversationStore,
 )
 from app.memory import (
-    HybridMemoryRetriever,
     MemoryItem,
     MemoryManager,
-    MemorySettings,
     MemoryStatus,
-    MemoryWriter,
-    ModelMemoryExtractor,
-    OpenAICompatibleMemoryEmbedder,
-    SQLiteMemoryStore,
 )
 from app.task import (
     DEFAULT_TASKS_DIR,
@@ -480,39 +474,12 @@ async def _run(args: argparse.Namespace) -> int:
             print("联网搜索：DuckDuckGo（配置 TAVILY_API_KEY 可启用 Tavily）")
 
     registry = ModelAdapterRegistry(settings)
-    memory_settings = MemorySettings()
+    # Memory V1 已冻结，等待重新确定“模型自主记忆 + Harness 领域约束”的架构。
+    # 保留底层实现和离线测试作为设计样本，但 CLI 不再装配旧 Manager，避免旧的
+    # 自动召回、后台提取和全量 Candidate 策略继续影响真实对话。
     memory_manager: MemoryManager | None = None
     memory_namespaces: tuple[str, ...] = ()
-    try:
-        memory_namespaces = memory_settings.parsed_namespaces()
-        if memory_settings.memory_enabled:
-            memory_embedder = OpenAICompatibleMemoryEmbedder(
-                api_key=memory_settings.api_key_value(),
-                base_url=memory_settings.memory_embedding_base_url or None,
-                model=memory_settings.memory_embedding_model,
-                dimensions=memory_settings.memory_embedding_dimensions,
-            )
-            memory_store = SQLiteMemoryStore(
-                args.database,
-                embedding_dimensions=memory_embedder.dimensions,
-            )
-            await memory_store.initialize()
-            memory_manager = MemoryManager(
-                writer=MemoryWriter(memory_store, memory_embedder),
-                retriever=HybridMemoryRetriever(memory_store, memory_embedder),
-                extractor=ModelMemoryExtractor(
-                    registry,
-                    provider=provider.value,
-                    model=args.model,
-                ),
-            )
-            print(
-                "长期记忆：已启用 SQLite + FTS5 + sqlite-vec "
-                f"({memory_settings.memory_embedding_model})"
-            )
-    except (RuntimeError, ValueError) as exc:
-        print(f"记忆配置错误：{exc}", file=sys.stderr)
-        return 2
+    print("长期记忆：Memory V1 已冻结，等待新架构设计")
     context_settings = ContextSettings()
     context_summarizer = ModelContextSummarizer(
         registry,
@@ -549,7 +516,6 @@ async def _run(args: argparse.Namespace) -> int:
         checkpoint_store=checkpoint_store,
         memory_manager=memory_manager,
         memory_namespaces=memory_namespaces,
-        memory_write_namespace=memory_settings.memory_write_namespace,
     )
     try:
         if args.message is not None:
@@ -569,7 +535,7 @@ async def _run(args: argparse.Namespace) -> int:
         print(
             "命令：/new 新建会话，/sessions 查看会话，/use <id> 切换会话，"
             "/runs 查看运行，/checkpoints 查看恢复点，/trace <id> 查看轨迹，"
-            "/permissions 查看审批规则，/memories 查看长期记忆，"
+            "/permissions 查看审批规则，"
             "/clear 清空当前会话，/help 查看帮助，/exit 退出"
         )
         while True:
@@ -601,7 +567,7 @@ async def _run(args: argparse.Namespace) -> int:
                 continue
             if content == "/memories" or content.startswith("/memories "):
                 if memory_manager is None:
-                    print("长期记忆未启用；请先配置 MEMORY_ENABLED=true。")
+                    print("长期记忆 V1 已冻结，等待新架构设计。")
                     continue
                 argument = content.removeprefix("/memories").strip()
                 try:
@@ -617,7 +583,7 @@ async def _run(args: argparse.Namespace) -> int:
                 continue
             if content == "/memory" or content.startswith("/memory "):
                 if memory_manager is None:
-                    print("长期记忆未启用；请先配置 MEMORY_ENABLED=true。")
+                    print("长期记忆 V1 已冻结，等待新架构设计。")
                     continue
                 identifier = content.removeprefix("/memory").strip()
                 if not identifier:
@@ -641,7 +607,7 @@ async def _run(args: argparse.Namespace) -> int:
                 "/memory-confirm "
             ):
                 if memory_manager is None:
-                    print("长期记忆未启用；请先配置 MEMORY_ENABLED=true。")
+                    print("长期记忆 V1 已冻结，等待新架构设计。")
                     continue
                 identifier = content.removeprefix("/memory-confirm").strip()
                 if not identifier:
@@ -669,7 +635,7 @@ async def _run(args: argparse.Namespace) -> int:
                 "/memory-archive "
             ):
                 if memory_manager is None:
-                    print("长期记忆未启用；请先配置 MEMORY_ENABLED=true。")
+                    print("长期记忆 V1 已冻结，等待新架构设计。")
                     continue
                 identifier = content.removeprefix("/memory-archive").strip()
                 if not identifier:
@@ -801,10 +767,6 @@ async def _run(args: argparse.Namespace) -> int:
                     "/permissions 查看当前会话的审批规则\n"
                     "/permission remove <规则ID> 删除一条审批规则\n"
                     "/permissions clear 清除当前会话的全部审批规则\n"
-                    "/memories [状态|all] 查看长期记忆\n"
-                    "/memory <记忆ID> 查看记忆详情\n"
-                    "/memory-confirm <记忆ID> 确认候选记忆\n"
-                    "/memory-archive <记忆ID> 归档记忆\n"
                     "/clear 清空当前会话\n"
                     "/exit 退出聊天"
                 )
@@ -822,6 +784,7 @@ async def _run(args: argparse.Namespace) -> int:
                 summary_store=summary_store,
             )
     finally:
+        await runtime.drain_memory_observations()
         await registry.close()
 
 

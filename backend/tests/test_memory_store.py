@@ -66,13 +66,13 @@ async def test_sqlite_fts5_and_vec_are_initialized(memory_system) -> None:
             for row in await (
                 await database.execute(
                     "SELECT name FROM sqlite_master WHERE name IN "
-                    "('memories','memory_fts','memory_vectors')"
+                    "('memories','memory_fts','memory_vectors_v2')"
                 )
             ).fetchall()
         }
 
     assert vec_version == "v0.1.9"
-    assert tables == {"memories", "memory_fts", "memory_vectors"}
+    assert tables == {"memories", "memory_fts", "memory_vectors_v2"}
 
 
 async def test_fingerprint_deduplicates_punctuation(memory_system) -> None:
@@ -260,6 +260,8 @@ async def test_manager_observe_and_context_message(memory_system) -> None:
         source=MemorySource(session_id="session-1", run_id="run-1"),
         explicit_user_text="请记住，以后回答必须优先使用中文。",
     )
+    assert written[0].memory.status is MemoryStatus.CANDIDATE
+    await manager.confirm(written[0].memory.id, expected_revision=1)
     message = await manager.context_message(
         "以后使用什么语言回答？",
         namespaces=("user:local",),
@@ -269,6 +271,22 @@ async def test_manager_observe_and_context_message(memory_system) -> None:
     assert written[0].action is MemoryWriteAction.CREATED
     assert message is not None
     assert "用户要求以后使用中文" in message.content
+
+
+async def test_namespace_router_uses_trusted_project_scope(memory_system) -> None:
+    _, writer, retriever = memory_system
+    manager = MemoryManager(writer=writer, retriever=retriever)
+
+    assert manager.route_namespace(
+        "OneAgent 项目决定使用 SQLite",
+        allowed_namespaces=("user:local", "project:oneagent"),
+        default_namespace="user:local",
+    ) == "project:oneagent"
+    assert manager.route_namespace(
+        "我偏好中文回答",
+        allowed_namespaces=("user:local", "project:oneagent"),
+        default_namespace="user:local",
+    ) == "user:local"
 
 
 async def test_model_inference_cannot_self_promote_to_active(memory_system) -> None:
@@ -375,3 +393,35 @@ async def test_confirm_and_archive_enforce_lifecycle(memory_system) -> None:
     with pytest.raises(ValueError, match="only candidate or active"):
         await writer.archive(archived.id, expected_revision=3)
     assert await store.get(archived.id) == archived
+
+
+async def test_initialize_migrates_legacy_unfiltered_vector_index(
+    memory_system,
+) -> None:
+    store, writer, _ = memory_system
+    created = await writer.write(_draft("旧索引中的 SQLite 记忆"))
+    async with store._connect() as database:
+        row = await (
+            await database.execute(
+                "SELECT memory_id, embedding FROM memory_vectors_v2"
+            )
+        ).fetchone()
+        await database.execute(
+            "CREATE VIRTUAL TABLE memory_vectors USING vec0("
+            "memory_id TEXT PRIMARY KEY, embedding float[32])"
+        )
+        await database.execute(
+            "INSERT INTO memory_vectors(memory_id, embedding) VALUES(?,?)",
+            (row["memory_id"], row["embedding"]),
+        )
+        await database.execute("DROP TABLE memory_vectors_v2")
+        await database.commit()
+
+    await store.initialize()
+    embedding = (await HashMemoryEmbedder(32).embed(("旧索引中的 SQLite 记忆",)))[0]
+    results = await store.vector_search(
+        embedding,
+        namespaces=("project:oneagent",),
+        limit=1,
+    )
+    assert results[0][0].id == created.memory.id

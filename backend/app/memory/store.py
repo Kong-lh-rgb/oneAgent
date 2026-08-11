@@ -49,11 +49,6 @@ class SQLiteMemoryStore:
         async with self._connect() as database:
             await database.executescript(_base_schema())
             await database.execute(
-                f"""CREATE VIRTUAL TABLE IF NOT EXISTS memory_vectors
-                    USING vec0(memory_id TEXT PRIMARY KEY,
-                    embedding float[{self.embedding_dimensions}])"""
-            )
-            await database.execute(
                 "INSERT OR IGNORE INTO memory_meta(key, value) VALUES (?, ?)",
                 ("embedding_dimensions", str(self.embedding_dimensions)),
             )
@@ -66,7 +61,45 @@ class SQLiteMemoryStore:
                     "memory embedding dimensions do not match existing database: "
                     f"expected {stored_dimensions}, got {self.embedding_dimensions}"
                 )
+            await self._initialize_vector_index(database)
             await database.commit()
+
+    async def _initialize_vector_index(
+        self,
+        database: aiosqlite.Connection,
+    ) -> None:
+        """创建带过滤列的 vec0，并迁移早期无过滤列索引。"""
+
+        await database.execute(
+            f"""CREATE VIRTUAL TABLE IF NOT EXISTS memory_vectors_v2 USING vec0(
+                memory_id TEXT PRIMARY KEY,
+                embedding float[{self.embedding_dimensions}] distance_metric=cosine,
+                namespace TEXT PARTITION KEY,
+                status TEXT
+            )"""
+        )
+        old_exists = await _table_exists(database, "memory_vectors")
+        if not old_exists:
+            return
+        new_count = (
+            await (
+                await database.execute("SELECT COUNT(*) FROM memory_vectors_v2")
+            ).fetchone()
+        )[0]
+        if new_count == 0:
+            rows = await (
+                await database.execute(
+                    """SELECT v.memory_id, v.embedding, m.namespace, m.status
+                       FROM memory_vectors v JOIN memories m ON m.id=v.memory_id"""
+                )
+            ).fetchall()
+            await database.executemany(
+                """INSERT INTO memory_vectors_v2(
+                       memory_id, embedding, namespace, status
+                   ) VALUES(?,?,?,?)""",
+                rows,
+            )
+        await database.execute("DROP TABLE memory_vectors")
 
     async def create(
         self,
@@ -379,29 +412,28 @@ class SQLiteMemoryStore:
         self._validate_embedding(embedding)
         if not namespaces:
             return ()
-        candidate_limit = max(limit * 5, limit)
         async with self._connect() as database:
-            vector_rows = await (
-                await database.execute(
-                    """SELECT memory_id, distance FROM memory_vectors
-                       WHERE embedding MATCH ? AND k = ? ORDER BY distance""",
-                    (sqlite_vec.serialize_float32(embedding), candidate_limit),
-                )
-            ).fetchall()
+            vector_rows: list[aiosqlite.Row] = []
+            serialized = sqlite_vec.serialize_float32(embedding)
+            for namespace in dict.fromkeys(namespaces):
+                rows = await (
+                    await database.execute(
+                        """SELECT memory_id, distance FROM memory_vectors_v2
+                           WHERE embedding MATCH ? AND k = ?
+                             AND namespace = ? AND status = 'active'
+                           ORDER BY distance""",
+                        (serialized, limit, namespace),
+                    )
+                ).fetchall()
+                vector_rows.extend(rows)
+            vector_rows.sort(key=lambda row: float(row["distance"]))
             results: list[tuple[MemoryItem, float]] = []
-            for vector_row in vector_rows:
+            for vector_row in vector_rows[:limit]:
                 memory = await self._require_database(
                     database,
                     vector_row["memory_id"],
                 )
-                is_visible = (
-                    memory.status is MemoryStatus.ACTIVE
-                    and memory.namespace in namespaces
-                )
-                if is_visible:
-                    results.append((memory, float(vector_row["distance"])))
-                    if len(results) >= limit:
-                        break
+                results.append((memory, float(vector_row["distance"])))
         return tuple(results)
 
     async def _insert_database(
@@ -426,8 +458,15 @@ class SQLiteMemoryStore:
             (item.id, item.content, item.normalized_content),
         )
         await database.execute(
-            "INSERT INTO memory_vectors(memory_id, embedding) VALUES(?,?)",
-            (item.id, sqlite_vec.serialize_float32(embedding)),
+            """INSERT INTO memory_vectors_v2(
+                   memory_id, embedding, namespace, status
+               ) VALUES(?,?,?,?)""",
+            (
+                item.id,
+                sqlite_vec.serialize_float32(embedding),
+                item.namespace,
+                item.status.value,
+            ),
         )
 
     async def _persist_status(
@@ -451,6 +490,10 @@ class SQLiteMemoryStore:
         )
         if cursor.rowcount != 1:
             raise MemoryRevisionConflictError("memory revision changed")
+        await database.execute(
+            "UPDATE memory_vectors_v2 SET status=? WHERE memory_id=?",
+            (item.status.value, item.id),
+        )
 
     async def _require_database(
         self,
@@ -630,6 +673,16 @@ def _time_text(value: datetime | None) -> str | None:
 
 def _parse_time(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value else None
+
+
+async def _table_exists(database: aiosqlite.Connection, name: str) -> bool:
+    row = await (
+        await database.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (name,),
+        )
+    ).fetchone()
+    return row is not None
 
 
 __all__ = ["SQLiteMemoryStore"]

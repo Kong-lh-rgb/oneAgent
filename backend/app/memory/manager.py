@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 
-from app.models.types import Message, MessageRole
+from app.models.types import Message, MessageRole, ModelUsage
 
 from .extractor import MemoryExtractor, RuleMemoryFilter
 from .models import (
@@ -16,6 +16,7 @@ from .models import (
     MemoryStatus,
 )
 from .retriever import HybridMemoryRetriever
+from .router import MemoryNamespaceRouter
 from .writer import MemoryWriter, MemoryWriteResult
 
 MEMORY_CONTEXT_MESSAGE_NAME = "oneagent_long_term_memory"
@@ -32,12 +33,31 @@ class MemoryManager:
         extractor: MemoryExtractor | None = None,
         rule_filter: RuleMemoryFilter | None = None,
         context_limit: int = 5,
+        namespace_router: MemoryNamespaceRouter | None = None,
     ) -> None:
         self._writer = writer
         self._retriever = retriever
         self._extractor = extractor
         self._rule_filter = rule_filter or RuleMemoryFilter()
         self._context_limit = context_limit
+        self._namespace_router = namespace_router or MemoryNamespaceRouter()
+
+    @property
+    def extraction_usage(self) -> ModelUsage:
+        return self._extractor.last_usage if self._extractor else ModelUsage()
+
+    def route_namespace(
+        self,
+        user_text: str,
+        *,
+        allowed_namespaces: Sequence[str],
+        default_namespace: str,
+    ) -> str:
+        return self._namespace_router.route(
+            user_text,
+            allowed_namespaces=allowed_namespaces,
+            default_namespace=default_namespace,
+        )
 
     async def retrieve(
         self,
@@ -91,19 +111,19 @@ class MemoryManager:
     ) -> tuple[MemoryWriteResult, ...]:
         """选择性提取并写入；未配置 Extractor 时保持只读。"""
 
-        if self._extractor is None or not self._rule_filter.should_extract(observation):
+        if self._extractor is None:
+            return ()
+        self._extractor.reset_usage()
+        if not self._rule_filter.should_extract(observation):
             return ()
         drafts = await self._extractor.extract(
             observation,
             namespace=namespace,
             source=source,
         )
-        allow_active = self._rule_filter.allows_direct_activation(
-            explicit_user_text or ""
-        )
         safe_drafts = tuple(
             draft
-            if draft.status.value != "active" or allow_active
+            if draft.status.value == "candidate"
             else MemoryDraft.model_validate(
                 {**draft.model_dump(), "status": "candidate"}
             )

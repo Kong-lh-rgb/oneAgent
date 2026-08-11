@@ -1,4 +1,8 @@
-"""OneAgent 长期记忆系统。"""
+"""OneAgent 长期记忆 V1 的冻结实现。
+
+V1 当前不再由 CLI 装配运行，仅保留领域模型、存储和检索代码作为后续重构的
+设计样本。新架构确定前不要继续扩展这套候选审批式流程。
+"""
 
 from .config import MemorySettings
 from .embedder import (
@@ -18,6 +22,7 @@ from .models import (
     MemoryType,
 )
 from .retriever import HybridMemoryRetriever
+from .router import MemoryNamespaceRouter
 from .store import SQLiteMemoryStore
 from .writer import (
     MemoryWriteAction,
@@ -36,6 +41,7 @@ __all__ = [
     "MemoryExtractor",
     "MemoryItem",
     "MemoryManager",
+    "MemoryNamespaceRouter",
     "MemoryRevisionConflictError",
     "MemorySearchResult",
     "MemorySettings",

@@ -8,6 +8,45 @@
 
 ## 2026-08-11
 
+### 决定：冻结 Memory V1，等待重新设计
+
+#### Bad Case
+- [x] Memory V1 把主模型限制为被动消费召回结果，模型没有主动 search、remember、update、forget 的记忆能力
+- [x] 所有自动提取一律降为 Candidate，连用户明确表达的偏好、决定和“请记住”也需要二次确认，降低本地助理的自主性与使用体验
+- [x] 同 key 的新 Candidate 无法在确认时原子替代旧 Active FACT，谨慎状态机反而阻断了正常事实更新
+- [x] 固定关键词路由、每 Run 固定召回和后台 Extractor 把过多语义选择收进 Harness，主模型只负责填写结构化候选
+- [x] 向量检索缺少相关度拒绝，只要存在 Active Memory 就可能向无关请求注入“最近但不相关”的内容
+- [x] Manager、Extractor、Router、Writer、Retriever 分散承载策略，模型自主权、用户主权和数据不变量的边界不够清晰
+
+#### 暂停结果
+- [x] 冻结 Memory V1，不继续围绕旧架构补丁式增加确认、路由和晋升规则
+- [x] CLI 停止装配 Memory V1；即使旧环境变量仍在，也不会执行自动召回和回答后提取
+- [x] 旧 Memory CLI 命令不再出现在帮助信息中；直接输入时明确提示 V1 已冻结
+- [x] 保留 SQLite、FTS5、sqlite-vec、领域模型和离线测试，作为后续设计取舍与回归参考，不进行破坏性删除
+- [x] 全量验证：`pytest` 317 个用例通过；`ruff`、`compileall` 和 `git diff --check` 通过
+- [ ] 明确新架构后重新定义模型自主操作、Harness 数据不变量、用户控制权和可恢复边界
+
+### 完成：Memory V1 稳定性收口
+
+#### Bad Case
+- [x] vec0 先做全库 Top K 再过滤 namespace/status，其他项目和失效记忆可能挤占候选，形成不泄露但漏召回的问题
+- [x] 仅凭“记住/必须”等关键词允许自动 Active 仍可能误判反问、引用或否定句
+- [x] 自动写入固定落到 user:local，项目决定与用户偏好混在同一 namespace
+- [x] Memory 错误虽然降级，但缺少检索/提取耗时、Token、动作和失败原因，Trace 无法解释“为什么没记住”
+- [x] Run 在最终回答后同步等待 Memory LLM 和 Embedding，辅助能力增加用户响应延迟
+- [x] 只有单元断言，没有 Recall@K、MRR、namespace/status 违规等专用 Memory Eval 指标
+
+#### 收口结果
+- [x] 新 vec0 使用 namespace TEXT PARTITION KEY 和 status metadata；每个允许 namespace 在 KNN 阶段直接限定 active，跨 namespace 结果按 cosine distance 合并
+- [x] 自动迁移旧 memory_vectors：原向量无损复制到 memory_vectors_v2 并补入 namespace/status，事务完成后移除旧索引
+- [x] 所有 LLM Extractor 输出统一降为 Candidate；只有用户 CLI confirm 或真实任务 learn_from_use 才能 Active
+- [x] 新增可信 MemoryNamespaceRouter：项目/仓库/代码相关内容路由到配置允许的 project:*，其他内容回到默认 user namespace；模型不能自由指定 namespace
+- [x] AgentEvent 增加 Memory retrieval/observation started/completed/failed，记录 namespace、动作、记忆 ID、耗时、错误和提取模型 usage，并由现有 Trace Store 持久化
+- [x] Memory Observe 改为受 Runtime 管理的后台任务；AgentResult 和 AGENT_COMPLETED 不等待提取，CLI/进程退出时通过 drain 确保已提交观察完成
+- [x] 新增 Memory Eval 指标 Recall@K、MRR、namespace violations、inactive violations，并加入大量噪声 namespace 下的隔离召回场景
+- [x] 测试覆盖旧 vec 索引迁移、查询期过滤、默认 Candidate、namespace 路由、后台非阻塞、事件 usage 和 Eval 隔离
+- [x] 全量验证：`pytest` 317 个用例通过；`ruff`、`compileall` 和 `git diff --check` 通过
+
 ### 完成：Memory CLI 管理闭环
 
 #### Bad Case
@@ -50,7 +89,7 @@
 - [x] `HybridMemoryRetriever` 并行使用 FTS5 BM25 Top 20 和 Vector Top 20，以 RRF 合并并加入小幅 importance bonus，最终返回 3–5 条可解释结果
 - [x] Embedding 通过 `MemoryEmbedder` 抽象；测试使用确定性 Hash Embedder，生产支持独立 OpenAI 兼容 Embeddings API
 - [x] `ModelMemoryExtractor` 复用 Provider Adapter，结构化提取最多 3 条记忆；模型推断只能写 candidate
-- [x] Runtime 单独传入原始用户文本，只有“记住/以后/始终/必须”等明确指令允许 active；Assistant 在回答中复述这些词不能自行晋升记忆
+- [x] 所有自动提取结果统一写为 candidate；Assistant 和 Extractor 都不能直接晋升，用户确认与真实任务使用是仅有的普通晋升路径
 - [x] `MemoryManager` 向 Runtime 暴露 retrieve/observe/confirm/learn_from_use；Runtime 不感知 SQLite、FTS5、向量、RRF 或 fingerprint
 - [x] Memory 以临时 system message 进入 ContextManager 预算与压缩流程，不进入 AgentResult 或 SQLite 原始聊天历史；Memory 故障降级时不阻断 Agent 主流程
 - [x] CLI 通过 MEMORY_ENABLED 显式启用，并配置独立 embedding key/base URL/model/dimensions/namespaces；未启用时不产生额外模型调用

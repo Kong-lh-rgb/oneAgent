@@ -8,20 +8,29 @@ from abc import ABC, abstractmethod
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.models.registry import ModelAdapterRegistry
-from app.models.types import Message, MessageRole, ModelRequest
+from app.models.types import Message, MessageRole, ModelRequest, ModelUsage
 
 from .models import MemoryDraft, MemorySource, MemoryStatus, MemoryType
 
 _EXTRACTOR_PROMPT = """你是长期记忆提取器。不要总结对话，只保存未来可能改变 Agent
 决策或执行方式的信息。忽略寒暄、感谢、普通回答、原始工具输出和一次性细节。
-只提取 FACT、EPISODE、PROCEDURE；最多 3 条。明确用户事实/约束可设 active，模型推断
-只能设 candidate。FACT 必须提供稳定的英文点号 key。严格输出 JSON：
+只提取 FACT、EPISODE、PROCEDURE；最多 3 条。全部输出 candidate，是否晋升由系统和
+用户决定。FACT 必须提供稳定的英文点号 key。严格输出 JSON：
 {"memories":[{"memory_type":"fact|episode|procedure","key":null,
 "content":"...","status":"candidate|active","importance":0.5,"confidence":0.8}]}
 没有值得保存的信息时输出 {"memories":[]}。"""
 
 
 class MemoryExtractor(ABC):
+    @property
+    def last_usage(self) -> ModelUsage:
+        """最近一次提取调用的模型用量。"""
+
+        return ModelUsage()
+
+    def reset_usage(self) -> None:
+        """开始新一轮提取前清空上一轮用量。"""
+
     @abstractmethod
     async def extract(
         self,
@@ -59,14 +68,6 @@ class RuleMemoryFilter:
             signal in normalized for signal in self._signals
         )
 
-    def allows_direct_activation(self, user_text: str) -> bool:
-        """只有用户原文中的明确记忆指令允许跳过候选态。"""
-
-        normalized = user_text.strip().lower()
-        explicit_signals = ("记住", "以后", "始终", "必须", "remember", "always")
-        return any(signal in normalized for signal in explicit_signals)
-
-
 class ModelMemoryExtractor(MemoryExtractor):
     """复用模型适配层产生结构化记忆候选。"""
 
@@ -82,6 +83,14 @@ class ModelMemoryExtractor(MemoryExtractor):
         self._provider = provider
         self._model = model
         self._max_output_tokens = max_output_tokens
+        self._last_usage = ModelUsage()
+
+    @property
+    def last_usage(self) -> ModelUsage:
+        return self._last_usage
+
+    def reset_usage(self) -> None:
+        self._last_usage = ModelUsage()
 
     async def extract(
         self,
@@ -101,6 +110,7 @@ class ModelMemoryExtractor(MemoryExtractor):
                 max_output_tokens=self._max_output_tokens,
             )
         )
+        self._last_usage = response.usage
         if not response.message.content:
             return ()
         try:

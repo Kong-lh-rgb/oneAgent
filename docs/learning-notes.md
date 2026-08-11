@@ -685,8 +685,8 @@ Memory 与聊天历史、Task、Checkpoint 的职责不同：聊天历史记录�
 未来决策的稳定事实、历史经验和操作方法。因此系统保存 FACT、EPISODE、PROCEDURE，
 而不是把全部 Conversation 做 embedding。
 
-LLM 提取结果属于不可信输入。明确用户指令可以直接 active，模型归纳只能 candidate。
-Candidate 不进入正常上下文；它必须经过用户 confirm 或真实任务 learn_from_use 才能
+LLM 提取结果属于不可信输入，所有自动提取统一进入 candidate。Candidate 不进入正常
+上下文；它必须经过用户 confirm 或真实任务 learn_from_use 才能
 晋升。confirmation_count 和 use_count 分开记录，避免把“模型用过一次”伪装成“用户
 确认过”。写入预算固定为每 Run 3 条、每 Session 5 条、每天 20 条，Memory 污染比少记
 一条更危险。
@@ -730,3 +730,52 @@ candidate/active 才能 archive，superseded 与 archived 不允许通过普通�
 当前模型只有 Memory 的召回使用权和受控观察写入权，没有 confirm/archive 治理权。
 用户通过 CLI 掌握最终确认和退出检索的权限。若未来增加 Memory Tool，应首先区分只读
 工具与状态修改工具，并让确认/归档进入人工审批，而不是简单暴露 Manager 全部方法。
+
+## 21. Memory 稳定性：在检索阶段隔离，在回答之后学习
+
+namespace 和 status 过滤必须发生在 KNN 内部，而不是全库 Top K 之后。后过滤虽然不会
+返回越界数据，但其他项目或 archived 记忆会占用有限候选名额，造成合法记忆漏召回。
+vec0 因此把 namespace 设为 partition key、status 设为 metadata；多 namespace 查询分别
+执行受约束 KNN，再按 cosine distance 合并。旧无过滤列向量表通过初始化迁移无损升级。
+
+关键词无法可靠证明“用户明确授权永久记住”。反问、引用和否定都可能包含“必须”或
+“记住”，所以自动 Extractor 一律只产生 Candidate。Active 是治理决定，只能来自用户
+confirm 或系统能够证明的真实使用。这个规则牺牲少量自动化，换取长期事实库不被模型
+猜测污染。
+
+namespace 也不交给模型自由生成。MemoryNamespaceRouter 只在配置允许的集合内选择：
+项目、仓库和代码相关观察进入 project namespace，其余回到默认 user namespace。
+未来接入活动 Task 时可以增加可信 task:id 上下文，但仍应由 Runtime 提供，而非 Prompt
+输出任意作用域。
+
+Memory Observe 属于回答后的学习，不应成为生成回答的关键路径。Runtime 在最终回答时
+提交受管理后台任务，立即完成 Agent Run；交互循环继续运行，进程退出时统一 drain。
+检索和观察通过 AgentEvent 记录开始、完成、失败、耗时、动作、Memory ID 和模型 usage，
+因此后台失败仍可在 Trace 中审计，而不是静默消失。
+
+Memory Eval 同时检查相关性和边界：Recall@K/MRR 衡量是否想起正确内容，namespace 与
+inactive violation 衡量是否想起了不该出现的内容。长期记忆质量不能只看“搜到一条”，
+必须同时证明没有跨作用域污染、没有把 Candidate/Archived 注入模型。
+
+## 22. Memory V1 冻结：安全约束不能替代 Agent 自主性
+
+Memory V1 的底层存储实验有效，但上层控制哲学不适合本地超级助理。主模型只能被动
+读取 Runtime 固定召回的少量记忆；写入则依赖回答后的独立 Extractor，模型不能在任务
+过程中主动 search、remember、update 或 forget。这使 Memory 更像后台 ETL，而不是
+Agent 自身可以使用的能力。
+
+Candidate 原本用于隔离不确定推断，但 V1 将它扩展为所有自动记忆的必经状态。用户
+明确表达的偏好、决定和“请记住”仍需二次确认；同 key 新 Candidate 在确认时还会被
+旧 Active FACT 的唯一约束拒绝。此 Bad Case 表明，谨慎不等于正确：当保护机制阻断
+正常事实更新时，它已经侵入了模型应承担的语义决策。
+
+Harness 应保护 namespace、事务、revision、审计、可撤销性和数据库不变量，而不应
+包办“何时需要记忆、记住什么、何时更新”等全部语义选择。模型也不应获得任意 SQL、
+跨作用域访问或不可恢复删除能力。新的边界需要在模型自主性、用户主权和可恢复副作用
+之间重新确定，而不是继续给 V1 增加更多状态和审批分支。
+
+在新架构确定前，CLI 不再装配 Memory V1，旧环境变量不会启动自动召回和后台提取。
+SQLite、FTS5、sqlite-vec、领域模型和测试暂时保留，它们是基础设施实验与 Bad Case
+样本，不代表最终架构。后续重构前应先回答：哪些记忆操作是模型可自主执行的低风险
+动作，哪些操作需要用户明确授权，自动召回与主动搜索如何配合，以及怎样依靠审计和
+撤销替代令人反感的逐项确认。
