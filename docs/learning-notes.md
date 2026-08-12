@@ -1025,3 +1025,42 @@ mutation，也构成耐久项目知识证据。Harness 仍通过本轮成功读�
 中文子串也会把英文 `vector database` 误报为信息遗漏。因此 Eval 显式开启原始 I/O
 捕获并写入阶段 artifact，生产默认关闭以保护用户上下文。后续自动关键点断言负责快速
 门禁，跨语言完整性最终应由独立 Judge 与人工抽查共同评价。
+
+## 26. MCP Client：协议适配属于工具基础设施，不属于 Runtime
+
+MCP Server 对 Agent 来说仍然只是工具来源。正确接入方式不是在 AgentRuntime 增加
+`if mcp` 分支，而是把远端工具适配成 `BaseTool` 并注册到同一个 ToolRegistry。模型看到
+统一 ToolDefinition，调用后仍经过 PermissionHook、人工审批、ToolExecutor 超时、输出
+截断、Hook 和 Trace；Runtime 无需知道工具运行在当前进程、HTTP 服务还是 stdio 子进程。
+
+V1 的链路是：
+
+```text
+.oneagent/mcp.json
+→ MCPClientManager 启动每个 stdio Server
+→ ClientSession initialize / list_tools
+→ MCPToolAdapter 注册为 mcp__<server>__<tool>
+→ AgentRuntime 正常产生 ToolCall
+→ 现有 ToolExecutor 安全链
+→ ClientSession call_tool
+→ MCP content 转成统一 ToolResult
+→ Provider Adapter 转成对应 tool message
+```
+
+Server 名称是稳定命名空间，原始工具名作为 Adapter 元数据保存，不能依靠拆分模型可见
+名称反推远端调用。远端名称中的点号、连字符等会规范化为下划线；同一 Server 内若两个
+原始名称规范化后冲突，整个 Server 的本轮注册失败并回滚，不能静默覆盖。
+
+权限归本地 Harness 所有。MCP annotations 是远端提供的信息，不能自动获得信任；默认
+使用 `human_approval`，只有用户明确配置的可信只读 Server 才设为 `allowed`。同样，MCP
+JSON 能启动本地命令，本身就是受信任配置。密钥通过 `${ENV_VAR}` 引用进程环境，缺失时
+只让对应 Server 进入 failed，不应拖垮其他服务器或 OneAgent。
+
+MCP 内容不只有文本。单文本且无 structuredContent 时可以直接返回文本；多段内容、图片、
+资源或结构化结果必须序列化保留。`CallToolResult.isError=true` 虽然协议请求成功，但领域
+含义是工具失败，应抛入现有 ToolExecutor，再由统一 ToolResult 记录错误和耗时。
+
+stdio 的生命周期由同一个 Manager 持有：启动时进入 transport 与 ClientSession 的异步
+上下文，退出 CLI 时按逆序关闭。启动超时和工具调用超时需要分离；很短的工具超时不能
+反过来导致 initialize 握手失败。V1 选择显式启动和故障隔离，不做隐式自动重连，避免在
+没有健康状态和幂等语义前制造重复工具调用。

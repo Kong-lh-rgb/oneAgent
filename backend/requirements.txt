@@ -2,6 +2,7 @@
 openai==2.50.0
 openai-agents==0.19.1
 anthropic==0.120.2
+mcp==1.29.0
 
 # Local API service
 fastapi==0.141.1

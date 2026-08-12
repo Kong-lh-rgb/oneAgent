@@ -1,0 +1,318 @@
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+import pytest
+from mcp.types import CallToolResult, TextContent
+from pydantic import SecretStr
+
+from app.agent.runtime import AgentRuntime
+from app.mcp import (
+    MCPClientManager,
+    MCPConfigurationError,
+    MCPRemoteTool,
+    MCPServerConfig,
+    MCPServerState,
+    MCPToolCallError,
+    StdioMCPClient,
+    load_mcp_settings,
+    mcp_tool_name,
+    serialize_mcp_result,
+)
+from app.models.adapter import ModelAdapter
+from app.models.config import ModelSettings, ProviderConfig
+from app.models.registry import ModelAdapterRegistry
+from app.models.types import (
+    ApiStyle,
+    Message,
+    MessageRole,
+    ModelRequest,
+    ModelResponse,
+    ToolCall,
+    ToolPermission,
+)
+from app.tools import ToolExecutor, ToolRegistry
+
+
+class FakeMCPClient:
+    """不访问网络和子进程的 MCP 客户端替身。"""
+
+    def __init__(
+        self,
+        config: MCPServerConfig,
+        *,
+        fail_start: bool = False,
+        tools: tuple[MCPRemoteTool, ...] | None = None,
+    ) -> None:
+        self.config = config
+        self.fail_start = fail_start
+        self.tools = tools or (
+            MCPRemoteTool(
+                name="echo.text",
+                description="返回参数",
+                input_schema={
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+            ),
+        )
+        self.started = False
+        self.closed = False
+
+    async def start(self) -> None:
+        if self.fail_start:
+            raise RuntimeError("无法启动")
+        self.started = True
+
+    async def list_tools(self) -> tuple[MCPRemoteTool, ...]:
+        return self.tools
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
+        return json.dumps(
+            {"remote_name": name, "arguments": arguments},
+            ensure_ascii=False,
+        )
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class FakeModelAdapter(ModelAdapter):
+    """依次返回 MCP ToolCall 和最终回答的离线模型。"""
+
+    def __init__(self, config: ProviderConfig) -> None:
+        super().__init__(config)
+        self.requests: list[ModelRequest] = []
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            message = Message(
+                role=MessageRole.ASSISTANT,
+                tool_calls=(
+                    ToolCall(
+                        id="mcp-runtime-1",
+                        name="mcp__demo__echo_text",
+                        arguments={"text": "runtime"},
+                    ),
+                ),
+            )
+        else:
+            message = Message(role=MessageRole.ASSISTANT, content="MCP 调用完成")
+        return ModelResponse(
+            id=f"response-{len(self.requests)}",
+            provider="fake",
+            model="fake-model",
+            message=message,
+        )
+
+    async def close(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_manager_registers_mcp_tool_into_existing_execution_chain() -> None:
+    config = MCPServerConfig(
+        name="demo",
+        command="unused",
+        permission=ToolPermission.ALLOWED,
+    )
+    clients: list[FakeMCPClient] = []
+
+    def factory(value: MCPServerConfig) -> FakeMCPClient:
+        client = FakeMCPClient(value)
+        clients.append(client)
+        return client
+
+    registry = ToolRegistry()
+    manager = MCPClientManager((config,), client_factory=factory)
+
+    statuses = await manager.start(registry)
+    result = await ToolExecutor(registry).execute(
+        ToolCall(
+            id="mcp-1",
+            name="mcp__demo__echo_text",
+            arguments={"text": "你好"},
+        )
+    )
+
+    assert statuses[0].state is MCPServerState.RUNNING
+    assert statuses[0].tool_names == ("mcp__demo__echo_text",)
+    assert result.success is True
+    assert json.loads(result.output or "{}") == {
+        "remote_name": "echo.text",
+        "arguments": {"text": "你好"},
+    }
+    await manager.close(registry)
+    assert clients[0].closed is True
+    assert registry.names() == ()
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_can_complete_an_mcp_tool_call() -> None:
+    config = MCPServerConfig(
+        name="demo",
+        command="unused",
+        permission=ToolPermission.ALLOWED,
+    )
+    tools = ToolRegistry()
+    manager = MCPClientManager(
+        (config,),
+        client_factory=lambda value: FakeMCPClient(value),
+    )
+    await manager.start(tools)
+    provider_config = ProviderConfig(
+        provider="fake",
+        model="fake-model",
+        api_key=SecretStr("offline"),
+        api_style=ApiStyle.CHAT_COMPLETIONS,
+    )
+    adapter = FakeModelAdapter(provider_config)
+    models = ModelAdapterRegistry(ModelSettings(_env_file=None))
+    models.register("fake", lambda _: adapter, config=provider_config)
+
+    result = await AgentRuntime(models, tools, provider="fake").run("调用 MCP")
+
+    assert result.content == "MCP 调用完成"
+    assert len(result.tool_calls) == 1
+    assert result.tool_calls[0].result.success is True
+    assert adapter.requests[0].tools[0].name == "mcp__demo__echo_text"
+    tool_message = adapter.requests[1].messages[-1]
+    assert tool_message.role is MessageRole.TOOL
+    assert "runtime" in (tool_message.content or "")
+    await manager.close(tools)
+
+
+@pytest.mark.asyncio
+async def test_one_failed_server_does_not_block_other_servers() -> None:
+    configs = (
+        MCPServerConfig(name="broken", command="unused"),
+        MCPServerConfig(name="healthy", command="unused"),
+    )
+
+    def factory(config: MCPServerConfig) -> FakeMCPClient:
+        return FakeMCPClient(config, fail_start=config.name == "broken")
+
+    registry = ToolRegistry()
+    manager = MCPClientManager(configs, client_factory=factory)
+
+    statuses = await manager.start(registry)
+
+    assert statuses[0].state is MCPServerState.FAILED
+    assert "无法启动" in (statuses[0].error or "")
+    assert statuses[1].state is MCPServerState.RUNNING
+    assert registry.names() == ("mcp__healthy__echo_text",)
+    await manager.close(registry)
+
+
+@pytest.mark.asyncio
+async def test_registration_collision_rolls_back_server_tools() -> None:
+    tools = (
+        MCPRemoteTool(name="same.name"),
+        MCPRemoteTool(name="same-name"),
+    )
+    config = MCPServerConfig(name="demo", command="unused")
+    registry = ToolRegistry()
+    manager = MCPClientManager(
+        (config,),
+        client_factory=lambda value: FakeMCPClient(value, tools=tools),
+    )
+
+    statuses = await manager.start(registry)
+
+    assert statuses[0].state is MCPServerState.FAILED
+    assert "发生冲突" in (statuses[0].error or "")
+    assert registry.names() == ()
+
+
+def test_mcp_tool_name_uses_stable_namespace() -> None:
+    assert mcp_tool_name("files", "read.file-v2") == "mcp__files__read_file_v2"
+    with pytest.raises(MCPConfigurationError, match="无法注册"):
+        mcp_tool_name("files", "---")
+
+
+@pytest.mark.asyncio
+async def test_load_settings_handles_missing_and_invalid_config(tmp_path: Path) -> None:
+    assert (await load_mcp_settings(tmp_path / "missing.json")).servers == ()
+    invalid = tmp_path / "mcp.json"
+    invalid.write_text('{"servers":[{"name":"bad name"}]}', encoding="utf-8")
+
+    with pytest.raises(MCPConfigurationError, match="无法加载"):
+        await load_mcp_settings(invalid)
+
+
+@pytest.mark.asyncio
+async def test_missing_environment_reference_fails_only_that_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ONEAGENT_MISSING_MCP_KEY", raising=False)
+    config = MCPServerConfig(
+        name="missing_env",
+        command=sys.executable,
+        args=("-c", "pass"),
+        env={"API_KEY": "${ONEAGENT_MISSING_MCP_KEY}"},
+    )
+    registry = ToolRegistry()
+    manager = MCPClientManager((config,))
+
+    statuses = await manager.start(registry)
+
+    assert statuses[0].state is MCPServerState.FAILED
+    assert "ONEAGENT_MISSING_MCP_KEY" in (statuses[0].error or "")
+
+
+def test_serialize_mcp_result_preserves_text_and_structured_content() -> None:
+    plain = CallToolResult(content=[TextContent(type="text", text="hello")])
+    structured = CallToolResult(
+        content=[TextContent(type="text", text="hello")],
+        structuredContent={"count": 1},
+    )
+
+    assert serialize_mcp_result(plain) == "hello"
+    assert json.loads(serialize_mcp_result(structured)) == {
+        "content": [{"type": "text", "text": "hello"}],
+        "structured_content": {"count": 1},
+    }
+
+
+def _stdio_config(*, call_timeout: float = 2.0) -> MCPServerConfig:
+    server_path = Path(__file__).parent / "fixtures" / "fake_mcp_server.py"
+    return MCPServerConfig(
+        name="stdio_test",
+        command=sys.executable,
+        args=(str(server_path),),
+        startup_timeout_seconds=5,
+        call_timeout_seconds=call_timeout,
+        permission=ToolPermission.ALLOWED,
+    )
+
+
+@pytest.mark.asyncio
+async def test_stdio_client_discovers_and_calls_real_fake_server() -> None:
+    client = StdioMCPClient(_stdio_config())
+    await client.start()
+    try:
+        tools = await client.list_tools()
+        assert {tool.name for tool in tools} == {"echo", "fail", "slow"}
+        output = json.loads(await client.call_tool("echo", {"text": "你好 MCP"}))
+        assert output["content"] == [{"type": "text", "text": "你好 MCP"}]
+        assert output["structured_content"] == {"result": "你好 MCP"}
+        with pytest.raises(MCPToolCallError, match="fake boom"):
+            await client.call_tool("fail", {})
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_stdio_client_call_timeout() -> None:
+    client = StdioMCPClient(_stdio_config(call_timeout=0.05))
+    await client.start()
+    try:
+        with pytest.raises(MCPToolCallError, match="TimeoutError"):
+            await client.call_tool("slow", {"delay": 0.5})
+    finally:
+        await client.close()

@@ -7,6 +7,30 @@
 ---
 ## 2026-08-12
 
+### 完成：MCP Client V1（stdio 工具闭环）
+
+#### Bad Case
+- [x] 如果在 Runtime 内直接识别和调用 MCP，会绕过现有 ToolExecutor 的权限、审批、超时、Hook 与执行日志
+- [x] 多个 MCP Server 可能暴露同名或规范化后重名工具，直接注册会污染本地工具命名空间
+- [x] 单个 Server 启动、工具发现或调用失败不应阻止其他 Server 和 OneAgent 主流程工作
+- [x] MCP 多段内容、structuredContent 与 `isError` 若只取第一段文本，会丢失结果或把远端失败误判为成功
+- [x] 把 API Key 直接写进 MCP JSON 容易误提交；配置又可以启动本地命令，必须明确其受信任边界
+
+#### 实现结果
+- [x] 新增 `app/mcp/`，定义严格配置、运行状态、错误类型、stdio Client、ClientManager 和 BaseTool 适配器
+- [x] 基于官方 MCP SDK 完成 initialize、list_tools、call_tool 和正常关闭；启动与调用分别使用独立超时
+- [x] MCP 工具以 `mcp__<server>__<tool>` 注册到现有 ToolRegistry，完整复用 PermissionHook、审批、ToolExecutor、输出截断与日志
+- [x] 默认 MCP 工具权限为 `human_approval`；可信只读 Server 可显式配置 `allowed`，不根据远端 annotations 自动放权
+- [x] 多 Server 逐个隔离启动；失败状态保存错误原因，已成功 Server 继续可用；单 Server 注册中途失败会回滚其工具
+- [x] 保留多段 content 与 structuredContent，远端 `isError` 和协议异常统一转为工具执行失败
+- [x] 支持 `.oneagent/mcp.json` 和 `--mcp-config`，环境值支持 `${ENV_VAR}` 引用；CLI `/mcp` 展示连接与工具状态
+- [x] 离线测试覆盖配置、命名、故障隔离、冲突回滚、内容转换、真实 Fake stdio Server、调用错误/超时和 AgentRuntime 端到端闭环
+- [x] 全量验证：`pytest` 388 个用例通过；`ruff`、`compileall` 和 `git diff --check` 通过
+- [ ] V1 暂不支持 Streamable HTTP、Resources、Prompts、OAuth、自动重连与动态工具刷新
+
+---
+## 2026-08-12
+
 ### 完成：Memory 工具名改为下划线（DeepSeek API 拒绝点号）
 
 #### Bad Case

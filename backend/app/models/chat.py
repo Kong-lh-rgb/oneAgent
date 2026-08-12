@@ -31,6 +31,14 @@ from app.conversation import (
     Conversation,
     SQLiteConversationStore,
 )
+from app.mcp import (
+    DEFAULT_MCP_CONFIG_PATH,
+    MCPClientManager,
+    MCPConfigurationError,
+    MCPServerState,
+    MCPServerStatus,
+    load_mcp_settings,
+)
 from app.memory import (
     MemoryMaintenanceConfig,
     MemoryMaintenanceReflector,
@@ -71,6 +79,7 @@ _COMMAND_OVERVIEW = (
     "命令：/new 新建会话，/sessions 查看会话，/use <id> 切换会话，"
     "/memories 查看长期记忆，/memory <id> 查看记忆详情，"
     "/runs 查看运行，/checkpoints 查看恢复点，/trace <id> 查看轨迹，"
+    "/mcp 查看 MCP Server 与工具，"
     "/permissions 查看审批规则，"
     "/clear 清空当前会话，/help 查看帮助，/exit 退出"
 )
@@ -81,6 +90,7 @@ _HELP_TEXT = (
     "/use <会话ID> 切换会话\n"
     "/memories 查看活跃长期记忆及 Recall Cue\n"
     "/memory <记忆ID> 查看一条长期记忆的完整内容\n"
+    "/mcp 查看 MCP Server 连接状态和已注册工具\n"
     "/runs 查看最近 Agent Run\n"
     "/checkpoints 查看当前会话的运行恢复点\n"
     "/trace <Run ID> 查看完整事件轨迹\n"
@@ -333,6 +343,21 @@ def _print_checkpoints(checkpoints: tuple[RunCheckpoint, ...]) -> None:
         )
 
 
+def _print_mcp_statuses(statuses: tuple[MCPServerStatus, ...]) -> None:
+    """显示 MCP Server 状态和已注册工具。"""
+
+    if not statuses:
+        print("尚未配置 MCP Server。")
+        return
+    for status in statuses:
+        marker = "✓" if status.state is MCPServerState.RUNNING else "-"
+        print(f"{marker} {status.name} · {status.state.value}")
+        if status.error:
+            print(f"  错误：{status.error}")
+        for tool_name in status.tool_names:
+            print(f"  - {tool_name}")
+
+
 def _print_recovered_checkpoints(
     checkpoints: tuple[RunCheckpoint, ...],
 ) -> None:
@@ -475,6 +500,11 @@ async def _run(args: argparse.Namespace) -> int:
     except SearchError as exc:
         print(f"搜索配置错误：{exc}", file=sys.stderr)
         return 2
+    try:
+        mcp_settings = await load_mcp_settings(args.mcp_config)
+    except MCPConfigurationError as exc:
+        print(f"MCP 配置错误：{exc}", file=sys.stderr)
+        return 2
     task_store = FileTaskStore(args.tasks_dir)
     await task_store.initialize()
     register_task_tools(tool_registry, task_store)
@@ -526,6 +556,19 @@ async def _run(args: argparse.Namespace) -> int:
         model=args.model,
         max_output_tokens=context_settings.context_summary_max_output_tokens,
     )
+    mcp_manager = MCPClientManager(mcp_settings.servers)
+    mcp_statuses = await mcp_manager.start(tool_registry)
+    connected_mcp = sum(
+        status.state is MCPServerState.RUNNING for status in mcp_statuses
+    )
+    failed_mcp = sum(
+        status.state is MCPServerState.FAILED for status in mcp_statuses
+    )
+    if mcp_statuses:
+        print(
+            f"MCP：{connected_mcp} 个 Server 已连接，"
+            f"{failed_mcp} 个启动失败"
+        )
     runtime = AgentRuntime(
         registry,
         tool_registry,
@@ -602,6 +645,9 @@ async def _run(args: argparse.Namespace) -> int:
                 continue
             if content == "/memories" or content.startswith("/memories "):
                 _print_memories(await memory_manager.list())
+                continue
+            if content == "/mcp":
+                _print_mcp_statuses(mcp_manager.statuses())
                 continue
             if content == "/memory" or content.startswith("/memory "):
                 identifier = content.removeprefix("/memory").strip()
@@ -727,6 +773,7 @@ async def _run(args: argparse.Namespace) -> int:
                 summary_store=summary_store,
             )
     finally:
+        await mcp_manager.close(tool_registry)
         await registry.close()
 
 
@@ -790,6 +837,12 @@ def _parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_TASKS_DIR,
         help="Directory containing persistent task JSON files.",
+    )
+    parser.add_argument(
+        "--mcp-config",
+        type=Path,
+        default=DEFAULT_MCP_CONFIG_PATH,
+        help="Path to the MCP Server JSON configuration file.",
     )
     parser.add_argument(
         "--conversation",
