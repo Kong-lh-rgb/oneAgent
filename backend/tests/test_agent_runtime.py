@@ -14,7 +14,7 @@ from app.agent.events import (
     InMemoryEventHandler,
 )
 from app.agent.result import AgentStopReason
-from app.agent.runtime import AgentRuntime
+from app.agent.runtime import RUNTIME_ENVIRONMENT_MESSAGE_NAME, AgentRuntime
 from app.checkpoint import (
     CHECKPOINT_CONTEXT_MESSAGE_NAME,
     CheckpointPhase,
@@ -258,6 +258,36 @@ def fake_registry(
 
 
 @pytest.mark.asyncio
+async def test_runtime_injects_current_time_without_persisting_it() -> None:
+    registry, adapter = fake_registry([model_response(content="完成")])
+    old_system = Message(
+        role=MessageRole.SYSTEM,
+        content="你是助理。当前日期是 2026-08-04。请准确回答。",
+    )
+
+    result = await AgentRuntime(registry, ToolRegistry(), provider="fake").run(
+        "明天是几号？",
+        history=(old_system,),
+    )
+
+    request = adapter.requests[0]
+    persisted_system = request.messages[0]
+    runtime_message = next(
+        message
+        for message in request.messages
+        if message.name == RUNTIME_ENVIRONMENT_MESSAGE_NAME
+    )
+    assert "2026-08-04" not in (persisted_system.content or "")
+    assert "当前本地日期时间：" in (runtime_message.content or "")
+    assert "时区：" in (runtime_message.content or "")
+    assert all(
+        message.name != RUNTIME_ENVIRONMENT_MESSAGE_NAME
+        for message in result.messages
+    )
+    assert result.messages[0] == old_system
+
+
+@pytest.mark.asyncio
 async def test_runtime_reads_then_writes_and_returns_final_text(tmp_path) -> None:
     (tmp_path / "input.txt").write_text(
         "OneAgent 可以调用本地工具完成文件任务。",
@@ -461,8 +491,13 @@ async def test_runtime_below_trigger_sends_complete_history_to_model() -> None:
     assert result.messages[1].tool_calls == (older_call,)
     assert result.messages[2].role is MessageRole.TOOL
     first_request = adapter.requests[0].messages
-    assert first_request == (
-        *history,
+    runtime_index = next(
+        index
+        for index, message in enumerate(first_request)
+        if message.name == RUNTIME_ENVIRONMENT_MESSAGE_NAME
+    )
+    assert first_request[:runtime_index] == history
+    assert first_request[runtime_index + 1 :] == (
         Message(role=MessageRole.USER, content="这一轮"),
     )
     second_request = adapter.requests[1].messages

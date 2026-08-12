@@ -12,7 +12,6 @@ import argparse
 import asyncio
 import sys
 from collections.abc import Sequence
-from datetime import datetime
 from pathlib import Path
 
 from app.agent.events import AgentEvent, AgentEventType
@@ -795,7 +794,6 @@ def _parse_args() -> argparse.Namespace:
         "--system",
         default=(
             "你是 OneAgent，一个本地运行的智能助理。请使用用户的语言回答。"
-            f"当前日期是 {datetime.now().astimezone().date().isoformat()}。"
             "调用工具时优先使用已有结果；网页搜索通常只需一到两次，获得可用结果后"
             "立即整理回答，不要为了追求完美而反复改写相同查询。"
             "当用户明确要求记录任务，或工作复杂、需要多个步骤或跨多轮跟踪时，"

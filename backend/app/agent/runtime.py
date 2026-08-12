@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator, Sequence
 from contextlib import suppress
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
@@ -67,6 +69,9 @@ from .result import (
     ToolRound,
 )
 from .tool_hooks import AgentEventHook
+
+RUNTIME_ENVIRONMENT_MESSAGE_NAME = "oneagent_runtime_environment"
+_LEGACY_DATE_PATTERN = re.compile(r"当前日期是 \d{4}-\d{2}-\d{2}。")
 
 
 class AgentRuntime:
@@ -298,7 +303,10 @@ class AgentRuntime:
                 self._max_tool_rounds is not None
                 and len(tool_rounds) >= self._max_tool_rounds
             )
-            request_messages = tuple(messages)
+            # 原始历史保持不变；模型请求视图会移除旧版持久提示词中的固定日期。
+            request_messages = tuple(
+                _without_legacy_fixed_date(message) for message in messages
+            )
             request_tools = (
                 () if force_final_answer else self._tool_registry.definitions()
             )
@@ -318,7 +326,10 @@ class AgentRuntime:
                 )
 
             try:
-                ephemeral_messages: list[Message] = []
+                # 运行环境是易变事实，只进入本次模型上下文，不写入会话历史。
+                ephemeral_messages: list[Message] = [
+                    _runtime_environment_message()
+                ]
                 if self._memory_manager is not None and not memory_context_loaded:
                     memory_context_loaded = True
                     try:
@@ -1189,6 +1200,34 @@ def _recalled_memory_revisions(
         ):
             recalled[normalized] = revision
     return recalled
+
+
+def _runtime_environment_message() -> Message:
+    """生成只对当前模型请求有效的本地时间环境。"""
+
+    current = datetime.now().astimezone()
+    timezone_name = current.tzname() or str(current.tzinfo)
+    return Message(
+        role=MessageRole.SYSTEM,
+        name=RUNTIME_ENVIRONMENT_MESSAGE_NAME,
+        content=(
+            "[Runtime Environment]\n"
+            f"当前本地日期时间：{current.isoformat(timespec='seconds')}\n"
+            f"时区：{timezone_name}\n"
+            "涉及今天、明天、近期等相对时间时，以这里的时间为准。"
+        ),
+    )
+
+
+def _without_legacy_fixed_date(message: Message) -> Message:
+    """仅清理模型请求副本中的旧固定日期，保留数据库原始历史。"""
+
+    if message.role is not MessageRole.SYSTEM or not message.content:
+        return message
+    cleaned = _LEGACY_DATE_PATTERN.sub("", message.content)
+    if cleaned == message.content:
+        return message
+    return message.model_copy(update={"content": cleaned})
 
 
 class _EventEmitter:
