@@ -1,4 +1,6 @@
-# OneAgent 测评框架
+# OneAgent Evaluation
+
+## 第一部分：通用 Agent Runtime 测评
 
 OneAgent 使用仓库内的轻量 Eval Harness 测量 `AgentRuntime` 的行为。它直接运行
 真实 Runtime、工具、Task Store 和 ContextManager；离线自检使用 Fake Model，
@@ -211,3 +213,132 @@ DeepSeek Live 验证：
 - `report_20260809_042441.md`：eval-21、eval-23 通过；eval-05 的摘要已经生成，但 `completed_work` 为 6 条，被最初的 5 条绝对限制拒绝。
 - 5 条调整为 Prompt 建议目标，代码安全硬上限设为 8；单条 80 字、总内容 1200 字和“必须实际减少请求”继续作为硬边界。
 - `report_20260809_042623.md`：eval-05 重跑通过；最终回答保留“效率提升”目标，压缩链路完成。
+
+---
+
+## 第二部分：长期记忆测评
+
+### 基线信息（2026-08-12 · Qwen）
+
+本轮使用新建的多阶段 Memory Eval Harness，10 条场景各运行 3 次。跨会话场景包含
+`learn + recall` 两个 Phase，因此总计 33 个阶段样本。此次只运行 `mode=on`，尚未运行
+Memory OFF 对照。
+
+| 项目 | 值 |
+| --- | --- |
+| Provider / Model | qwen / qwen3.7-plus |
+| 场景数 / 重复次数 | 10 / 每场景 3 次 |
+| 阶段样本数 | 33 |
+| 完整通过场景 | 8/10 |
+| 通过阶段 | 27/33 |
+| 阶段通过率 | **81.8%** |
+| 原始报告 | `backend/tests/memory_eval/reports/memory_report_20260812_074146.md` |
+| 生成时间 | 2026-08-12 15:31（Asia/Shanghai） |
+
+### 核心指标
+
+| 测评部分 | 指标 | 结果 | 判断 |
+| --- | --- | ---: | --- |
+| Reflection | Action 准确率 | 87.5% | 基础分类较稳，但同主题自动 UPDATE 存在稳定漏判 |
+| Recall | Recall 准确率 | **100.0%** | 该读、禁读和干扰项选择均通过 |
+| Answer | 回答关键事实通过率 | **100.0%** | 成功召回后能正确用于最终回答 |
+| Store | 存储状态通过率 | 50.0%（原始机械指标） | memory-01 为中英文同义表达误报；真实缺陷集中在 UPDATE 漏判 |
+| 稳定性 | 完整通过场景 | 8/10 | 失败集中于 memory-01 的 learn Phase 和 memory-05 |
+
+### Recall 与回答测评
+
+| 场景 | 覆盖点 | 结果 | 观察 |
+| --- | --- | ---: | --- |
+| memory-01/recall | 新会话召回前一会话创建的记忆 | 3/3 | 每次恰好读取 1 条，跨会话闭环成功 |
+| memory-06 | 无关问题不读取记忆 | 3/3 | 无多余 `memory_read` |
+| memory-07 | Archive 隔离 | 3/3 | 已归档内容未进入普通召回 |
+| memory-08 | 三条相似 Cue 中选择目标 | 3/3 | 只读取长期记忆容量记录，未读两个干扰项 |
+| memory-09 | 当前证据纠正过时记忆 | 3/3 | 正确读取旧记录，以当前 25 条规则回答并更新 |
+
+结论：当前 `INDEX → 主模型判断 → memory_read → 回答` 链路是本轮最稳定的部分。
+跨会话召回、负召回、Archive 隔离和相似干扰场景均连续三次通过。
+
+### Reflection 与记忆分层测评
+
+| 场景 | 期望行为 | 结果 | 观察 |
+| --- | --- | ---: | --- |
+| memory-01/learn | CREATE 项目架构决定 | 原始断言 0/3，人工复核 3/3 | 三次正文均保留“不使用 vector database 自动 Top-K”；中文子串“向量”断言误报 |
+| memory-02 | 一次性算术问题返回 NONE | 3/3 | 未污染长期记忆 |
+| memory-03 | 长期偏好进入 Core，Ordinary 返回 NONE | 3/3 | Core/Ordinary 路由正确 |
+| memory-04 | 当前任务进度不写 Ordinary | 3/3 | Task/Memory 边界正确 |
+| memory-05 | 已读同主题执行 UPDATE | 0/3 | Reflection 三次都返回 NONE，revision 保持 1 |
+| memory-09 | 当前事实纠正旧记录 | 3/3 | UPDATE、正文纠正和 revision 增长均通过 |
+
+这里不能简单得出“UPDATE 整体失效”：memory-09 连续三次 UPDATE 成功，而 memory-05
+连续三次返回 NONE。差异说明更可能是 Reflection 对“已经完成的稳定变更”和“用户在
+当前消息中描述的新规则”的判定边界不清，而不是 Runtime 的 update/revision 执行链路
+损坏。
+
+### Capacity Maintenance 测评
+
+| 场景 | 期望 | 结果 | 平均 Maintenance Token | 平均耗时 |
+| --- | --- | ---: | ---: | ---: |
+| memory-10 | 满 2 条后归档旧候选并创建 revision 新记忆 | 3/3 | 750 | 35.4s |
+
+容量闭环连续三次完成：Reflection CREATE、Maintenance ARCHIVE、最终 active 数量和新
+记忆正文均符合预期。当前样本只能证明一个明确“已废弃候选”的路径，尚不能证明模型在
+多个都仍有价值的候选中不会误归档，后续仍需 Judge 和人工审计场景。
+
+### 逐场景稳定性与平均成本
+
+| 场景 / Phase | 通过 | Main Token | Reflection Token | Maintenance Token | 平均耗时 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| memory-01/learn | 0/3 | 1,480 | 1,272 | 0 | 23.1s |
+| memory-01/recall | 3/3 | 2,891 | 999 | 0 | 12.2s |
+| memory-02/ask | 3/3 | 1,178 | 569 | 0 | 6.9s |
+| memory-03/prefer | 3/3 | 2,841 | 934 | 0 | 17.6s |
+| memory-04/progress | 3/3 | 1,274 | 617 | 0 | 9.3s |
+| memory-05/revise | 0/3 | 3,031 | 1,722 | 0 | 30.4s |
+| memory-06/unrelated | 3/3 | 1,217 | 1,003 | 0 | 17.4s |
+| memory-07/ask | 3/3 | 1,373 | 628 | 0 | 11.0s |
+| memory-08/ask | 3/3 | 2,773 | 888 | 0 | 13.7s |
+| memory-09/correct | 3/3 | 3,181 | 1,211 | 0 | 25.8s |
+| memory-10/create_at_capacity | 3/3 | 1,652 | 1,515 | 750 | 35.4s |
+| **全部阶段平均** | **27/33** | **2,081** | **1,033** | **68** | **18.4s** |
+
+注意：全部阶段的 Maintenance 平均值被 30 个未触发维护的样本稀释；实际触发
+Maintenance 的 memory-10 平均约 750 Token。Reflection 即使最终为 NONE 也会产生约
+569～1,722 Token，因此后续必须用 Memory OFF 对照衡量这些固定后处理成本是否换来了
+足够的跨会话收益。
+
+### 失败归因与优先级
+
+| 优先级 | Bad Case | 证据 | 初步判断 | 下一步 |
+| --- | --- | --- | --- | --- |
+| P0 | 同主题新规则未 UPDATE | memory-05 连续 3 次 `actual=none`，revision 始终为 1 | 稳定语义漏判，直接影响记忆演进 | 检查 Reflection 实际输入和原始输出；明确“已完成变更”证据表达后做 A/B Prompt 测试 |
+| P1 | 中英文同义表达造成误报 | memory-01 三份正文都写明“不使用 vector database 自动 Top-K”，但断言只查中文“向量” | 关键字断言无法可靠评价跨语言语义完整性 | 场景使用 `any_of` 或独立 Judge；保留“否定关系必须存在”的语义要求 |
+| P1 | Store 原始指标失真 | 6 个 Store 断言阶段中 memory-01 被机械误报、memory-05 为真实失败 | 50% 不能直接解释为存储质量 50% | 报告同时保留原始自动分与人工复核结论，不篡改历史原始报告 |
+| P2 | Reflection 固定成本较高 | 全阶段平均 1,033 Token；无关问题 memory-06 仍约 1,003 Token | 每个 FINAL_ANSWER 都调用反思模型有成本 | 完成 OFF 对照后评估轻量触发门或更小模型，不应现在凭单次成本删能力 |
+
+### 当前结论
+
+| 结论 | 状态 |
+| --- | --- |
+| Model-directed Recall 方向是否可行 | **可行**：召回和回答指标均为 100% |
+| Core、Task、Ordinary 分层是否基本成立 | **成立**：memory-02/03/04 全部 3/3 |
+| UPDATE 是否完成稳定闭环 | **部分完成**：执行链路可用，但 Reflection 对部分更新稳定漏判 |
+| Maintenance 是否具备基础闭环 | **具备**：明确废弃候选场景 3/3 |
+| 当前能否作为稳定 Memory 基线 | **可以作为 V1 基线，但不能宣称整体完成** |
+
+下一轮应先为 Eval 保存 Reflection 原始输入/输出。memory-01 需要修正跨语言机械断言，
+但不能降低“必须保留否定关系”的语义标准；memory-05 的 3 个失败样本继续作为固定回归，
+用于判断问题来自场景证据、Prompt 还是模型能力。同时补跑 `--compare-off`，量化跨会话
+收益与 Reflection 固定成本。
+
+### Reflection 修复记录（2026-08-12）
+
+| 修复项 | 处理 |
+| --- | --- |
+| CREATE/UPDATE 保守阈值混淆 | 稀疏增长明确主要约束 CREATE；同主题明确新规则优先 UPDATE |
+| 要求当前 Run 存在代码变更 | 当前用户确认 finalized/completed/corrected/extended 即可成为耐久证据 |
+| UPDATE 内容覆盖风险 | 继续要求成功读取、完整替换和 revision；Prompt 强调保留旧有效事实及否定/数值/安全约束 |
+| 无法查看 NONE 原因 | Eval 开启原始 I/O 捕获，每个 Phase 写入 `artifacts/<phase>.json` |
+| 生产隐私边界 | 原始 I/O 捕获默认关闭，仅 Eval 显式启用 |
+
+该修改已通过离线 Prompt、Schema、事件和 artifact 回归。尚未用真实 Qwen 重跑
+memory-05，因此不能把本节视为 Live Bad Case 已关闭；需要下一次真实结果确认。

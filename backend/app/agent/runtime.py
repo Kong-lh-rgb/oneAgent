@@ -638,7 +638,7 @@ class AgentRuntime:
                 expected_revision = recalled_memory_revisions.get(memory_id or "")
                 if expected_revision is None:
                     raise ValueError(
-                        "reflection update requires memory.read success in current run"
+                        "reflection update requires memory_read success in current run"
                     )
                 record = await manager.update_if_revision(
                     memory_id or "",
@@ -700,6 +700,12 @@ class AgentRuntime:
                     else None
                 ),
                 reflection_mutation_applied=False,
+                reflection_input_json=(
+                    proposal.input_json if proposal is not None else None
+                ),
+                reflection_raw_output=(
+                    proposal.raw_output if proposal is not None else None
+                ),
                 provider=provider,
                 model=model,
                 usage=usage,
@@ -731,6 +737,8 @@ class AgentRuntime:
             reflection_mutation_applied=mutation_applied,
             reflection_maintenance_required=maintenance_required,
             reflection_retention_candidate_ids=candidate_ids,
+            reflection_input_json=proposal.input_json,
+            reflection_raw_output=proposal.raw_output,
             provider=proposal.provider,
             model=proposal.model,
             usage=proposal.usage,
@@ -1153,7 +1161,7 @@ def _recalled_memory_revisions(
 
     recalled: dict[str, int] = {}
     for record in records:
-        if record.tool_call.name != "memory.read" or not record.result.success:
+        if record.tool_call.name != "memory_read" or not record.result.success:
             continue
         arguments: Any = record.tool_call.arguments
         if isinstance(arguments, str):

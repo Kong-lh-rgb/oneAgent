@@ -67,6 +67,30 @@ from .config import ModelSettings
 from .registry import ModelAdapterRegistry
 from .types import Message, MessageRole, ModelProvider
 
+_COMMAND_OVERVIEW = (
+    "命令：/new 新建会话，/sessions 查看会话，/use <id> 切换会话，"
+    "/memories 查看长期记忆，/memory <id> 查看记忆详情，"
+    "/runs 查看运行，/checkpoints 查看恢复点，/trace <id> 查看轨迹，"
+    "/permissions 查看审批规则，"
+    "/clear 清空当前会话，/help 查看帮助，/exit 退出"
+)
+
+_HELP_TEXT = (
+    "/new [标题] 新建会话\n"
+    "/sessions 查看最近会话\n"
+    "/use <会话ID> 切换会话\n"
+    "/memories 查看活跃长期记忆及 Recall Cue\n"
+    "/memory <记忆ID> 查看一条长期记忆的完整内容\n"
+    "/runs 查看最近 Agent Run\n"
+    "/checkpoints 查看当前会话的运行恢复点\n"
+    "/trace <Run ID> 查看完整事件轨迹\n"
+    "/permissions 查看当前会话的审批规则\n"
+    "/permission remove <规则ID> 删除一条审批规则\n"
+    "/permissions clear 清除当前会话的全部审批规则\n"
+    "/clear 清空当前会话\n"
+    "/exit 退出聊天"
+)
+
 
 def _select_provider(
     settings: ModelSettings,
@@ -548,12 +572,7 @@ async def _run(args: argparse.Namespace) -> int:
             )
             return 0 if success else 1
 
-        print(
-            "命令：/new 新建会话，/sessions 查看会话，/use <id> 切换会话，"
-            "/runs 查看运行，/checkpoints 查看恢复点，/trace <id> 查看轨迹，"
-            "/permissions 查看审批规则，"
-            "/clear 清空当前会话，/help 查看帮助，/exit 退出"
-        )
+        print(_COMMAND_OVERVIEW)
         while True:
             try:
                 content = input("\n你> ").strip()
@@ -693,19 +712,7 @@ async def _run(args: argparse.Namespace) -> int:
                 print("上下文已清空。")
                 continue
             if content == "/help":
-                print(
-                    "/new [标题] 新建会话\n"
-                    "/sessions 查看最近会话\n"
-                    "/use <会话ID> 切换会话\n"
-                    "/runs 查看最近 Agent Run\n"
-                    "/checkpoints 查看当前会话的运行恢复点\n"
-                    "/trace <Run ID> 查看完整事件轨迹\n"
-                    "/permissions 查看当前会话的审批规则\n"
-                    "/permission remove <规则ID> 删除一条审批规则\n"
-                    "/permissions clear 清除当前会话的全部审批规则\n"
-                    "/clear 清空当前会话\n"
-                    "/exit 退出聊天"
-                )
+                print(_HELP_TEXT)
                 continue
 
             _, conversation = await _send_message(

@@ -1,0 +1,19 @@
+id: memory-07
+name: 已归档记忆不参与普通召回
+tags: [recall, archive, safety]
+initial_memories:
+  - alias: retired
+    title: 已废弃的数据库方案
+    summary: 旧方案使用 SQLite 向量检索
+    content: "旧方案要求用 SQLite 和向量 Top-K 自动注入。"
+    status: archived
+phases:
+  - id: ask
+    conversation: A
+    user_input: "我们以前废弃的长期记忆数据库方案具体是什么？如果当前索引没有信息，就明确说不知道。"
+    expect:
+      not_recalled: [retired]
+      total_memory_reads: 0
+      active_count: 0
+      archive_count: 1
+

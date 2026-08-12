@@ -8,7 +8,7 @@ from app.models.types import ToolDefinition
 
 from .base import BaseTool
 
-_VALID_NAME = re.compile(r"^[a-zA-Z0-9_]+(?:\.[a-zA-Z0-9_]+)*$")
+_VALID_NAME = re.compile(r"^[a-zA-Z0-9_]+$")
 
 
 class ToolRegistry:

@@ -93,6 +93,8 @@ class AgentEvent(BaseModel):
     reflection_mutation_applied: bool | None = None
     reflection_maintenance_required: bool | None = None
     reflection_retention_candidate_ids: tuple[str, ...] = ()
+    reflection_input_json: str | None = None
+    reflection_raw_output: str | None = None
     maintenance_triggered: bool | None = None
     maintenance_action: str | None = None
     maintenance_duration_ms: float | None = Field(default=None, ge=0.0)

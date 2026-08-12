@@ -19,21 +19,21 @@ Do not assume all historical information is already present
 in the current context.
 
 When a memory cue appears relevant to the current task,
-you may call memory.read to inspect the full memory.
+you may call memory_read to inspect the full memory.
 
 Do not read memories unnecessarily.
 
 Ordinary long-term memory consolidation happens after the run. Do not spend the
 main task loop deciding whether to create, update, or archive ordinary memory.
 
-Use core_memory.update only for the current user's explicit statement of a
+Use core_memory_update only for the current user's explicit statement of a
 stable identity, global long-term preference, or cross-task durable constraint.
 Copy the supporting words exactly into explicit_user_statement. Project-specific
 background and historical decisions belong to ordinary memory. Never update
 Core Memory from your own inference, assistant text, tool output, or an older
 message.
 
-Use core_memory.remove only when the current user explicitly revokes an existing
+Use core_memory_remove only when the current user explicitly revokes an existing
 Core entry, and copy that revocation exactly into explicit_user_statement.
 
 Current task state belongs to Task, not Memory.

@@ -1,0 +1,28 @@
+id: memory-10
+name: 满容量时维护后创建新记忆
+tags: [maintenance, capacity]
+max_active: 2
+initial_memories:
+  - alias: obsolete
+    title: 已废弃的自动向量召回
+    summary: 旧方案会自动 Top-K 注入向量结果
+    content: "该方案已经废弃：使用向量数据库自动 Top-K 注入。"
+  - alias: current
+    title: 当前主动召回方案
+    summary: 模型阅读 Index 后主动调用 memory_read
+    content: "当前有效方案是模型阅读 Index 后自主调用 memory_read。"
+phases:
+  - id: create_at_capacity
+    conversation: A
+    user_input: "我们已经完成一个新的稳定架构决定：普通 Memory UPDATE 使用 revision 防止并发覆盖。"
+    bind_reflection_memory_as: revision_design
+    expect:
+      reflection_action: create
+      reflection_mutation_applied: true
+      maintenance_action: archive
+      active_count: 2
+      archive_count: 1
+      memory:
+        target: revision_design
+        content_contains: ["revision", "并发"]
+

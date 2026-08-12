@@ -5,8 +5,81 @@
 > 对架构调整和缺陷修复，应同时记录 Bad Case、影响、根因和修复结果，避免只记录最终功能。
 
 ---
-
 ## 2026-08-12
+
+### 完成：Memory 工具名改为下划线（DeepSeek API 拒绝点号）
+
+#### Bad Case
+- [x] DeepSeek（OpenAI 兼容）要求工具名匹配 `^[a-zA-Z0-9_-]+$`；`memory.read` / `core_memory.update` 等点分工具名在真实调用时 400：`Invalid 'tools[10].function.name'`
+- [x] CLI `--help` 不触发模型调用，因此点号问题在离线/静态检查中未暴露，直到真实对话才暴露
+
+#### 修复结果
+- [x] 工具名统一改为下划线：`memory_read` / `memory_list` / `memory_create` / `memory_update` / `memory_archive` / `core_memory_update` / `core_memory_remove`
+- [x] `ToolRegistry` 恢复仅允许 `[a-zA-Z0-9_]` 的严格工具名（点分命名与 Provider 协议冲突）
+- [x] 同步更新 tools/prompts/index/models/runtime 引用与相关测试（test_memory_system、test_memory_reflection、test_agent_runtime、test_chat_sessions）
+- [x] 全量验证：`pytest` 371 通过、`ruff`、`compileall`、`git diff --check` 通过
+
+---
+## 2026-08-12
+
+### 修复：Reflection 同主题 UPDATE 漏判与 Eval 原始 I/O
+
+#### Bad Case
+- [x] 当前 Prompt 将 CREATE 的稀疏原则和 UPDATE 的知识修正使用同一保守偏置，用户明确确认同主题新规则时仍可能连续返回 NONE
+- [x] Prompt 没有明确区分“本轮是否改了代码”和“本轮是否获得耐久项目知识”，系统外已完成的决定容易被忽略
+- [x] Memory Eval 只保存 action/usage/最终文件，不保存 Reflection 完整输入、原始 JSON 和 NONE reason，真实失败无法直接复盘
+- [x] memory-01 的中文关键字断言把英文 `vector database` 误报为否定事实丢失，说明机械字符串不能替代语义完整性判断
+
+#### 修复结果
+- [x] Reflection Prompt 明确稀疏增长主要约束 CREATE；已读同主题存在用户明确确认的 finalized/completed/corrected/extended 新规则时优先 UPDATE
+- [x] 明确用户当前确认本身可以成为耐久证据，不要求当前 Run 必须执行代码或文件 mutation；提案、猜测和 Assistant 自述仍不能冒充确认
+- [x] UPDATE 要求保留旧记录仍有效事实，以及否定、被拒方案、替代关系、数字限制和安全约束
+- [x] `MemoryReflectionConfig.capture_raw_io` 默认关闭；Eval 单独开启并将完整输入和原始输出放入事件
+- [x] Memory Eval 每个 Phase 写入 `artifacts/<phase>.json`，包含用户输入、最终回答、Reflection input/raw output/action/mutation/error
+- [x] 新增 Prompt 边界、原始 I/O 开关和 Eval artifact 离线回归测试
+- [x] 全量验证：`pytest` 378 个用例通过；`ruff`、`compileall` 和 `git diff --check` 通过
+
+### 完成：首轮长期记忆 Live Eval 结果归档
+
+- [x] 读取 Qwen `qwen3.7-plus` 的 10 场景 × 3 次真实 Memory Eval 输出和原始报告
+- [x] 将结果写入根目录 `evaluation.md` 的独立“长期记忆测评”大章节，与通用 Agent Runtime 测评分区
+- [x] 使用表格记录基线信息、核心指标、Recall/Reflection/Maintenance 分区结果、逐场景稳定性、平均 Token/耗时和失败优先级
+- [x] 原始自动结果为 27/33（81.8%）；人工复核发现 memory-01 三次均保留英文 `vector database` 否定事实，属于中文关键字断言误报，真实稳定缺陷集中在 memory-05 UPDATE 漏判
+- [x] 保留原断言作为回归，不通过降低标准迎合当前模型；下一轮应采集 Reflection 原始输入/输出并补跑 Memory OFF 对照
+
+### 完成：长期记忆多阶段 Eval V1
+
+#### Bad Case
+- [x] 单轮 Eval 只能检查一次 `memory_read`，无法证明记忆由前一会话产生、进程外持久化并在新会话被正确使用
+- [x] Reflection、Main Agent 和 Maintenance 如果共用一个 Token 汇总，无法定位长期记忆的真实收益与额外成本
+- [x] 场景中的 Memory ID 运行时动态分配，直接把 `M001` 写死在后续断言会让场景依赖预置顺序，难以扩展
+- [x] 真实模型 Eval 不应进入 pytest，否则离线测试会产生 API 成本和随机失败
+
+#### 实现结果
+- [x] 新增独立 `tests/memory_eval/`，实现严格 YAML Schema、递归 Loader、多阶段 Runner、断言、指标、Markdown 报告和 Live CLI
+- [x] 同一场景共享临时 Markdown Memory Store；相同 conversation 继承历史，不同 conversation 只共享长期记忆
+- [x] CREATE/UPDATE 产生的动态 Memory ID 可绑定稳定别名，后续阶段用别名断言召回和文件内容
+- [x] 每阶段采集 AgentResult、AgentEvent、Core/Index/active/archive 快照和耗时
+- [x] 支持 `--compare-off` 运行 Memory OFF 对照；Main、Reflection、Maintenance Token 独立统计
+- [x] 首批 10 条场景覆盖跨会话创建召回、一次性 NONE、Core/Task 分层、同主题 UPDATE、无关不读、Archive 隔离、相似干扰、当前证据纠错和满容量维护
+- [x] 新增 4 条离线框架测试，验证跨会话隔离、动态别名、场景加载/校验和分阶段成本报告；pytest 不调用真实 API
+- [x] 全量验证：`pytest` 376 个用例通过；`ruff`、`compileall` 和 `git diff --check` 通过
+- [ ] V1 尚未接入独立 Judge；正文耐久性、重复主题和 Maintenance 语义质量目前依赖关键点断言，后续需增加 Judge + 人工抽查
+
+### 完成：CLI Memory 命令提示与长期记忆测评方案
+
+#### Bad Case
+- [x] CLI 已实现 `/memories` 和 `/memory <ID>`，但启动提示与 `/help` 没有展示，用户无法从终端发现入口
+- [x] 现有 Eval 以单次 Run 为单位，直接加入几个 `memory.read` 断言无法验证跨会话写入、召回、更新和维护闭环
+
+#### 实现结果
+- [x] CLI 启动命令提示和 `/help` 补充长期记忆列表、详情命令，并抽取为共享文本避免两处再次漂移
+- [x] 新增 CLI 帮助文本回归测试
+- [x] 新增 `docs/memory-evaluation.md`，明确确定性不变量测试与真实模型语义测评分层
+- [x] 设计独立多阶段 Memory Eval：同一临时 Store 跨 Run/会话执行，采集 Main、Reflection、Maintenance、文件快照与分模型成本
+- [x] 定义 Recall、Reflection、跨会话、Update、Maintenance 五组场景以及写入精度、召回精度、层级误写、关键记忆误归档等指标
+- [x] 明确 Memory ON/OFF 对照、独立 Judge 与人工抽查原则，避免使用被测模型自评或让测试反向绑死策略
+- [x] 全量验证：`pytest` 372 个用例通过；`ruff`、`compileall` 和 `git diff --check` 通过
 
 ### 收口：普通 Memory 更新一致性与跨实例写入保护
 

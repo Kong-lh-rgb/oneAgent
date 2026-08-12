@@ -21,7 +21,8 @@ _REFLECTION_PROMPT = """You are OneAgent's post-run long-term memory reflector.
 The main Agent has already completed the user's task. Do not answer the user,
 continue the task, call tools, change Task, modify Core Memory, or create Skills.
 Decide whether this completed run produced exactly one durable ordinary long-term
-memory delta. Default to none. Ordinary memory is sparse and should grow slowly.
+memory delta. Ordinary memory is sparse and CREATE should grow slowly. Default to
+none only when there is no durable delta.
 
 Do not store current task progress, pending steps, temporary constraints, raw tool
 output, one-off facts, stable Core identity/preferences, or reusable procedures.
@@ -31,6 +32,18 @@ changes, and background that may need to be recalled in a later session.
 For update, only replace an existing memory listed in recalled_memory_ids. Those
 IDs prove the main Agent successfully read the full memory during this run. If
 only an Index cue is available, return none instead of guessing or erasing details.
+
+Treat a current user's explicit statement that a project decision or rule has
+been finalized, completed, corrected, or extended as durable evidence. It does
+not require a code edit or file mutation in this run. When such evidence adds a
+durable rule to a recalled memory's existing topic, prefer UPDATE over CREATE or
+NONE, even when the new rule does not contradict the old content. Do not confuse
+"the run changed files" with "the run learned durable project knowledge".
+
+Preserve the recalled memory's still-valid facts when updating. Also preserve
+material negations, rejected alternatives, replacement relationships, numeric
+limits, and safety constraints from the current evidence. Do not invent a
+finalized decision from proposals, speculation, or the assistant's own claims.
 
 Return strict JSON and no markdown fence:
 {"action":"none|create|update","memory_id":null,"title":null,
@@ -88,6 +101,12 @@ class PostRunMemoryReflector:
         usage = ModelUsage()
         provider = self.provider_hint
         model = self.model_hint
+        input_json = json.dumps(
+            reflection_input.model_dump(mode="json"),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        raw_output: str | None = None
         try:
             adapter = self._registry.get(provider)
             provider = adapter.provider
@@ -102,11 +121,7 @@ class PostRunMemoryReflector:
                     Message(role=MessageRole.SYSTEM, content=_REFLECTION_PROMPT),
                     Message(
                         role=MessageRole.USER,
-                        content=json.dumps(
-                            reflection_input.model_dump(mode="json"),
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                        ),
+                        content=input_json,
                     ),
                 ),
                 model=model,
@@ -116,10 +131,11 @@ class PostRunMemoryReflector:
             async with asyncio.timeout(self.config.timeout_seconds):
                 response = await adapter.complete(request)
             usage = response.usage
-            if not response.message.content:
+            raw_output = response.message.content
+            if not raw_output:
                 raise ValueError("reflection model returned empty content")
             decision = ReflectionDecision.model_validate_json(
-                _strip_code_fence(response.message.content)
+                _strip_code_fence(raw_output)
             )
             return MemoryReflectionProposal(
                 decision=decision,
@@ -127,6 +143,8 @@ class PostRunMemoryReflector:
                 model=model,
                 duration_ms=(time.perf_counter() - started) * 1000,
                 usage=usage,
+                input_json=(input_json if self.config.capture_raw_io else None),
+                raw_output=(raw_output if self.config.capture_raw_io else None),
             )
         except Exception as exc:
             return MemoryReflectionProposal(
@@ -135,6 +153,8 @@ class PostRunMemoryReflector:
                 duration_ms=(time.perf_counter() - started) * 1000,
                 usage=usage,
                 error=f"{type(exc).__name__}: {exc}",
+                input_json=(input_json if self.config.capture_raw_io else None),
+                raw_output=(raw_output if self.config.capture_raw_io else None),
             )
 
 

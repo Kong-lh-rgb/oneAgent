@@ -155,6 +155,65 @@ async def test_reflection_noop_does_not_mutate_store(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_reflection_prompt_treats_confirmed_same_topic_delta_as_update(
+) -> None:
+    adapter = FakeAdapter(
+        _config("reflect", "reflection-model"),
+        [
+            _response(
+                '{"action":"update","memory_id":"M001",'
+                '"title":"普通记忆容量","summary":"容量维护与并发规则",'
+                '"content":"上限 25 条；归档前校验 revision。",'
+                '"reason":"用户明确确认了同主题的新增规则"}'
+            )
+        ],
+    )
+    reflector = PostRunMemoryReflector(
+        _registry(reflect=adapter),
+        config=_reflection_config(capture_raw_io=True),
+    )
+    reflection_input = MemoryReflectionInput(
+        run_id="run-update",
+        conversation_id="conversation-1",
+        user_input=(
+            "我们刚完成的新规则是：归档前必须校验候选 revision，并且更新 "
+            "Recall Cue。"
+        ),
+        final_answer="当前完整规则已经说明。",
+        recalled_memory_ids=("M001",),
+    )
+
+    proposal = await reflector.decide(reflection_input)
+
+    assert proposal.decision is not None
+    assert proposal.decision.action is ReflectionAction.UPDATE
+    assert proposal.input_json is not None
+    assert "刚完成的新规则" in proposal.input_json
+    assert proposal.raw_output is not None
+    prompt = adapter.requests[0].messages[0].content or ""
+    assert "prefer UPDATE over CREATE or" in prompt
+    assert "NONE, even when the new rule" in prompt
+    assert "not require a code edit or file mutation" in prompt
+
+
+@pytest.mark.asyncio
+async def test_reflection_raw_io_is_disabled_by_default() -> None:
+    adapter = FakeAdapter(
+        _config("reflect", "reflection-model"),
+        [_response('{"action":"none","reason":"没有耐久变化"}')],
+    )
+    reflector = PostRunMemoryReflector(
+        _registry(reflect=adapter),
+        config=_reflection_config(),
+    )
+
+    proposal = await reflector.decide(_input())
+
+    assert proposal.input_json is None
+    assert proposal.raw_output is None
+
+
+@pytest.mark.asyncio
 async def test_reflection_create_uses_manager_and_rebuilds_index(
     tmp_path: Path,
 ) -> None:
@@ -290,7 +349,7 @@ async def test_reflection_update_requires_current_run_memory_read(
     )
     assert failed.reflection_memory_id == record.id
     assert failed.reflection_error is not None
-    assert "memory.read success" in failed.reflection_error
+    assert "memory_read success" in failed.reflection_error
     assert (
         manager.memory_dir / "active" / f"{record.id}.md"
     ).read_text(encoding="utf-8") == before
@@ -414,7 +473,7 @@ async def test_runtime_successful_memory_read_authorizes_reflection_update(
                     tool_calls=(
                         ToolCall(
                             id="read-memory-1",
-                            name="memory.read",
+                            name="memory_read",
                             arguments={"memory_id": record.id},
                         ),
                     ),
@@ -494,7 +553,7 @@ async def test_runtime_rejects_reflection_update_after_concurrent_change(
                     tool_calls=(
                         ToolCall(
                             id="read-memory-1",
-                            name="memory.read",
+                            name="memory_read",
                             arguments={"memory_id": record.id},
                         ),
                     ),

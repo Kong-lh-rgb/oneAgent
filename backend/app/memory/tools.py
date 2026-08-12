@@ -1,7 +1,7 @@
 """长期记忆语义化工具：在线 Recall、显式 Core 操作与内部普通写入。
 
 这些工具不是数据库 CRUD，而是语义化 Memory API。读取是显式的
-（Model-directed Recall）：模型看到 Recall Cue 后决定何时 ``memory.read``。
+（Model-directed Recall）：模型看到 Recall Cue 后决定何时 ``memory_read``。
 Runtime 不做 query-driven 自动检索或 Top-K 注入。普通 Memory 写工具保留为
 内部能力，但不注册到 Main Agent 的默认 Tool Registry。
 """
@@ -28,7 +28,7 @@ class MemoryReadTool(BaseTool):
     @property
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
-            name="memory.read",
+            name="memory_read",
             description=(
                 "读取一条完整长期记忆。仅当 Memory Index 中的某个 cue 与当前任务"
                 "明显相关时才调用；不要无谓读取。每次读取会记录访问次数。"
@@ -72,10 +72,10 @@ class MemoryListTool(BaseTool):
     @property
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
-            name="memory.list",
+            name="memory_list",
             description=(
                 "列出当前 active 长期记忆的 id、标题与摘要（Recall Cue）。"
-                "不返回完整正文；需要详情时用 memory.read。"
+                "不返回完整正文；需要详情时用 memory_read。"
             ),
             parameters={
                 "type": "object",
@@ -108,7 +108,7 @@ class MemoryCreateTool(BaseTool):
     @property
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
-            name="memory.create",
+            name="memory_create",
             description=(
                 "创建一条长期记忆。只有对未来跨会话仍有明显价值的信息才创建；"
                 "当前任务状态属于 Task、可复用流程属于 Skills，都不应写入。"
@@ -171,7 +171,7 @@ class MemoryUpdateTool(BaseTool):
     @property
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
-            name="memory.update",
+            name="memory_update",
             description=(
                 "基于最近一次读取的 revision，替换已有长期记忆的标题、Recall "
                 "Cue 和完整正文。新信息属于旧主题时优先 update，避免重复记忆。"
@@ -198,7 +198,7 @@ class MemoryUpdateTool(BaseTool):
                     "expected_revision": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "最近一次 memory.read 返回的 revision。",
+                        "description": "最近一次 memory_read 返回的 revision。",
                     },
                     "reason": {
                         "type": "string",
@@ -263,7 +263,7 @@ class MemoryArchiveTool(BaseTool):
     @property
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
-            name="memory.archive",
+            name="memory_archive",
             description=(
                 "把一条过时或不再需要的长期记忆归档。归档后不再出现在 Memory "
                 "Index 中，也不会进入模型上下文。"
@@ -306,7 +306,7 @@ class CoreMemoryUpdateTool(BaseTool):
     @property
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
-            name="core_memory.update",
+            name="core_memory_update",
             description=(
                 "按稳定 key 创建或更新一条 Core Memory。是否属于 Core 由你判断，"
                 "但只能用于当前用户明确表达的稳定身份、全局长期偏好或跨任务长期"
@@ -349,7 +349,7 @@ class CoreMemoryUpdateTool(BaseTool):
         )
 
     async def execute(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        raise ValueError("core_memory.update requires the current user message")
+        raise ValueError("core_memory_update requires the current user message")
 
     async def execute_with_context(
         self,
@@ -389,7 +389,7 @@ class CoreMemoryRemoveTool(BaseTool):
     @property
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
-            name="core_memory.remove",
+            name="core_memory_remove",
             description=(
                 "移除一个不再成立的 Core Memory 条目。只能在当前用户明确撤销"
                 "身份、全局长期偏好或跨任务约束时调用；必须逐字复制当前用户"
@@ -418,7 +418,7 @@ class CoreMemoryRemoveTool(BaseTool):
         )
 
     async def execute(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        raise ValueError("core_memory.remove requires the current user message")
+        raise ValueError("core_memory_remove requires the current user message")
 
     async def execute_with_context(
         self,

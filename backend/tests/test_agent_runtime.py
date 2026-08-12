@@ -1305,7 +1305,7 @@ async def test_runtime_core_update_uses_current_user_and_next_run_loads_it(
     statement = "以后都使用中文和我交流"
     core_call = ToolCall(
         id="core-update-1",
-        name="core_memory.update",
+        name="core_memory_update",
         arguments={
             "key": "communication.language",
             "value": "始终使用中文交流。",

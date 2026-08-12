@@ -1,0 +1,15 @@
+id: memory-02
+name: 一次性信息不写长期记忆
+tags: [reflection, negative]
+phases:
+  - id: ask
+    conversation: A
+    user_input: "帮我算一下 17 加 25 等于多少。"
+    expect:
+      reflection_action: none
+      reflection_mutation_applied: false
+      active_count: 0
+      total_memory_reads: 0
+      answer:
+        contains: ["42"]
+

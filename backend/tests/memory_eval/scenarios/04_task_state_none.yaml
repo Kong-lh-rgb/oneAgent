@@ -1,0 +1,12 @@
+id: memory-04
+name: 当前任务进度不写普通记忆
+tags: [reflection, routing, task]
+phases:
+  - id: progress
+    conversation: A
+    user_input: "当前正在修复登录测试，还剩两个失败用例，明天继续。只告诉我你理解了。"
+    expect:
+      reflection_action: none
+      active_count: 0
+      total_memory_reads: 0
+

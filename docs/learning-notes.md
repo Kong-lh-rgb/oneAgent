@@ -690,12 +690,12 @@ Memory Index、暴露语义工具、维护元数据、执行容量管理。
 
 ### 18.3 Main Agent 的语义工具
 
-- `memory.read(id)`：读取完整记忆，自动 access_count+1 / last_accessed_at；
-- `memory.list()`：返回 active 记忆的 id/title/summary（Recall Cue），不含正文；
-- `core_memory.update(key, value, reason, explicit_user_statement)`：模型判断信息应常驻 Core，Harness 验证当前用户原话并按 key 更新；
-- `core_memory.remove(key, reason, explicit_user_statement)`：用户明确撤销 Core 信息时按 key 移除。
+- `memory_read(id)`：读取完整记忆，自动 access_count+1 / last_accessed_at；
+- `memory_list()`：返回 active 记忆的 id/title/summary（Recall Cue），不含正文；
+- `core_memory_update(key, value, reason, explicit_user_statement)`：模型判断信息应常驻 Core，Harness 验证当前用户原话并按 key 更新；
+- `core_memory_remove(key, reason, explicit_user_statement)`：用户明确撤销 Core 信息时按 key 移除。
 
-`memory.create/update/archive` 的类和 Manager API 仍保留，但不注册到 Main Agent 的默认
+`memory_create/update/archive` 的类和 Manager API 仍保留，但不注册到 Main Agent 的默认
 Tool Registry。普通记忆写入由 Post-Run Reflector 通过 Manager 完成。
 
 ### 18.4 Model-directed recall
@@ -705,7 +705,7 @@ System Prompt = Core Memory + Memory Index + Memory Policy
         ↓
     模型判断是否需要过去信息
         ├─ 不需要 → 继续
-        └─ 需要 → memory.read(Mxxx)
+        └─ 需要 → memory_read(Mxxx)
 ```
 
 外部系统提供 Recall Cue，模型决定何时真正 Recall。普通记忆完整正文绝不自动注入。
@@ -742,7 +742,7 @@ create 同时分配 M001，或 read 的访问计数覆盖 update 的正文。
 
 文件可写不代表模型可完整读回。ToolExecutor 对统一 ToolResult 有 20000 字符上限，因此
 普通 Memory 正文限制为 12000 字符，并另外限制 title/summary 长度；否则系统可能成功
-保存 512KB 文件，却在每次 memory.read 时固定截断，形成模型无法维护的半可见记忆。
+保存 512KB 文件，却在每次 memory_read 时固定截断，形成模型无法维护的半可见记忆。
 
 容量维护存在一个不可消除的边界：算法不能自动删除，最终 KEEP/MERGE/ARCHIVE 又交给
 模型，因此模型出错或 Run 在 max_steps 处停止时，active 可能暂时大于 25。当前 Policy
@@ -755,7 +755,7 @@ Maintenance 执行者，或改成“满额时先维护、再创建”；不能�
 
 Core 与普通 Memory 的归属是语义判断，应该由模型通过选择不同工具表达：主题相关的
 历史背景进入普通 Memory；每次 Run 都必须知道的稳定身份、全局长期偏好和跨任务约束
-进入 `core_memory.update`。Harness 不重新用关键词分类，但也不向模型开放整份 CORE.md
+进入 `core_memory_update`。Harness 不重新用关键词分类，但也不向模型开放整份 CORE.md
 覆盖能力，而是按稳定小写点分 key 执行 upsert。
 
 Core 更新必须携带 `explicit_user_statement`，并逐字出现在本轮 Runtime 保存的原始
@@ -772,7 +772,7 @@ CORE.md；失败时原文件保持不变。同一 Run 通过 ToolResult 知道�
 
 ### 18.9 Post-Run Reflection：把“完成任务”和“沉淀过去”拆开
 
-主 Agent 的 step loop 只负责完成当前请求、按需 `memory.read`，以及处理用户本轮明确
+主 Agent 的 step loop 只负责完成当前请求、按需 `memory_read`，以及处理用户本轮明确
 表达的 Core 更新或撤销。只有 Run 以 `FINAL_ANSWER` 正常结束并完成 checkpoint 后，
 Runtime 才同步调用 Post-Run Reflector。MODEL_ERROR、CONTEXT_ERROR、MAX_STEPS、重复
 工具调用、中断和未完成 Run 都不会沉淀普通长期记忆。
@@ -995,3 +995,33 @@ Manager 在 mutation 时先取得实例锁，再在 Memory 目录的 `.memory.lo
 `flock`，覆盖 ID 分配、容量检查、文件原子替换和 Index 重建。macOS/Linux 因而共享同一
 写入边界；Windows 暂时退化为实例锁。底层 `MemoryStore` 仍保留无容量的原始文件能力，
 只用于旧数据导入和修复；Runtime 与模型工具必须经过执行硬上限的 MemoryManager。
+
+## 25. Memory Eval：不要用单轮工具命中率冒充长期记忆质量
+
+长期记忆的最小评测单位不是一次 ToolCall，而是“产生信息的 Run → Reflection 写入 →
+新会话发现 Cue → 主模型读取 → 基于记忆正确回答”。现有单 Run Eval 适合验证工具和
+Task，但 Memory 需要共享同一临时 Store 的多阶段 Harness，并分别采集 Main、Reflection
+和 Maintenance 的决策、事件、文件快照及成本。
+
+测评必须分开回答两个问题：离线不变量测试证明系统不会越权、越容、覆盖并发更新或因
+后处理失败破坏主任务；真实模型评测衡量是否值得记、是否想起正确内容、是否重复创建、
+是否把 Core/Task 写入普通记忆，以及 Maintenance 是否误伤关键记录。最终采用 Memory
+ON/OFF 对照衡量真实收益，用独立 Judge 和人工抽查评价自然语言语义，不能让被测模型
+给自己打分，也不能为了场景通过率把自主召回策略改成固定轨迹。
+
+Memory Eval V1 已采用独立目录实现。Scenario 内的多个 Phase 共享临时 Memory Store；
+conversation 标签相同才继承聊天历史，因此“A 会话写入、B 会话召回”不会被旧 History
+作弊。Reflection 产生的 ID 绑定成场景别名，断言不依赖 M001 等具体编号。每个阶段同时
+保存 Core、Index、active、archive 快照和事件，并将三类模型 Token 分开报告。真实模型
+只通过 `tests.memory_eval.run_live` 显式运行，pytest 只用 Fake Adapter 验证 Harness。
+
+首轮 Live Eval 说明 CREATE 与 UPDATE 不应共享完全相同的保守阈值。CREATE 会扩张 active
+集合，应默认稀疏；UPDATE 不增加条目数量，承担防止已有知识过时的职责。当前用户明确
+确认同主题规则已经决定、完成、纠正或扩展时，即使本轮只有 read + explain、没有代码
+mutation，也构成耐久项目知识证据。Harness 仍通过本轮成功读取和 revision 防止盲写与
+并发覆盖，Prompt 则要求模型融合旧事实并保留否定、替代关系、数值和安全约束。
+
+语义评测还必须保留模型原始现场。只存 action=none 无法知道模型为何拒绝 UPDATE；只用
+中文子串也会把英文 `vector database` 误报为信息遗漏。因此 Eval 显式开启原始 I/O
+捕获并写入阶段 artifact，生产默认关闭以保护用户上下文。后续自动关键点断言负责快速
+门禁，跨语言完整性最终应由独立 Judge 与人工抽查共同评价。

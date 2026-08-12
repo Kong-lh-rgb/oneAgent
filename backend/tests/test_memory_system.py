@@ -563,7 +563,7 @@ async def test_internal_create_tool_cannot_bypass_capacity(
         await manager.create(title=f"m{index}", summary=f"s{index}", content="c")
 
     with pytest.raises(ValueError, match="capacity is full"):
-        await registry.get("memory.create").execute(
+        await registry.get("memory_create").execute(
             {"title": "第 26 条", "summary": "触发维护", "content": "新内容"}
         )
 
@@ -625,9 +625,9 @@ async def test_context_messages_include_core_index_policy(memory_root: Path) -> 
 
 @pytest.mark.asyncio
 async def test_policy_message_guides_model_directed_recall() -> None:
-    assert "memory.read" in MEMORY_POLICY_PROMPT
+    assert "memory_read" in MEMORY_POLICY_PROMPT
     assert "after the run" in MEMORY_POLICY_PROMPT
-    assert "core_memory.update" in MEMORY_POLICY_PROMPT
+    assert "core_memory_update" in MEMORY_POLICY_PROMPT
     assert "Task" in MEMORY_POLICY_PROMPT
     assert "Skills" in MEMORY_POLICY_PROMPT
 
@@ -661,10 +661,10 @@ async def test_register_memory_tools_exposes_only_main_agent_tools(
     register_memory_tools(registry, manager)
 
     assert set(registry.names()) == {
-        "memory.read",
-        "memory.list",
-        "core_memory.update",
-        "core_memory.remove",
+        "memory_read",
+        "memory_list",
+        "core_memory_update",
+        "core_memory_remove",
     }
 
 
@@ -675,7 +675,7 @@ async def test_memory_create_and_read_tools_roundtrip(memory_root: Path) -> None
     register_memory_tools(registry, manager)
     register_memory_write_tools(registry, manager)
 
-    created = await registry.get("memory.create").execute(
+    created = await registry.get("memory_create").execute(
         {
             "title": "用户偏好",
             "summary": "偏好中文",
@@ -684,7 +684,7 @@ async def test_memory_create_and_read_tools_roundtrip(memory_root: Path) -> None
     )
     assert created["id"] == "M001"
 
-    read = await registry.get("memory.read").execute(
+    read = await registry.get("memory_read").execute(
         {"memory_id": "M001"}
     )
     assert read["found"] is True
@@ -702,7 +702,7 @@ async def test_memory_list_returns_cues_without_content(memory_root: Path) -> No
     register_memory_tools(registry, manager)
     await manager.create(title="第一", summary="cue-1", content="机密正文")
 
-    result = await registry.get("memory.list").execute({})
+    result = await registry.get("memory_list").execute({})
 
     assert result["memories"][0]["title"] == "第一"
     assert "机密正文" not in str(result)
@@ -716,7 +716,7 @@ async def test_memory_update_and_archive_tools(memory_root: Path) -> None:
     register_memory_write_tools(registry, manager)
     record = await manager.create(title="第一", summary="cue-1", content="旧正文")
 
-    updated = await registry.get("memory.update").execute(
+    updated = await registry.get("memory_update").execute(
         {
             "memory_id": record.id,
             "title": "更新后的标题",
@@ -728,7 +728,7 @@ async def test_memory_update_and_archive_tools(memory_root: Path) -> None:
     )
     assert updated["updated"] is True
 
-    archived = await registry.get("memory.archive").execute(
+    archived = await registry.get("memory_archive").execute(
         {"memory_id": record.id, "reason": "过时"}
     )
     assert archived["status"] == "archived"
@@ -743,9 +743,9 @@ async def test_memory_tools_validate_required_arguments(memory_root: Path) -> No
     register_memory_write_tools(registry, manager)
 
     with pytest.raises(ValueError, match="'memory_id'"):
-        await registry.get("memory.read").execute({})
+        await registry.get("memory_read").execute({})
     with pytest.raises(ValueError, match="'content'"):
-        await registry.get("memory.create").execute(
+        await registry.get("memory_create").execute(
             {"title": "t", "summary": "s", "content": ""}
         )
 
@@ -757,7 +757,7 @@ async def test_core_update_tool_requires_exact_current_user_statement(
     manager = await _manager(memory_root)
     registry = ToolRegistry()
     register_memory_tools(registry, manager)
-    tool = registry.get("core_memory.update")
+    tool = registry.get("core_memory_update")
     arguments = {
         "key": "communication.language",
         "value": "始终使用中文交流。",
@@ -769,7 +769,7 @@ async def test_core_update_tool_requires_exact_current_user_statement(
         await tool.execute_with_context(
             arguments,
             ToolExecutionContext(
-                tool_call=ToolCall(id="core-1", name="core_memory.update"),
+                tool_call=ToolCall(id="core-1", name="core_memory_update"),
                 user_input="请帮我检查代码",
             ),
         )
@@ -782,7 +782,7 @@ async def test_core_update_tool_writes_through_harness(memory_root: Path) -> Non
     manager = await _manager(memory_root)
     registry = ToolRegistry()
     register_memory_tools(registry, manager)
-    tool = registry.get("core_memory.update")
+    tool = registry.get("core_memory_update")
     statement = "以后都使用中文和我交流"
 
     result = await tool.execute_with_context(
@@ -793,7 +793,7 @@ async def test_core_update_tool_writes_through_harness(memory_root: Path) -> Non
             "explicit_user_statement": statement,
         },
         ToolExecutionContext(
-            tool_call=ToolCall(id="core-1", name="core_memory.update"),
+            tool_call=ToolCall(id="core-1", name="core_memory_update"),
             user_input=f"请记住，{statement}。",
         ),
     )
@@ -815,7 +815,7 @@ async def test_core_remove_tool_requires_current_user_revocation(
     )
     registry = ToolRegistry()
     register_memory_tools(registry, manager)
-    tool = registry.get("core_memory.remove")
+    tool = registry.get("core_memory_remove")
     arguments = {
         "key": "communication.language",
         "reason": "用户撤销了长期语言偏好",
@@ -826,7 +826,7 @@ async def test_core_remove_tool_requires_current_user_revocation(
         await tool.execute_with_context(
             arguments,
             ToolExecutionContext(
-                tool_call=ToolCall(id="core-2", name="core_memory.remove"),
+                tool_call=ToolCall(id="core-2", name="core_memory_remove"),
                 user_input="继续检查代码",
             ),
         )
@@ -834,7 +834,7 @@ async def test_core_remove_tool_requires_current_user_revocation(
     result = await tool.execute_with_context(
         arguments,
         ToolExecutionContext(
-            tool_call=ToolCall(id="core-3", name="core_memory.remove"),
+            tool_call=ToolCall(id="core-3", name="core_memory_remove"),
             user_input="不用再记住语言偏好",
         ),
     )

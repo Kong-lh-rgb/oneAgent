@@ -1,7 +1,7 @@
 """长期记忆 Index（``INDEX.md``）的生成与加载。
 
 INDEX.md 是 Memory Store 的 projection，不是模型手工维护的文件。每次
-``memory.create`` / ``memory.update`` / ``memory.archive`` 后由 Runtime
+``memory_create`` / ``memory_update`` / ``memory_archive`` 后由 Runtime
 调用 ``rebuild()`` 重新生成。
 
 INDEX 只保存 Recall Cue（id + title + summary），不保存完整正文。
@@ -22,7 +22,7 @@ logger = logging.getLogger("oneagent.memory.index")
 _INDEX_HEADER = (
     "# Long-term Memory Index\n\n"
     "The following long-term memories are available.\n"
-    "Use memory.read only when one of these memories may materially "
+    "Use memory_read only when one of these memories may materially "
     "help the current task.\n"
 )
 

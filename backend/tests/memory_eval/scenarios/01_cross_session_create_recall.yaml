@@ -1,0 +1,24 @@
+id: memory-01
+name: 跨会话创建并召回项目决定
+tags: [recall, reflection, cross-session]
+phases:
+  - id: learn
+    conversation: A
+    user_input: "我们已经决定：OneAgent 的普通长期记忆使用 Markdown 文件，不使用向量数据库自动 Top-K。"
+    bind_reflection_memory_as: storage_decision
+    expect:
+      reflection_action: create
+      reflection_mutation_applied: true
+      active_count: 1
+      memory:
+        target: storage_decision
+        content_contains: ["Markdown", "向量"]
+  - id: recall
+    conversation: B
+    user_input: "我们之前给普通长期记忆选定了哪种存储和召回方式？"
+    expect:
+      recalled: [storage_decision]
+      total_memory_reads: 1
+      answer:
+        contains: ["Markdown"]
+

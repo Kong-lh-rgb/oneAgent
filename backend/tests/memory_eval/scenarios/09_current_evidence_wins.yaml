@@ -1,0 +1,22 @@
+id: memory-09
+name: 当前用户证据优先于过时记忆
+tags: [recall, grounding, update]
+initial_memories:
+  - alias: limit
+    title: 普通记忆容量上限
+    summary: active 上限过去设为 20 条
+    content: "普通长期记忆 active 上限是 20 条。"
+phases:
+  - id: correct
+    conversation: A
+    user_input: "读取容量记忆。当前代码已经确认上限改为 25 条，请以当前信息为准，并修正以后使用的项目知识。"
+    expect:
+      recalled: [limit]
+      reflection_action: update
+      answer:
+        contains: ["25"]
+      memory:
+        target: limit
+        content_contains: ["25"]
+        revision_at_least: 2
+

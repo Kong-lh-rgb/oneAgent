@@ -1,0 +1,23 @@
+id: memory-05
+name: 已读取的同主题记忆执行更新而非重复创建
+tags: [reflection, update]
+initial_memories:
+  - alias: capacity
+    title: 普通记忆容量
+    summary: 活跃普通记忆最多 25 条
+    content: "普通记忆 active 上限为 25 条，满载时运行 Maintenance。"
+phases:
+  - id: revise
+    conversation: A
+    user_input: "读取容量记忆。我们刚完成的新规则是：归档前必须校验候选 revision，并且更新 Recall Cue。请说明当前完整规则。"
+    expect:
+      recalled: [capacity]
+      reflection_action: update
+      reflection_mutation_applied: true
+      active_count: 1
+      memory:
+        target: capacity
+        summary_contains: ["容量"]
+        content_contains: ["25", "revision"]
+        revision_at_least: 2
+

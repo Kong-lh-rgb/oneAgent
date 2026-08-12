@@ -40,6 +40,7 @@ class MemoryReflectionConfig(BaseSettings):
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     timeout_seconds: float = Field(default=30.0, gt=0.0)
     max_tool_context_chars: int = Field(default=8_000, ge=0, le=20_000)
+    capture_raw_io: bool = False
 
     @field_validator("provider", "model", mode="before")
     @classmethod
@@ -156,6 +157,8 @@ class MemoryReflectionProposal(BaseModel):
     duration_ms: float = Field(default=0.0, ge=0.0)
     usage: ModelUsage = Field(default_factory=ModelUsage)
     error: str | None = None
+    input_json: str | None = None
+    raw_output: str | None = None
 
 
 __all__ = [

@@ -16,6 +16,8 @@ from app.context import (
 from app.conversation import SQLiteConversationStore
 from app.memory import MemoryRecord
 from app.models.chat import (
+    _COMMAND_OVERVIEW,
+    _HELP_TEXT,
     _load_or_create_conversation,
     _parse_args,
     _print_memories,
@@ -380,3 +382,10 @@ def test_cli_prints_memory_list_and_details(capsys) -> None:
     assert "[active]" in output
     assert "OneAgent 使用 SQLite 历史" in output
     assert "访问次数: 3" in output
+
+
+def test_cli_help_exposes_memory_commands() -> None:
+    assert "/memories" in _COMMAND_OVERVIEW
+    assert "/memory <id>" in _COMMAND_OVERVIEW
+    assert "/memories 查看活跃长期记忆及 Recall Cue" in _HELP_TEXT
+    assert "/memory <记忆ID> 查看一条长期记忆的完整内容" in _HELP_TEXT

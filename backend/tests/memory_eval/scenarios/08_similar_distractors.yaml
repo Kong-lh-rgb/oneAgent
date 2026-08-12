@@ -1,0 +1,27 @@
+id: memory-08
+name: 相似干扰项中只读取目标记忆
+tags: [recall, precision]
+initial_memories:
+  - alias: context_capacity
+    title: 上下文容量
+    summary: 模型窗口达到百分之八十后触发上下文压缩
+    content: "上下文压缩触发线是模型可用输入窗口的百分之八十。"
+  - alias: memory_capacity
+    title: 长期记忆容量
+    summary: active 普通记忆最多 25 条
+    content: "长期记忆 active 上限为 25 条，满载时由 Maintenance 选择归档。"
+  - alias: task_capacity
+    title: Task 步骤规则
+    summary: Task 同时最多一个 in_progress 步骤
+    content: "一个 Task 同一时间最多只能有一个 in_progress 步骤。"
+phases:
+  - id: ask
+    conversation: A
+    user_input: "普通长期记忆 active 区最多允许多少条，满了由谁处理？"
+    expect:
+      recalled: [memory_capacity]
+      not_recalled: [context_capacity, task_capacity]
+      total_memory_reads: 1
+      answer:
+        contains: ["25", "Maintenance"]
+

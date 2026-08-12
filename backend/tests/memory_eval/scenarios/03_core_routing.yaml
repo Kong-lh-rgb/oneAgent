@@ -1,0 +1,12 @@
+id: memory-03
+name: 明确长期偏好进入 Core 而非普通记忆
+tags: [core, routing]
+phases:
+  - id: prefer
+    conversation: A
+    user_input: "以后回答我时先给结论，再解释原因。"
+    expect:
+      reflection_action: none
+      active_count: 0
+      core_contains: ["先给结论", "解释原因"]
+

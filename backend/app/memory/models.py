@@ -7,7 +7,7 @@ active/M001.md
 ```
 
 Front Matter 保存 id、标题、摘要与运行时元数据；正文按固定小节组织，
-供模型通过 ``memory.read`` 完整读取。
+供模型通过 ``memory_read`` 完整读取。
 """
 
 from __future__ import annotations
@@ -159,7 +159,7 @@ class MemoryRecord(BaseModel):
         return f"---\n{front}---\n{body}"
 
     def render_full(self) -> str:
-        """渲染为模型 ``memory.read`` 可见的完整正文（不含 Front Matter）。"""
+        """渲染为模型 ``memory_read`` 可见的完整正文（不含 Front Matter）。"""
 
         return (
             f"# {self.title}\n\n"
