@@ -39,8 +39,12 @@ def test_budget_formula() -> None:
     assert budget.reserved_output_tokens == 4_000
     assert budget.safety_margin_tokens == 4_096
     assert budget.input_budget == 131_072 - 4_000 - 4_096
-    assert budget.trigger_tokens == int(budget.input_budget * 0.8)
-    assert budget.target_tokens == int(budget.input_budget * 0.6)
+    assert budget.working_input_budget == 32_768
+    assert budget.hard_trigger_tokens == int(budget.input_budget * 0.8)
+    assert budget.hard_target_tokens == int(budget.input_budget * 0.6)
+    assert budget.trigger_tokens == int(32_768 * 0.9)
+    assert budget.target_tokens == int(32_768 * 0.7)
+    assert budget.tool_result_budget_tokens == int(budget.target_tokens * 0.35)
 
 
 def test_model_default_max_output_used_when_no_override() -> None:
@@ -161,7 +165,7 @@ async def test_context_manager_below_trigger_preserves_complete_protocol() -> No
 
 
 @pytest.mark.asyncio
-async def test_requires_compaction_below_80_is_false() -> None:
+async def test_short_request_stays_below_working_trigger() -> None:
     manager = ContextManager(
         registry=build_model_capability_registry(
             context_settings=ContextSettings(_env_file=None),
@@ -181,7 +185,7 @@ async def test_requires_compaction_below_80_is_false() -> None:
 
 
 @pytest.mark.asyncio
-async def test_requires_compaction_at_or_above_80_is_true() -> None:
+async def test_small_window_uses_hard_limit_as_effective_budget() -> None:
     registry = build_model_capability_registry(
         context_settings=ContextSettings(_env_file=None),
     )
@@ -206,6 +210,8 @@ async def test_requires_compaction_at_or_above_80_is_true() -> None:
     assert decision.requires_compaction is True
     assert decision.context_window == 200
     assert decision.input_budget == 150
+    assert decision.working_input_budget == 150
+    assert decision.hard_trigger_tokens == 120
     assert decision.trigger_tokens == 120
-    assert decision.target_tokens == 90
+    assert decision.target_tokens == int(150 * 0.6)
     assert decision.capability_source == CapabilitySource.OVERRIDE.value

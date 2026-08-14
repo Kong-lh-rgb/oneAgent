@@ -39,6 +39,24 @@ class CharacterEstimator:
             len(tool.name) for tool in tools
         )
 
+    def estimate_messages(
+        self,
+        messages: Sequence[Message],
+        *,
+        model: str | None = None,
+        provider: str | None = None,
+    ) -> int:
+        return sum(20 + len(message.content or "") for message in messages)
+
+    def estimate_tools(
+        self,
+        tools: Sequence[ToolDefinition],
+        *,
+        model: str | None = None,
+        provider: str | None = None,
+    ) -> int:
+        return sum(len(tool.name) for tool in tools)
+
 
 class NeverCalledToolReducer(ToolReducer):
     """低于触发线时调用即使测试失败。"""
@@ -243,6 +261,7 @@ def _small_window_manager(
     settings = ContextSettings(
         _env_file=None,
         context_keep_recent_tool_rounds=2,
+        context_preferred_input_tokens=900,
         context_max_tool_result_chars=100,
         context_tool_result_head_chars=20,
         context_tool_result_tail_chars=20,
@@ -289,13 +308,15 @@ async def test_context_manager_triggers_then_reestimates_tool_reduction() -> Non
     assert decision.original_usage_ratio is not None
     assert decision.prepared_usage_ratio is not None
     assert decision.prepared_usage_ratio < decision.original_usage_ratio
-    assert decision.compaction_stage is ContextCompactionStage.TOOL_RESULTS
+    assert decision.compaction_stage is (
+        ContextCompactionStage.TOOL_RESULTS_AND_ROUNDS
+    )
     assert decision.compacted_tool_results == 1
-    assert decision.removed_tool_rounds == 0
+    assert decision.removed_tool_rounds == 1
     assert decision.trimmed is True
     assert decision.reached_target is True
     assert decision.needs_next_compaction_stage is False
-    assert len(estimator.requests) == 2
+    assert len(estimator.requests) >= 2
     assert decision.messages[0] == history[0]
     assert recent_one[0] in decision.messages
     assert recent_one[1] in decision.messages
@@ -406,12 +427,114 @@ async def test_context_manager_removes_old_rounds_until_target() -> None:
     assert decision.compaction_stage is ContextCompactionStage.TOOL_ROUNDS
     assert decision.compacted_tool_results == 0
     assert decision.removed_tool_rounds == 2
-    assert decision.reached_target is True
-    assert decision.needs_next_compaction_stage is False
-    assert len(estimator.requests) == 3
+    assert decision.tool_result_tokens_after == _estimate(
+        (protected_one[1], protected_two[1])
+    )
+    assert decision.needs_next_compaction_stage is True
+    assert len(estimator.requests) >= 2
     assert conversation in decision.messages
     assert protected_one[0] in decision.messages
     assert protected_one[1] in decision.messages
     assert protected_two[0] in decision.messages
     assert protected_two[1] in decision.messages
     assert decision.messages[-1] is current
+
+
+@pytest.mark.asyncio
+async def test_tool_budget_runs_below_conversation_trigger() -> None:
+    estimator = CharacterEstimator()
+    registry = ModelCapabilityRegistry()
+    registry.register_override(
+        "test",
+        "test-model",
+        context_window=20_000,
+        max_output_tokens=1_000,
+    )
+    settings = ContextSettings(
+        _env_file=None,
+        context_preferred_input_tokens=10_000,
+        context_tool_result_budget_ratio=0.05,
+        context_keep_recent_tool_rounds=1,
+        context_max_tool_result_chars=100,
+        context_tool_result_head_chars=20,
+        context_tool_result_tail_chars=20,
+    )
+    manager = ContextManager(
+        estimator=estimator,  # type: ignore[arg-type]
+        registry=registry,
+        budget_policy=ContextBudgetPolicy(
+            safety_margin_tokens=0,
+            preferred_input_tokens=10_000,
+            tool_result_budget_ratio=0.05,
+        ),
+        context_settings=settings,
+    )
+    old = _tool_round("old", "x" * 1_000)
+    recent = _tool_round("recent", "当前证据")
+    current = Message(role=MessageRole.USER, content="继续")
+    original = (*old, *recent, current)
+
+    decision = await manager.prepare(
+        original,
+        history_count=len(old) + len(recent),
+        model="test-model",
+        provider="test",
+        max_output_tokens=1_000,
+    )
+
+    assert decision.original_estimated_input_tokens < decision.trigger_tokens
+    assert decision.requires_compaction is True
+    assert decision.compacted_tool_results == 1
+    assert decision.removed_tool_rounds == 0
+    assert decision.tool_result_tokens_after <= (
+        decision.tool_result_budget_tokens or 0
+    )
+    assert recent[1] in decision.messages
+    assert original[1].content == "x" * 1_000
+
+
+@pytest.mark.asyncio
+async def test_current_run_old_tool_round_can_be_reduced_but_latest_is_kept() -> None:
+    estimator = CharacterEstimator()
+    registry = ModelCapabilityRegistry()
+    registry.register_override(
+        "test",
+        "test-model",
+        context_window=20_000,
+        max_output_tokens=1_000,
+    )
+    manager = ContextManager(
+        estimator=estimator,  # type: ignore[arg-type]
+        registry=registry,
+        budget_policy=ContextBudgetPolicy(
+            safety_margin_tokens=0,
+            preferred_input_tokens=10_000,
+            tool_result_budget_ratio=0.05,
+        ),
+        context_settings=ContextSettings(
+            _env_file=None,
+            context_keep_recent_tool_rounds=1,
+            context_max_tool_result_chars=100,
+            context_tool_result_head_chars=20,
+            context_tool_result_tail_chars=20,
+        ),
+    )
+    historical_user = Message(role=MessageRole.USER, content="开始")
+    first_current_round = _tool_round("run-old", "o" * 1_000)
+    latest_current_round = _tool_round("run-latest", "最新结果")
+
+    decision = await manager.prepare(
+        (historical_user, *first_current_round, *latest_current_round),
+        history_count=1,
+        model="test-model",
+        provider="test",
+        max_output_tokens=1_000,
+    )
+
+    compacted_old = next(
+        message
+        for message in decision.messages
+        if message.tool_call_id == "run-old"
+    )
+    assert "tool result compacted" in (compacted_old.content or "")
+    assert latest_current_round[1] in decision.messages

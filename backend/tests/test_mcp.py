@@ -62,6 +62,7 @@ class FakeMCPClient:
         )
         self.started = False
         self.closed = False
+        self.calls: list[tuple[str, dict[str, Any]]] = []
 
     async def start(self) -> None:
         if self.fail_start:
@@ -72,6 +73,7 @@ class FakeMCPClient:
         return self.tools
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
+        self.calls.append((name, arguments))
         return json.dumps(
             {"remote_name": name, "arguments": arguments},
             ensure_ascii=False,
@@ -82,7 +84,7 @@ class FakeMCPClient:
 
 
 class FakeModelAdapter(ModelAdapter):
-    """依次返回 MCP ToolCall 和最终回答的离线模型。"""
+    """依次搜索工具、调用 MCP 工具并返回最终回答。"""
 
     def __init__(self, config: ProviderConfig) -> None:
         super().__init__(config)
@@ -91,6 +93,17 @@ class FakeModelAdapter(ModelAdapter):
     async def complete(self, request: ModelRequest) -> ModelResponse:
         self.requests.append(request)
         if len(self.requests) == 1:
+            message = Message(
+                role=MessageRole.ASSISTANT,
+                tool_calls=(
+                    ToolCall(
+                        id="tool-search-1",
+                        name="tool_search",
+                        arguments={"query": "echo 返回参数"},
+                    ),
+                ),
+            )
+        elif len(self.requests) == 2:
             message = Message(
                 role=MessageRole.ASSISTANT,
                 tool_calls=(
@@ -105,6 +118,39 @@ class FakeModelAdapter(ModelAdapter):
             message = Message(role=MessageRole.ASSISTANT, content="MCP 调用完成")
         return ModelResponse(
             id=f"response-{len(self.requests)}",
+            provider="fake",
+            model="fake-model",
+            message=message,
+        )
+
+    async def close(self) -> None:
+        pass
+
+
+class DirectDeferredCallAdapter(ModelAdapter):
+    """模拟模型绕过目录直接猜测延迟工具名。"""
+
+    def __init__(self, config: ProviderConfig) -> None:
+        super().__init__(config)
+        self.calls = 0
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        self.calls += 1
+        if self.calls == 1:
+            message = Message(
+                role=MessageRole.ASSISTANT,
+                tool_calls=(
+                    ToolCall(
+                        id="guessed-mcp-call",
+                        name="mcp__demo__echo_text",
+                        arguments={"text": "bypass"},
+                    ),
+                ),
+            )
+        else:
+            message = Message(role=MessageRole.ASSISTANT, content="已停止绕过")
+        return ModelResponse(
+            id=f"direct-{self.calls}",
             provider="fake",
             model="fake-model",
             message=message,
@@ -142,6 +188,8 @@ async def test_manager_registers_mcp_tool_into_existing_execution_chain() -> Non
 
     assert statuses[0].state is MCPServerState.RUNNING
     assert statuses[0].tool_names == ("mcp__demo__echo_text",)
+    assert registry.deferred_names() == ("mcp__demo__echo_text",)
+    assert registry.model_definitions() == ()
     assert result.success is True
     assert json.loads(result.output or "{}") == {
         "remote_name": "echo.text",
@@ -178,12 +226,45 @@ async def test_agent_runtime_can_complete_an_mcp_tool_call() -> None:
     result = await AgentRuntime(models, tools, provider="fake").run("调用 MCP")
 
     assert result.content == "MCP 调用完成"
-    assert len(result.tool_calls) == 1
-    assert result.tool_calls[0].result.success is True
-    assert adapter.requests[0].tools[0].name == "mcp__demo__echo_text"
-    tool_message = adapter.requests[1].messages[-1]
+    assert len(result.tool_calls) == 2
+    assert all(record.result.success for record in result.tool_calls)
+    assert [tool.name for tool in adapter.requests[0].tools] == ["tool_search"]
+    assert {tool.name for tool in adapter.requests[1].tools} == {
+        "tool_search",
+        "mcp__demo__echo_text",
+    }
+    tool_message = adapter.requests[2].messages[-1]
     assert tool_message.role is MessageRole.TOOL
     assert "runtime" in (tool_message.content or "")
+    await manager.close(tools)
+
+
+@pytest.mark.asyncio
+async def test_runtime_rejects_deferred_tool_before_catalog_activation() -> None:
+    config = MCPServerConfig(
+        name="demo",
+        command="unused",
+        permission=ToolPermission.ALLOWED,
+    )
+    tools = ToolRegistry()
+    client = FakeMCPClient(config)
+    manager = MCPClientManager((config,), client_factory=lambda value: client)
+    await manager.start(tools)
+    provider_config = ProviderConfig(
+        provider="fake",
+        model="fake-model",
+        api_key=SecretStr("offline"),
+        api_style=ApiStyle.CHAT_COMPLETIONS,
+    )
+    adapter = DirectDeferredCallAdapter(provider_config)
+    models = ModelAdapterRegistry(ModelSettings(_env_file=None))
+    models.register("fake", lambda _: adapter, config=provider_config)
+
+    result = await AgentRuntime(models, tools, provider="fake").run("绕过目录")
+
+    assert result.tool_calls[0].result.success is False
+    assert "tool_search" in (result.tool_calls[0].result.error or "")
+    assert client.calls == []
     await manager.close(tools)
 
 

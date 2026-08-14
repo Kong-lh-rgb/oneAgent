@@ -4,6 +4,7 @@ from pathlib import Path
 
 from ..registry import ToolRegistry
 from ..search import SearchSettings
+from .current_time import CurrentTimeTool
 from .http_request import HttpRequestTool
 from .list_files import ListFilesTool
 from .read_file import ReadFileTool
@@ -20,6 +21,7 @@ def build_builtin_tool_registry(
     """创建注册了全部内置工具的工具注册表。"""
 
     registry = ToolRegistry()
+    registry.register(CurrentTimeTool())
     registry.register(ListFilesTool(workspace_root))
     registry.register(ReadFileTool(workspace_root))
     registry.register(WriteFileTool(workspace_root))
@@ -29,6 +31,7 @@ def build_builtin_tool_registry(
     return registry
 
 __all__ = [
+    "CurrentTimeTool",
     "HttpRequestTool",
     "ListFilesTool",
     "ReadFileTool",

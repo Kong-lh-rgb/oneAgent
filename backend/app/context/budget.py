@@ -1,10 +1,11 @@
 """上下文预算策略。
 
-根据模型能力与本次 ``max_output_tokens`` 计算输入预算：
+根据模型能力与本次 ``max_output_tokens`` 计算两套预算：
 
-    input_budget  = context_window - reserved_output_tokens - safety_margin_tokens
-    trigger_tokens = input_budget × trigger_ratio（默认 0.80）
-    target_tokens  = input_budget × target_ratio（默认 0.60）
+    input_budget = 模型窗口硬上限扣除输出预留和安全余量
+    working_input_budget = min(input_budget, preferred_input_tokens)
+    trigger_tokens = min(硬保护触发线, 日常工作触发线)
+    target_tokens = min(硬保护目标线, 日常工作目标线)
 
 本次显式 ``max_output_tokens`` 优先于模型默认值；非法配置抛出清晰错误，
 不允许静默产生负数预算。
@@ -30,8 +31,12 @@ class ContextBudget:
     reserved_output_tokens: int
     safety_margin_tokens: int
     input_budget: int
+    working_input_budget: int
+    hard_trigger_tokens: int
+    hard_target_tokens: int
     trigger_tokens: int
     target_tokens: int
+    tool_result_budget_tokens: int
 
 
 class ContextBudgetPolicy:
@@ -43,6 +48,10 @@ class ContextBudgetPolicy:
         trigger_ratio: float = DEFAULT_TRIGGER_RATIO,
         target_ratio: float = DEFAULT_TARGET_RATIO,
         safety_margin_tokens: int = DEFAULT_SAFETY_MARGIN_TOKENS,
+        preferred_input_tokens: int = 32_768,
+        working_trigger_ratio: float = 0.90,
+        working_target_ratio: float = 0.70,
+        tool_result_budget_ratio: float = 0.35,
     ) -> None:
         if not 0.0 < trigger_ratio < 1.0:
             raise ValueError("trigger_ratio must be in (0, 1)")
@@ -52,9 +61,23 @@ class ContextBudgetPolicy:
             raise ValueError("target_ratio must be lower than trigger_ratio")
         if safety_margin_tokens < 0:
             raise ValueError("safety_margin_tokens cannot be negative")
+        if preferred_input_tokens <= 0:
+            raise ValueError("preferred_input_tokens must be greater than zero")
+        if not 0.0 < working_trigger_ratio <= 1.0:
+            raise ValueError("working_trigger_ratio must be in (0, 1]")
+        if not 0.0 < working_target_ratio < working_trigger_ratio:
+            raise ValueError(
+                "working_target_ratio must be lower than working_trigger_ratio"
+            )
+        if not 0.0 < tool_result_budget_ratio < 1.0:
+            raise ValueError("tool_result_budget_ratio must be in (0, 1)")
         self._trigger_ratio = trigger_ratio
         self._target_ratio = target_ratio
         self._safety_margin_tokens = safety_margin_tokens
+        self._preferred_input_tokens = preferred_input_tokens
+        self._working_trigger_ratio = working_trigger_ratio
+        self._working_target_ratio = working_target_ratio
+        self._tool_result_budget_ratio = tool_result_budget_ratio
 
     def compute(
         self,
@@ -88,13 +111,30 @@ class ContextBudgetPolicy:
                 f"safety_margin={self._safety_margin_tokens} "
                 f"input_budget={input_budget} (must be > 0)"
             )
+        working_input_budget = min(input_budget, self._preferred_input_tokens)
+        hard_trigger_tokens = int(input_budget * self._trigger_ratio)
+        hard_target_tokens = int(input_budget * self._target_ratio)
+        trigger_tokens = min(
+            hard_trigger_tokens,
+            int(working_input_budget * self._working_trigger_ratio),
+        )
+        target_tokens = min(
+            hard_target_tokens,
+            int(working_input_budget * self._working_target_ratio),
+        )
         return ContextBudget(
             context_window=context_window,
             reserved_output_tokens=reserved_output,
             safety_margin_tokens=self._safety_margin_tokens,
             input_budget=input_budget,
-            trigger_tokens=int(input_budget * self._trigger_ratio),
-            target_tokens=int(input_budget * self._target_ratio),
+            working_input_budget=working_input_budget,
+            hard_trigger_tokens=hard_trigger_tokens,
+            hard_target_tokens=hard_target_tokens,
+            trigger_tokens=trigger_tokens,
+            target_tokens=target_tokens,
+            tool_result_budget_tokens=int(
+                target_tokens * self._tool_result_budget_ratio
+            ),
         )
 
 
@@ -108,6 +148,10 @@ def build_budget_policy(
         trigger_ratio=resolved.context_trigger_ratio,
         target_ratio=resolved.context_target_ratio,
         safety_margin_tokens=resolved.context_safety_margin_tokens,
+        preferred_input_tokens=resolved.context_preferred_input_tokens,
+        working_trigger_ratio=resolved.context_working_trigger_ratio,
+        working_target_ratio=resolved.context_working_target_ratio,
+        tool_result_budget_ratio=resolved.context_tool_result_budget_ratio,
     )
 
 

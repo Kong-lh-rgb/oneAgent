@@ -68,7 +68,8 @@ class MCPClientManager:
             remote_tools = await client.list_tools()
             adapters = _build_adapters(config, client, remote_tools)
             for adapter in adapters:
-                registry.register(adapter)
+                # MCP 工具默认延迟暴露，避免每一步都发送全部远端 Schema。
+                registry.register(adapter, deferred=True)
                 registered.append(adapter.definition.name)
         except Exception as exc:
             for name in reversed(registered):

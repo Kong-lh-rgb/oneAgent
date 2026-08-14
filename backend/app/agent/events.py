@@ -67,9 +67,21 @@ class AgentEvent(BaseModel):
     context_trimmed: bool | None = None
     context_window: int | None = Field(default=None, ge=0)
     input_budget: int | None = Field(default=None, ge=0)
+    working_input_budget: int | None = Field(default=None, ge=0)
+    hard_trigger_tokens: int | None = Field(default=None, ge=0)
+    hard_target_tokens: int | None = Field(default=None, ge=0)
     usage_ratio: float | None = Field(default=None, ge=0.0)
     trigger_tokens: int | None = Field(default=None, ge=0)
     target_tokens: int | None = Field(default=None, ge=0)
+    tool_result_budget_tokens: int | None = Field(default=None, ge=0)
+    tool_result_tokens_before: int | None = Field(default=None, ge=0)
+    tool_result_tokens_after: int | None = Field(default=None, ge=0)
+    tool_schema_tokens: int | None = Field(default=None, ge=0)
+    message_tokens_before: int | None = Field(default=None, ge=0)
+    message_tokens_after: int | None = Field(default=None, ge=0)
+    unsummarized_conversation_blocks: int | None = Field(default=None, ge=0)
+    conversation_block_limit: int | None = Field(default=None, gt=0)
+    conversation_block_triggered: bool | None = None
     requires_compaction: bool | None = None
     exceeds_input_budget: bool | None = None
     capability_source: str | None = None

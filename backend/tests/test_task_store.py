@@ -385,6 +385,39 @@ async def test_task_context_provider_reads_only_current_owner(
     assert await provider.message_for(None) is None
 
 
+async def test_task_context_folds_old_done_steps_but_keeps_working_steps(
+    store: FileTaskStore,
+) -> None:
+    task = await store.create(
+        title="长任务",
+        owner_conversation_id="conv-a",
+        steps=tuple(
+            TaskStep(
+                id=f"step-{index}",
+                title=f"步骤 {index}",
+                status=TaskStepStatus.DONE,
+                note=f"证据 {index}",
+            )
+            for index in range(5)
+        )
+        + (TaskStep(id="step-next", title="下一步"),),
+    )
+    provider = TaskContextProvider(store, recent_done_steps=2)
+
+    message = await provider.message_for("conv-a")
+
+    assert message is not None
+    content = message.content or ""
+    assert '"omitted_done_steps":3' in content
+    assert '"omitted_pending_steps":0' in content
+    assert '"step-3"' in content
+    assert '"step-4"' in content
+    assert '"step-next"' in content
+    assert '"step-0"' not in content
+    assert "in_progress" in content
+    assert task.id in content
+
+
 async def test_resolve_prefix_filters_owner_before_ambiguity(
     store: FileTaskStore,
 ) -> None:

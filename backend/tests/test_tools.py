@@ -10,18 +10,32 @@ import pytest
 from app.models.types import ToolCall, ToolDefinition
 from app.tools import (
     BaseTool,
+    CurrentTimeTool,
     ListFilesTool,
     ReadFileTool,
     ToolExecutor,
     ToolRegistry,
     WriteFileTool,
 )
+from app.tools.catalog import ToolCatalog, ToolSearchTool
 
 
 class EchoTool(BaseTool):
     @property
     def definition(self) -> ToolDefinition:
         return ToolDefinition(name="echo")
+
+    async def execute(self, arguments: dict[str, Any]) -> Any:
+        return arguments
+
+
+class StubDefinitionTool(BaseTool):
+    def __init__(self, definition: ToolDefinition) -> None:
+        self._definition = definition
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return self._definition
 
     async def execute(self, arguments: dict[str, Any]) -> Any:
         return arguments
@@ -71,6 +85,82 @@ def test_duplicate_tool_registration_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="already registered"):
         registry.register(EchoTool())
+
+
+def test_tool_catalog_tracks_deferred_registry_changes_automatically() -> None:
+    registry = ToolRegistry()
+    weather = StubDefinitionTool(
+        ToolDefinition(
+            name="mcp__weather__forecast",
+            description="Get weather forecast by city and date",
+            parameters={
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+            },
+        )
+    )
+    registry.register(weather, deferred=True)
+    catalog = ToolCatalog(registry)
+
+    assert [match.name for match in catalog.search("weather city")] == [
+        "mcp__weather__forecast"
+    ]
+    registry.unregister("mcp__weather__forecast")
+    assert catalog.search("weather city") == ()
+
+
+@pytest.mark.asyncio
+async def test_tool_search_returns_compact_matching_definitions() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        StubDefinitionTool(
+            ToolDefinition(
+                name="mcp__maps__search_places",
+                description="Search places and points of interest on a map",
+            )
+        ),
+        deferred=True,
+    )
+    registry.register(EchoTool())
+
+    payload = json.loads(
+        await ToolSearchTool(registry).execute({"query": "map places"})
+    )
+
+    assert payload["count"] == 1
+    assert payload["tools"][0]["name"] == "mcp__maps__search_places"
+    assert [item.name for item in registry.model_definitions()] == ["echo"]
+    assert {
+        item.name
+        for item in registry.model_definitions(
+            activated_names={"mcp__maps__search_places"}
+        )
+    } == {"echo", "mcp__maps__search_places"}
+
+
+@pytest.mark.asyncio
+async def test_current_time_tool_returns_local_time_on_demand() -> None:
+    output = await CurrentTimeTool().execute({})
+
+    assert output["date"] in output["datetime"]
+    assert output["time"] in output["datetime"]
+    assert output["timezone"]
+    assert output["utc_offset"]
+    assert isinstance(output["unix_timestamp"], int)
+
+
+@pytest.mark.asyncio
+async def test_current_time_tool_supports_iana_timezone() -> None:
+    output = await CurrentTimeTool().execute({"timezone": "Asia/Shanghai"})
+
+    assert output["timezone"] == "Asia/Shanghai"
+    assert output["utc_offset"] == "+08:00"
+
+
+@pytest.mark.asyncio
+async def test_current_time_tool_rejects_unknown_timezone() -> None:
+    with pytest.raises(ValueError, match="未知 IANA 时区"):
+        await CurrentTimeTool().execute({"timezone": "Mars/Olympus"})
 
 
 @pytest.mark.asyncio

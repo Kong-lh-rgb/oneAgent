@@ -9,6 +9,7 @@ from pydantic import SecretStr
 
 from app.context import (
     ContextManager,
+    ContextSettings,
     ContextSummarizer,
     ConversationReducer,
     ConversationSummaryState,
@@ -166,6 +167,72 @@ async def test_context_below_trigger_does_not_call_summarizer() -> None:
     assert decision.messages == messages
     assert decision.summary_updated is False
     assert summarizer.calls == []
+
+
+@pytest.mark.asyncio
+async def test_conversation_block_limit_triggers_summary_below_token_line() -> None:
+    history = _history(3)
+    current = (Message(role=MessageRole.USER, content="继续"),)
+    summarizer = FakeSummarizer()
+    manager = ContextManager(
+        context_settings=ContextSettings(
+            _env_file=None,
+            context_preferred_input_tokens=100_000,
+            context_max_unsummarized_conversation_blocks=2,
+        ),
+        conversation_reducer=ConversationReducer(
+            summarizer,
+            keep_recent_conversation_blocks=1,
+            keep_recent_tool_rounds=0,
+        ),
+    )
+
+    decision = await manager.prepare(
+        (*history, *current),
+        history_count=len(history),
+    )
+
+    assert decision.original_estimated_input_tokens < decision.trigger_tokens
+    assert decision.conversation_block_triggered is True
+    assert decision.unsummarized_conversation_blocks == 3
+    assert decision.summary_updated is True
+    assert decision.summary_state is not None
+    assert len(summarizer.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_summary_watermark_prevents_resummarizing_same_history() -> None:
+    history = _history(3)
+    current = (Message(role=MessageRole.USER, content="继续"),)
+    summarizer = FakeSummarizer()
+    settings = ContextSettings(
+        _env_file=None,
+        context_preferred_input_tokens=100_000,
+        context_max_unsummarized_conversation_blocks=2,
+    )
+    manager = ContextManager(
+        context_settings=settings,
+        conversation_reducer=ConversationReducer(
+            summarizer,
+            keep_recent_conversation_blocks=1,
+            keep_recent_tool_rounds=0,
+        ),
+    )
+    first = await manager.prepare(
+        (*history, *current),
+        history_count=len(history),
+    )
+
+    second = await manager.prepare(
+        (*history, *current),
+        history_count=len(history),
+        summary_state=first.summary_state,
+    )
+
+    assert first.summary_state is not None
+    assert second.summary_updated is False
+    assert second.unsummarized_conversation_blocks == 1
+    assert len(summarizer.calls) == 1
 
 
 @pytest.mark.asyncio

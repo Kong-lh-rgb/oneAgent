@@ -12,6 +12,7 @@ from .approval import (
 )
 from .base import BaseTool
 from .builtin import (
+    CurrentTimeTool,
     HttpRequestTool,
     ListFilesTool,
     ReadFileTool,
@@ -19,6 +20,12 @@ from .builtin import (
     WebSearchTool,
     WriteFileTool,
     build_builtin_tool_registry,
+)
+from .catalog import (
+    TOOL_SEARCH_NAME,
+    ToolCatalog,
+    ToolCatalogMatch,
+    ToolSearchTool,
 )
 from .executor import MAX_TOOL_OUTPUT_CHARS, ToolExecutor
 from .hooks import ToolExecutionContext, ToolHook, ToolHookDecision, ToolHookRunner
@@ -54,6 +61,7 @@ __all__ = [
     "AutoApproveGate",
     "BaseTool",
     "ConsoleApprovalGate",
+    "CurrentTimeTool",
     "DenyAllGate",
     "HttpRequestTool",
     "InMemoryExecutionLogger",
@@ -72,6 +80,10 @@ __all__ = [
     "SQLitePermissionRuleStore",
     "ShellCommandTool",
     "StructLogExecutionLogger",
+    "TOOL_SEARCH_NAME",
+    "ToolCatalog",
+    "ToolCatalogMatch",
+    "ToolSearchTool",
     "ToolExecutionLogger",
     "ToolExecutionRecord",
     "ToolExecutionContext",

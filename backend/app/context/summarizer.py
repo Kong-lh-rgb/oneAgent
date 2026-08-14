@@ -36,6 +36,7 @@ _SUMMARY_SYSTEM_PROMPT = """你是会话压缩器，把旧摘要和新增历史�
 - 只输出一个 JSON 对象，不要输出 Markdown、解释或任何思考过程；
 - 只能保留输入中明确存在的信息，禁止补充、推断或编造事实；
 - 只保留后续继续任务需要的信息，删除重复与冗余内容；
+- 不要推测或复制外部 Task Snapshot 的步骤状态，Task 是独立事实源；
 - 每个数组最多 5 条，每条不超过 80 个中文字符；
 - 当前目标不超过 160 个字符，全部字段内容合计不超过 1200 个字符；
 - 没有内容的字段使用 null 或空数组；
@@ -151,7 +152,8 @@ class ModelContextSummarizer(ContextSummarizer):
             system_prompt += (
                 "\n\n上一次摘要不合格："
                 f"{compact_reason}。这是唯一重试机会，必须输出更短的合法 JSON；"
-                "优先保留用户约束、关键决定、当前状态和未完成事项。"
+                "优先保留用户约束、关键决定、当前状态和未完成事项；"
+                "不要推测或复制外部 Task Snapshot 的步骤状态。"
             )
         response = await adapter.complete(
             ModelRequest(

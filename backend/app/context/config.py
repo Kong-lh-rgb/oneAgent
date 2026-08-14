@@ -32,12 +32,17 @@ class ContextSettings(BaseSettings):
     context_window_deepseek: int = Field(default=1_048_576, gt=0)
     context_window_anthropic: int = Field(default=200_000, gt=0)
 
-    # 预算策略
+    # 模型窗口硬保护与日常工作预算
     context_safety_margin_tokens: int = Field(default=4_096, ge=0)
     context_trigger_ratio: float = Field(default=0.80, gt=0.0, lt=1.0)
     context_target_ratio: float = Field(default=0.60, gt=0.0, lt=1.0)
+    context_preferred_input_tokens: int = Field(default=32_768, gt=0)
+    context_working_trigger_ratio: float = Field(default=0.90, gt=0.0, le=1.0)
+    context_working_target_ratio: float = Field(default=0.70, gt=0.0, lt=1.0)
+    context_tool_result_budget_ratio: float = Field(default=0.35, gt=0.0, lt=1.0)
     context_keep_recent_tool_rounds: int = Field(default=2, ge=0)
     context_keep_recent_conversation_blocks: int = Field(default=4, ge=0)
+    context_max_unsummarized_conversation_blocks: int = Field(default=30, gt=0)
     context_summary_max_output_tokens: int = Field(default=1_024, gt=0)
     context_max_tool_result_chars: int = Field(default=8_000, gt=0)
     context_tool_result_head_chars: int = Field(default=4_000, ge=0)
@@ -51,7 +56,7 @@ class ContextSettings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_tool_result_segments(self) -> ContextSettings:
-        """工具结果首尾保留长度不能超过压缩后的内容预算。"""
+        """校验各层压缩目标与工具结果截断参数。"""
 
         retained = (
             self.context_tool_result_head_chars + self.context_tool_result_tail_chars
@@ -60,6 +65,11 @@ class ContextSettings(BaseSettings):
             raise ValueError(
                 "context tool result head/tail chars cannot exceed "
                 "context_max_tool_result_chars"
+            )
+        if self.context_working_target_ratio >= self.context_working_trigger_ratio:
+            raise ValueError(
+                "context_working_target_ratio must be lower than "
+                "context_working_trigger_ratio"
             )
         return self
 

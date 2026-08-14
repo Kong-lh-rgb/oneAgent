@@ -280,6 +280,14 @@ async def test_force_final_answer_still_computes_budget() -> None:
         assert event.context_window == 1_000_000
         assert event.input_budget is not None
         assert event.input_budget > 0
+        assert event.working_input_budget == 32_768
+        assert event.hard_trigger_tokens is not None
+        assert event.hard_target_tokens is not None
+        assert event.tool_result_budget_tokens is not None
+        assert event.tool_schema_tokens is not None
+        assert event.message_tokens_before is not None
+        assert event.message_tokens_after is not None
+        assert event.unsummarized_conversation_blocks is not None
         assert event.capability_source == CapabilitySource.BUILTIN.value
         assert event.requires_compaction is False
 

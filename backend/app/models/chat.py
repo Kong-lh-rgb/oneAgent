@@ -390,6 +390,22 @@ def _print_trace(events: tuple[AgentEvent, ...]) -> None:
             details.append(
                 f"success={'true' if event.tool_result.success else 'false'}"
             )
+        if event.type is AgentEventType.MODEL_STARTED:
+            if event.prepared_input_tokens is not None:
+                details.append(f"input≈{event.prepared_input_tokens}")
+            if event.tool_schema_tokens is not None:
+                details.append(f"schemas≈{event.tool_schema_tokens}")
+            if (
+                event.tool_result_tokens_before is not None
+                and event.tool_result_tokens_after is not None
+            ):
+                details.append(
+                    "tool_results≈"
+                    f"{event.tool_result_tokens_before}→"
+                    f"{event.tool_result_tokens_after}"
+                )
+            if event.compaction_stage not in (None, "none"):
+                details.append(f"context={event.compaction_stage}")
         detail_text = f"  {' '.join(details)}" if details else ""
         print(f"{event.sequence:03d}  {event_time}  {event.type.value}{detail_text}")
 

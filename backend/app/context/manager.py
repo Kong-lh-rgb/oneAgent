@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 from app.models.types import Message, ModelUsage, ToolDefinition
 
-from .blocks import partition_messages
+from .blocks import ConversationBlock, ToolRoundBlock, partition_messages
 from .budget import ContextBudgetPolicy, build_budget_policy
 from .capabilities import (
     ModelCapabilityRegistry,
@@ -46,8 +46,20 @@ class ContextDecision:
     reserved_output_tokens: int | None = None
     safety_margin_tokens: int | None = None
     input_budget: int | None = None
+    working_input_budget: int | None = None
+    hard_trigger_tokens: int | None = None
+    hard_target_tokens: int | None = None
     trigger_tokens: int | None = None
     target_tokens: int | None = None
+    tool_result_budget_tokens: int | None = None
+    tool_result_tokens_before: int = 0
+    tool_result_tokens_after: int = 0
+    tool_schema_tokens: int = 0
+    message_tokens_before: int = 0
+    message_tokens_after: int = 0
+    unsummarized_conversation_blocks: int = 0
+    conversation_block_limit: int | None = None
+    conversation_block_triggered: bool = False
     original_usage_ratio: float | None = None
     prepared_usage_ratio: float | None = None
     usage_ratio: float | None = None
@@ -102,6 +114,9 @@ class ContextManager:
             tool_result_tail_chars=settings.context_tool_result_tail_chars,
         )
         self._conversation_reducer = conversation_reducer
+        self._max_unsummarized_conversation_blocks = (
+            settings.context_max_unsummarized_conversation_blocks
+        )
 
     @property
     def estimator(self) -> TokenEstimator:
@@ -135,8 +150,9 @@ class ContextManager:
         中符合条件的旧工具协议允许被压缩；当前 Run 新增的消息保持完整，
         确保工具调用与工具结果仍能按 Provider 协议继续发送。
 
-        仅当完整候选上下文达到压缩触发线时才执行 ToolReducer。普通情况下
-        原样返回全部历史消息；当前 Run 消息永远不参与工具层压缩。
+        工具结果预算每轮独立核算，超限时先整理旧工具轮；工具整理后仍达到
+        日常工作触发线，才推进滚动摘要。模型窗口比例只保留为最终硬保护。
+        原始消息始终不变，Task/Memory/运行环境等临时上下文也不会进入摘要。
         """
 
         if history_count is None:
@@ -160,7 +176,7 @@ class ContextManager:
             or summary_state.covered_message_count <= len(raw_history)
             else None
         )
-        original_messages, effective_history_count = build_summary_candidate(
+        original_messages, _ = build_summary_candidate(
             raw_history,
             current_messages,
             valid_summary_state,
@@ -182,81 +198,123 @@ class ContextManager:
             if budget.input_budget > 0
             else None
         )
-        requires_compaction = original_estimated >= budget.trigger_tokens
+        tool_schema_tokens = self._estimate_tools(
+            tools,
+            model=model,
+            provider=provider,
+        )
+        message_tokens_before = self._estimate_messages(
+            original_messages,
+            model=model,
+            provider=provider,
+        )
 
+        def estimate(candidate: tuple[Message, ...]) -> int:
+            return self._estimator.estimate_request(
+                candidate,
+                tools=tools,
+                model=model,
+                provider=provider,
+            )
+
+        def estimate_messages(candidate: tuple[Message, ...]) -> int:
+            return self._estimate_messages(
+                candidate,
+                model=model,
+                provider=provider,
+            )
+
+        tool_result_tokens_before = _estimate_tool_result_tokens(
+            original_messages,
+            estimate_messages,
+        )
         request_messages = original_messages
         prepared_input_tokens = original_estimated
         compacted_tool_results = 0
         removed_tool_rounds = 0
+        tool_result_tokens_after = tool_result_tokens_before
+        tool_requires_reduction = (
+            tool_result_tokens_before > budget.tool_result_budget_tokens
+        )
+        if tool_requires_reduction:
+            tool_reduction = self._tool_reducer.project(
+                original_messages,
+                tool_result_budget_tokens=budget.tool_result_budget_tokens,
+                estimate_request=estimate,
+                estimate_tool_results=estimate_messages,
+                keep_recent_tool_rounds=resolved_keep_recent_tool_rounds,
+            )
+            request_messages = tool_reduction.messages
+            prepared_input_tokens = tool_reduction.estimated_input_tokens
+            compacted_tool_results = tool_reduction.compacted_tool_results
+            removed_tool_rounds = tool_reduction.removed_tool_rounds
+            tool_result_tokens_after = tool_reduction.tool_result_tokens_after
+
+        covered_message_count = (
+            valid_summary_state.covered_message_count
+            if valid_summary_state is not None
+            else 0
+        )
+        unsummarized_conversation_blocks = sum(
+            isinstance(block, ConversationBlock)
+            for block in partition_messages(raw_history[covered_message_count:])
+        )
+        conversation_block_triggered = (
+            unsummarized_conversation_blocks
+            > self._max_unsummarized_conversation_blocks
+        )
+        conversation_requires_compaction = (
+            prepared_input_tokens >= budget.trigger_tokens
+            or conversation_block_triggered
+        )
+        requires_compaction = (
+            tool_requires_reduction or conversation_requires_compaction
+        )
         current_summary_state = valid_summary_state
         summary_updated = False
         summarized_conversation_blocks = 0
         summary_usage = ModelUsage()
         summary_error: str | None = None
         compaction_stage = ContextCompactionStage.NONE
-        reached_target = original_estimated <= budget.target_tokens
+        reached_target = not requires_compaction or (
+            prepared_input_tokens <= budget.target_tokens
+            and tool_result_tokens_after <= budget.tool_result_budget_tokens
+        )
+        if compacted_tool_results and removed_tool_rounds:
+            compaction_stage = ContextCompactionStage.TOOL_RESULTS_AND_ROUNDS
+        elif removed_tool_rounds:
+            compaction_stage = ContextCompactionStage.TOOL_ROUNDS
+        elif compacted_tool_results:
+            compaction_stage = ContextCompactionStage.TOOL_RESULTS
 
-        if requires_compaction:
-            history_blocks = partition_messages(
-                original_messages[:effective_history_count]
-            )
-            prepared_current_messages = original_messages[effective_history_count:]
-
-            def estimate(candidate: tuple[Message, ...]) -> int:
-                return self._estimator.estimate_request(
-                    candidate,
-                    tools=tools,
-                    model=model,
-                    provider=provider,
-                )
-
-            reduction = self._tool_reducer.reduce(
-                history_blocks,
-                current_messages=prepared_current_messages,
-                initial_estimated_input_tokens=original_estimated,
+        if conversation_requires_compaction and self._conversation_reducer is not None:
+            conversation_reduction = await self._conversation_reducer.reduce(
+                raw_history=raw_history,
+                prepared_messages=request_messages,
+                current_messages=current_messages,
+                previous_state=valid_summary_state,
+                initial_estimated_input_tokens=prepared_input_tokens,
                 target_tokens=budget.target_tokens,
                 estimate=estimate,
-                keep_recent_tool_rounds=resolved_keep_recent_tool_rounds,
             )
-            request_messages = reduction.messages
-            prepared_input_tokens = reduction.estimated_input_tokens
-            compacted_tool_results = reduction.compacted_tool_results
-            removed_tool_rounds = reduction.removed_tool_rounds
-            reached_target = reduction.reached_target
-            if compacted_tool_results and removed_tool_rounds:
-                compaction_stage = ContextCompactionStage.TOOL_RESULTS_AND_ROUNDS
-            elif removed_tool_rounds:
-                compaction_stage = ContextCompactionStage.TOOL_ROUNDS
-            elif compacted_tool_results:
-                compaction_stage = ContextCompactionStage.TOOL_RESULTS
-
-            if not reached_target and self._conversation_reducer is not None:
-                conversation_reduction = await self._conversation_reducer.reduce(
-                    raw_history=raw_history,
-                    prepared_messages=request_messages,
-                    current_messages=current_messages,
-                    previous_state=valid_summary_state,
-                    initial_estimated_input_tokens=prepared_input_tokens,
-                    target_tokens=budget.target_tokens,
-                    estimate=estimate,
-                )
-                request_messages = conversation_reduction.messages
-                prepared_input_tokens = conversation_reduction.estimated_input_tokens
-                current_summary_state = conversation_reduction.summary_state
-                summarized_conversation_blocks = (
-                    conversation_reduction.summarized_conversation_blocks
-                )
-                summary_updated = summarized_conversation_blocks > 0
-                summary_usage = conversation_reduction.summary_usage
-                summary_error = conversation_reduction.error
-                reached_target = conversation_reduction.reached_target
-                if summary_updated:
-                    if compaction_stage is ContextCompactionStage.NONE:
-                        compaction_stage = ContextCompactionStage.ROLLING_SUMMARY
-                    else:
-                        compaction_stage = (
-                            ContextCompactionStage.TOOL_AND_ROLLING_SUMMARY
-                        )
+            request_messages = conversation_reduction.messages
+            prepared_input_tokens = conversation_reduction.estimated_input_tokens
+            current_summary_state = conversation_reduction.summary_state
+            summarized_conversation_blocks = (
+                conversation_reduction.summarized_conversation_blocks
+            )
+            summary_updated = summarized_conversation_blocks > 0
+            summary_usage = conversation_reduction.summary_usage
+            summary_error = conversation_reduction.error
+            reached_target = (
+                conversation_reduction.reached_target
+                and tool_result_tokens_after <= budget.tool_result_budget_tokens
+            )
+            if summary_updated:
+                if compaction_stage is ContextCompactionStage.NONE:
+                    compaction_stage = ContextCompactionStage.ROLLING_SUMMARY
+                else:
+                    compaction_stage = ContextCompactionStage.TOOL_AND_ROLLING_SUMMARY
 
         prepared_usage_ratio = (
             prepared_input_tokens / budget.input_budget
@@ -264,13 +322,33 @@ class ContextManager:
             else None
         )
         trimmed = request_messages != raw_messages
-        needs_next_compaction_stage = requires_compaction and not reached_target
         exceeds_input_budget = prepared_input_tokens > budget.input_budget
+        message_tokens_after = self._estimate_messages(
+            request_messages,
+            model=model,
+            provider=provider,
+        )
+        tool_result_tokens_after = _estimate_tool_result_tokens(
+            request_messages,
+            estimate_messages,
+        )
+        reached_target = not requires_compaction or (
+            prepared_input_tokens <= budget.target_tokens
+            and tool_result_tokens_after <= budget.tool_result_budget_tokens
+        )
+        needs_next_compaction_stage = requires_compaction and not reached_target
         reason = (
             f"original_estimated={original_estimated};"
             f"prepared_input_tokens={prepared_input_tokens};"
             f"input_budget={budget.input_budget};"
+            f"working_input_budget={budget.working_input_budget};"
             f"trigger={budget.trigger_tokens};target={budget.target_tokens};"
+            f"tool_result_budget={budget.tool_result_budget_tokens};"
+            f"tool_result_tokens_before={tool_result_tokens_before};"
+            f"tool_result_tokens_after={tool_result_tokens_after};"
+            f"unsummarized_conversation_blocks="
+            f"{unsummarized_conversation_blocks};"
+            f"conversation_block_triggered={conversation_block_triggered};"
             f"requires_compaction={requires_compaction};"
             f"exceeds_input_budget={exceeds_input_budget};trimmed={trimmed};"
             f"compaction_stage={compaction_stage.value};"
@@ -294,8 +372,24 @@ class ContextManager:
             reserved_output_tokens=budget.reserved_output_tokens,
             safety_margin_tokens=budget.safety_margin_tokens,
             input_budget=budget.input_budget,
+            working_input_budget=budget.working_input_budget,
+            hard_trigger_tokens=budget.hard_trigger_tokens,
+            hard_target_tokens=budget.hard_target_tokens,
             trigger_tokens=budget.trigger_tokens,
             target_tokens=budget.target_tokens,
+            tool_result_budget_tokens=budget.tool_result_budget_tokens,
+            tool_result_tokens_before=tool_result_tokens_before,
+            tool_result_tokens_after=tool_result_tokens_after,
+            tool_schema_tokens=tool_schema_tokens,
+            message_tokens_before=message_tokens_before,
+            message_tokens_after=message_tokens_after,
+            unsummarized_conversation_blocks=(
+                unsummarized_conversation_blocks
+            ),
+            conversation_block_limit=(
+                self._max_unsummarized_conversation_blocks
+            ),
+            conversation_block_triggered=conversation_block_triggered,
             original_usage_ratio=original_usage_ratio,
             prepared_usage_ratio=prepared_usage_ratio,
             usage_ratio=prepared_usage_ratio,
@@ -316,5 +410,52 @@ class ContextManager:
             reason=reason,
         )
 
+    def _estimate_messages(
+        self,
+        messages: Sequence[Message],
+        *,
+        model: str | None,
+        provider: str | None,
+    ) -> int:
+        method = getattr(self._estimator, "estimate_messages", None)
+        if callable(method):
+            return method(messages, model=model, provider=provider)
+        return self._estimator.estimate_request(
+            messages,
+            tools=(),
+            model=model,
+            provider=provider,
+        )
+
+    def _estimate_tools(
+        self,
+        tools: Sequence[ToolDefinition],
+        *,
+        model: str | None,
+        provider: str | None,
+    ) -> int:
+        method = getattr(self._estimator, "estimate_tools", None)
+        if callable(method):
+            return method(tools, model=model, provider=provider)
+        return self._estimator.estimate_request(
+            (),
+            tools=tools,
+            model=model,
+            provider=provider,
+        )
+
 
 __all__ = ["ContextCompactionStage", "ContextDecision", "ContextManager"]
+
+
+def _estimate_tool_result_tokens(
+    messages: Sequence[Message],
+    estimate: Callable[[tuple[Message, ...]], int],
+) -> int:
+    results = tuple(
+        message
+        for block in partition_messages(messages)
+        if isinstance(block, ToolRoundBlock)
+        for message in block.messages[1:]
+    )
+    return estimate(results)

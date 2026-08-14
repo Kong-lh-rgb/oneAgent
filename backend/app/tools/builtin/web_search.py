@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from app.models.types import ToolDefinition, ToolPermission
@@ -33,7 +32,6 @@ class WebSearchTool(BaseTool):
 
     @property
     def definition(self) -> ToolDefinition:
-        current_date = datetime.now().astimezone().date().isoformat()
         return ToolDefinition(
             name="web_search",
             description=(
@@ -41,8 +39,8 @@ class WebSearchTool(BaseTool):
                 "relevance scores, and publication dates when available. This is "
                 "a read-only tool and does not require approval. Cite the returned "
                 "sources in the final answer. Use a few focused searches instead "
-                "of repeating broad query variations. The current date is "
-                f"{current_date}."
+                "of repeating broad query variations. For relative dates, call "
+                "get_current_time first instead of assuming the current date."
             ),
             parameters={
                 "type": "object",
