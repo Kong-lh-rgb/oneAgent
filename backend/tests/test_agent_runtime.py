@@ -544,7 +544,11 @@ async def test_runtime_sends_compressed_copy_but_returns_complete_raw_history() 
     )
     context_manager = ContextManager(
         registry=capability_registry,
-        budget_policy=ContextBudgetPolicy(safety_margin_tokens=0),
+        budget_policy=ContextBudgetPolicy(
+            safety_margin_tokens=0,
+            working_trigger_ratio=0.90,
+            working_target_ratio=0.70,
+        ),
         context_settings=ContextSettings(
             _env_file=None,
             context_keep_recent_tool_rounds=2,

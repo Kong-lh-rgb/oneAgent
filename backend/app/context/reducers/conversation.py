@@ -263,7 +263,27 @@ def _summary_cutoff(
     if keep_recent_conversation_blocks:
         protected.update(conversation_indices[-keep_recent_conversation_blocks:])
     if keep_recent_tool_rounds:
-        protected.update(tool_indices[-keep_recent_tool_rounds:])
+        # 工具轮只在近期对话区域内享受保护。否则，一旦后续长期没有新工具
+        # 调用，历史中最后几个工具轮会永久成为最早保护块，导致它们之后不断
+        # 增长的普通对话无法推进滚动摘要水位线。
+        #
+        # “近期区域”从最后一个仍可摘要的普通对话块之后开始。这样与最近
+        # 对话直接相邻的工具证据仍会完整保留，而已经隔着多轮普通对话的
+        # 陈旧工具协议可以随旧前缀一起退出模型请求。原始历史不会被修改。
+        recent_tool_indices = tool_indices
+        if (
+            keep_recent_conversation_blocks
+            and len(conversation_indices) > keep_recent_conversation_blocks
+        ):
+            last_summarizable_conversation = conversation_indices[
+                -keep_recent_conversation_blocks - 1
+            ]
+            recent_tool_indices = [
+                index
+                for index in tool_indices
+                if index > last_summarizable_conversation
+            ]
+        protected.update(recent_tool_indices[-keep_recent_tool_rounds:])
     if not protected:
         return history_length
     return min(blocks[index].start for index in protected)

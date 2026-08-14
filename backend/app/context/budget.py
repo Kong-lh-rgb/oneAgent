@@ -49,8 +49,8 @@ class ContextBudgetPolicy:
         target_ratio: float = DEFAULT_TARGET_RATIO,
         safety_margin_tokens: int = DEFAULT_SAFETY_MARGIN_TOKENS,
         preferred_input_tokens: int = 32_768,
-        working_trigger_ratio: float = 0.90,
-        working_target_ratio: float = 0.70,
+        working_trigger_ratio: float = 0.70,
+        working_target_ratio: float = 0.45,
         tool_result_budget_ratio: float = 0.35,
     ) -> None:
         if not 0.0 < trigger_ratio < 1.0:

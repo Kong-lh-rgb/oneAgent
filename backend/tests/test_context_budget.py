@@ -42,8 +42,8 @@ def test_budget_formula() -> None:
     assert budget.working_input_budget == 32_768
     assert budget.hard_trigger_tokens == int(budget.input_budget * 0.8)
     assert budget.hard_target_tokens == int(budget.input_budget * 0.6)
-    assert budget.trigger_tokens == int(32_768 * 0.9)
-    assert budget.target_tokens == int(32_768 * 0.7)
+    assert budget.trigger_tokens == int(32_768 * 0.7)
+    assert budget.target_tokens == int(32_768 * 0.45)
     assert budget.tool_result_budget_tokens == int(budget.target_tokens * 0.35)
 
 
@@ -185,7 +185,7 @@ async def test_short_request_stays_below_working_trigger() -> None:
 
 
 @pytest.mark.asyncio
-async def test_small_window_uses_hard_limit_as_effective_budget() -> None:
+async def test_small_window_uses_stricter_working_ratio_as_effective_budget() -> None:
     registry = build_model_capability_registry(
         context_settings=ContextSettings(_env_file=None),
     )
@@ -212,6 +212,6 @@ async def test_small_window_uses_hard_limit_as_effective_budget() -> None:
     assert decision.input_budget == 150
     assert decision.working_input_budget == 150
     assert decision.hard_trigger_tokens == 120
-    assert decision.trigger_tokens == 120
-    assert decision.target_tokens == int(150 * 0.6)
+    assert decision.trigger_tokens == int(150 * 0.7)
+    assert decision.target_tokens == int(150 * 0.45)
     assert decision.capability_source == CapabilitySource.OVERRIDE.value

@@ -34,8 +34,8 @@ def test_context_settings_defaults() -> None:
     assert settings.context_trigger_ratio == 0.80
     assert settings.context_target_ratio == 0.60
     assert settings.context_preferred_input_tokens == 32_768
-    assert settings.context_working_trigger_ratio == 0.90
-    assert settings.context_working_target_ratio == 0.70
+    assert settings.context_working_trigger_ratio == 0.70
+    assert settings.context_working_target_ratio == 0.45
     assert settings.context_tool_result_budget_ratio == 0.35
     assert settings.context_safety_margin_tokens == 4_096
     assert settings.context_keep_recent_tool_rounds == 2
@@ -159,8 +159,8 @@ async def test_context_manager_decision_fields() -> None:
     assert decision.working_input_budget == 32_768
     assert decision.hard_trigger_tokens == int(decision.input_budget * 0.8)
     assert decision.hard_target_tokens == int(decision.input_budget * 0.6)
-    assert decision.trigger_tokens == int(32_768 * 0.9)
-    assert decision.target_tokens == int(32_768 * 0.7)
+    assert decision.trigger_tokens == int(32_768 * 0.7)
+    assert decision.target_tokens == int(32_768 * 0.45)
     assert decision.tool_result_budget_tokens == int(decision.target_tokens * 0.35)
     assert decision.usage_ratio is not None
     assert decision.requires_compaction is False
