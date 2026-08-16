@@ -5,6 +5,23 @@
 > 对架构调整和缺陷修复，应同时记录 Bad Case、影响、根因和修复结果，避免只记录最终功能。
 
 ---
+## 2026-08-16
+
+### 完成：工具按需暴露（节省固定 schema 开销）
+
+#### Bad Case / 排查
+- [x] `/runs` 单 run 长期 2 万+ tokens；实测每次模型请求固定开销约 3562 tokens，其中工具 schema 3057 占 86%
+- [x] 15 个工具全量暴露（含 http_request、memory_list、core_memory_update/remove 等低频工具），每次请求都重复计费
+- [x] 排查压缩触发：触发并非 schema 推高（schema 只占 original 8~14%），而是真实历史累积到 trigger（22937）触发的正常压缩
+
+#### 修复结果
+- [x] 新增 `_mark_deferred_tools(registry, names)`：把不常用工具标记为 `deferred`，默认不进入模型 schema
+- [x] CLI 默认暴露 11 个核心工具（文件/Shell/搜索/时间/task 全套/memory_read）；`http_request`、`memory_list`、`core_memory_update`、`core_memory_remove` 改为按需（`tool_search` 搜索后激活）
+- [x] 默认 schema 从 3057 → 2226，每次请求省约 831 tokens（约 27%）
+- [x] 新增测试 `test_mark_deferred_tools_hides_tools_until_activated`（默认隐藏 + tool_search 发现 + 激活后暴露）
+- [x] 全量验证：`pytest` 403 通过、`ruff`、`compileall`、`git diff --check` 通过
+
+---
 ## 2026-08-14
 
 ### 修复：陈旧工具轮阻塞滚动摘要并收紧日常上下文预算

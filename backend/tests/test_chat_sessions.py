@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -19,6 +20,7 @@ from app.models.chat import (
     _COMMAND_OVERVIEW,
     _HELP_TEXT,
     _load_or_create_conversation,
+    _mark_deferred_tools,
     _parse_args,
     _print_memories,
     _print_memory,
@@ -389,3 +391,57 @@ def test_cli_help_exposes_memory_commands() -> None:
     assert "/memory <id>" in _COMMAND_OVERVIEW
     assert "/memories 查看活跃长期记忆及 Recall Cue" in _HELP_TEXT
     assert "/memory <记忆ID> 查看一条长期记忆的完整内容" in _HELP_TEXT
+
+
+@pytest.mark.asyncio
+async def test_mark_deferred_tools_hides_tools_until_activated(
+    tmp_path: Path,
+) -> None:
+    from app.memory import MemoryManager, register_memory_tools
+    from app.task import FileTaskStore, register_task_tools
+    from app.tools import build_builtin_tool_registry
+    from app.tools.catalog import ToolCatalog
+
+    registry = build_builtin_tool_registry()
+    task_store = FileTaskStore(tmp_path / "tasks")
+    await task_store.initialize()
+    register_task_tools(registry, task_store)
+    manager = MemoryManager(tmp_path / "memory")
+    await manager.initialize()
+    register_memory_tools(registry, manager)
+    _mark_deferred_tools(
+        registry,
+        frozenset(
+            {
+                "http_request",
+                "memory_list",
+                "core_memory_update",
+                "core_memory_remove",
+            }
+        ),
+    )
+
+    # 默认只暴露核心工具，不常用工具不进入 schema。
+    default_names = {
+        definition.name for definition in registry.model_definitions()
+    }
+    assert "http_request" not in default_names
+    assert "memory_list" not in default_names
+    assert "core_memory_update" not in default_names
+    assert "memory_read" in default_names
+    assert "task_update" in default_names
+
+    # deferred 工具可通过 tool_search 发现并激活。
+    assert "http_request" in registry.deferred_names()
+    catalog = ToolCatalog(registry)
+    matches = catalog.search("http_request")
+    assert any(match.name == "http_request" for match in matches)
+
+    activated = {match.name for match in matches}
+    activated_names = {
+        definition.name
+        for definition in registry.model_definitions(
+            activated_names=activated
+        )
+    }
+    assert "http_request" in activated_names

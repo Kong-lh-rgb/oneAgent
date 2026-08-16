@@ -59,6 +59,7 @@ from app.tools import (
     PermissionPolicyEngine,
     PermissionRule,
     SQLitePermissionRuleStore,
+    ToolRegistry,
     build_builtin_tool_registry,
     describe_safe_rule,
 )
@@ -410,6 +411,21 @@ def _print_trace(events: tuple[AgentEvent, ...]) -> None:
         print(f"{event.sequence:03d}  {event_time}  {event.type.value}{detail_text}")
 
 
+def _mark_deferred_tools(
+    registry: ToolRegistry,
+    names: frozenset[str],
+) -> None:
+    """把不常用工具标记为按需暴露。
+
+    默认只向模型暴露核心工具；被标记的工具不进入请求的 schema，
+    模型需要时通过 ``tool_search`` 搜索并激活后使用。
+    """
+
+    for name in names:
+        tool = registry.unregister(name)
+        registry.register(tool, deferred=True)
+
+
 def _print_permission_rules(rules: tuple[PermissionRule, ...]) -> None:
     """显示当前会话记住的工具审批规则。"""
 
@@ -534,6 +550,17 @@ async def _run(args: argparse.Namespace) -> int:
     memory_manager = MemoryManager()
     await memory_manager.initialize()
     register_memory_tools(tool_registry, memory_manager)
+    _mark_deferred_tools(
+        tool_registry,
+        frozenset(
+            {
+                "http_request",
+                "memory_list",
+                "core_memory_update",
+                "core_memory_remove",
+            }
+        ),
+    )
     reflection_config = MemoryReflectionConfig()
     memory_reflector = PostRunMemoryReflector(
         registry,
