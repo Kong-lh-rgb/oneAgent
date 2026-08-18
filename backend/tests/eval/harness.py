@@ -25,6 +25,12 @@ from app.context import (
 from app.models.config import ModelSettings
 from app.models.registry import ModelAdapterRegistry
 from app.models.types import Message, MessageRole
+from app.skills import (
+    SkillContextProvider,
+    SkillSettings,
+    SkillStore,
+    register_skill_tools,
+)
 from app.task import (
     FileTaskStore,
     TaskContextProvider,
@@ -78,6 +84,8 @@ class EvalEnvironment:
     workspace: Path
     tasks_dir: Path
     task_store: FileTaskStore
+    skills_dir: Path
+    skill_store: SkillStore
     conversation_id: str = DEFAULT_CONVERSATION_ID
     initial_task_ids: tuple[str, ...] = ()
     task_aliases: dict[str, str] = field(default_factory=dict)
@@ -106,15 +114,39 @@ async def prepare_environment(
     root.mkdir(parents=True, exist_ok=True)
     workspace = root / "workspace"
     tasks_dir = root / "tasks"
+    skills_dir = root / "skills"
     workspace.mkdir(parents=True, exist_ok=True)
+    skills_dir.mkdir(parents=True, exist_ok=True)
 
     for file_spec in scenario.initial_files:
         path = _resolve_within(workspace, file_spec.path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(file_spec.content, encoding="utf-8")
 
+    for skill_spec in scenario.initial_skills:
+        skill_root = skills_dir / skill_spec.name
+        skill_root.mkdir(parents=True, exist_ok=True)
+        front_matter = (
+            f"---\nname: {skill_spec.name}\n"
+            f"description: {skill_spec.description}\n---\n\n"
+        )
+        (skill_root / "SKILL.md").write_text(
+            front_matter + skill_spec.body,
+            encoding="utf-8",
+        )
+        for reference in skill_spec.reference_files:
+            ref_path = _resolve_within(skill_root, reference.path)
+            ref_path.parent.mkdir(parents=True, exist_ok=True)
+            ref_path.write_text(reference.content, encoding="utf-8")
+
     task_store = FileTaskStore(tasks_dir)
     await task_store.initialize()
+    skill_store = SkillStore(
+        user_dir=skills_dir,
+        project_dir=skills_dir,
+        settings=SkillSettings(),
+    )
+    await skill_store.initialize()
     initial_task_ids: list[str] = []
     task_aliases: dict[str, str] = {}
     for task_spec in scenario.initial_tasks:
@@ -142,6 +174,8 @@ async def prepare_environment(
         workspace=workspace,
         tasks_dir=tasks_dir,
         task_store=task_store,
+        skills_dir=skills_dir,
+        skill_store=skill_store,
         conversation_id=conversation_id,
         initial_task_ids=tuple(initial_task_ids),
         task_aliases=task_aliases,
@@ -160,6 +194,7 @@ def build_runtime(
 
     tool_registry = build_builtin_tool_registry(environment.workspace)
     register_task_tools(tool_registry, environment.task_store)
+    register_skill_tools(tool_registry, environment.skill_store)
     _validate_tool_names(tool_registry, scenario)
     _apply_allowed_tools(tool_registry, scenario.allowed_tools)
 
@@ -174,6 +209,7 @@ def build_runtime(
         provider=provider,
         model=model,
     )
+    skill_settings = SkillSettings()
 
     return AgentRuntime(
         resolved_registry,
@@ -186,6 +222,11 @@ def build_runtime(
         approval_gate=approval_gate,
         context_manager=context_manager,
         task_context_provider=TaskContextProvider(environment.task_store),
+        skill_store=environment.skill_store,
+        skill_context_provider=SkillContextProvider(
+            max_tokens=skill_settings.skill_context_max_tokens,
+            max_active=skill_settings.skill_max_active,
+        ),
     )
 
 

@@ -43,7 +43,7 @@ Live Eval 存在失败时默认返回退出码 1，可用于 CI 门禁。探索�
 生成的时间戳报告属于本地测评产物，默认不提交 Git。需要建立基线时，应把确认过
 的报告复制为有语义的固定文件名再提交。
 
-## 场景库（30 条 · 5 组 × 6 条）
+## 场景库（45 条 · 6 组：5 组 × 6 条 + skill 组 15 条）
 
 | 分组 | 场景 ID | 覆盖点 |
 | --- | --- | --- |
@@ -52,6 +52,11 @@ Live Eval 存在失败时默认返回退出码 1，可用于 CI 门禁。探索�
 | task | eval-03, 04, 17–20 | 工具失败不宣称完成、复杂请求创建 Task、done 留依据、blocked 需原因+暂停、跨会话不可见、全步骤完成收尾 |
 | context | eval-05, 21–25 | 压缩后目标/约束/关键事实保留、长对话继续、工具结果可用、极小窗口优雅处理 |
 | safety | eval-06, 26–30 | 审批拒绝、路径穿越、未知工具、HTTP 拒绝、工具轮次收尾、shell 审批 |
+| skill | skill-01–06 | 触发 debug-python / code-review / structured-research、读取 skill 资源、多 skill 顺序激活、激活失败 |
+| skill | skill-07–10 | 写文件/普通问答/读文件/简单计算不触发 skill |
+| skill | skill-11–12 | 相似场景只激活正确的一个（修 bug → debug-python，评审 → code-review） |
+| skill | skill-13–14 | 遵循 code-review 的 P0/P1/P2 输出格式、遵循 structured-research 模板结构 |
+| skill | skill-15 | 上下文压缩后 Active Skill 指令仍保留（survives_compaction） |
 
 场景文件：`tests/eval/scenarios/`（NN_名称.yaml）。
 
@@ -67,6 +72,12 @@ Live Eval 存在失败时默认返回退出码 1，可用于 CI 门禁。探索�
 - `tools.count`、`total_count` 和 `ordered` 分别检查次数、总数和有序子序列；
 - `tools.args` 在同名工具的所有调用中寻找至少一次关键参数匹配；
 - `requires_compaction: true` 要求既达到触发线，又实际改变请求上下文；
+- `skill.activated` / `skill.not_activated` 检查 SKILL_ACTIVATED 事件中的激活集合，
+  `skill.activation_failed` 检查 SKILL_ACTIVATION_FAILED 事件（如 budget 拒绝 / not found）；
+- `skill.survives_compaction: true` 要求存在一次实际压缩，且压缩后的 MODEL_STARTED
+  仍带有非空 `active_skill_names`（Active Skill 指令不被压缩遗忘）；
+- `initial_skills` 预置目录式 Skill（`<name>/SKILL.md` + 可选 `reference_files`），
+  由 Harness 写入临时 skills 目录并装配 `SkillStore` / `SkillContextProvider`；
 - `stop_reason_any` 默认只允许 `final_answer`，负面场景必须显式声明其他停止原因。
 
 没有声明某一维度期望时，该检查记为 `skipped`，不会进入对应准确率的分母。

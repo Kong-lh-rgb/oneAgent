@@ -1,29 +1,79 @@
-"""Skill：可复用的操作流程（Procedural Knowledge）。
+"""Skill Runtime：Agent Skills compatible progressive disclosure。
 
-Skill 回答"以后遇到这种任务应该怎么做"。每个 Skill 是一个带 Front Matter
-的 Markdown 文件（``skills/<name>.md``），由开发者或用户维护；模型通过
-``skill_list`` / ``skill_read`` 按需发现并加载，不自动注入 Prompt。
+数据流：Discovery（metadata only）→ Context Catalog → 模型决定 → skill_read
+激活（Run-scoped）→ Active Skill Context Provider（每个 Step 注入指令）→
+执行时可安全读取 resources。
 
-与 Task / Memory 的边界：
+Skill 回答"以后遇到这种任务应该怎么做"。与 Task / Memory 边界：
 - Task 回答"当前正在做什么"；
 - Memory 回答"关于用户和过去未来还应知道什么"；
 - Skill 回答"以后遇到这种任务应该怎么做"。
 """
 
-from .models import Skill, parse_skill_markdown
-from .store import DEFAULT_SKILLS_DIR, SkillStore
+from .config import SkillSettings
+from .context import (
+    ACTIVE_SKILL_MESSAGE_NAME,
+    SKILL_CATALOG_MESSAGE_NAME,
+    SkillContextProvider,
+)
+from .discovery import (
+    DEFAULT_PROJECT_SKILLS_DIR,
+    DEFAULT_USER_SKILLS_DIR,
+    SkillDiagnostic,
+    SkillDiscovery,
+    safe_skill_dir,
+    safe_skill_file,
+    safe_skill_resource,
+)
+from .models import (
+    SKILL_DESCRIPTION_MAX_LENGTH,
+    SKILL_FILE_NAME,
+    SKILL_NAME_MAX_LENGTH,
+    Skill,
+    SkillMetadata,
+    SkillResources,
+    SkillScope,
+    valid_skill_name,
+    validate_skill_name,
+)
+from .parser import ParsedSkill, SkillParseError, parse_skill_document
+from .store import SkillStore
 from .tools import (
-    SkillListTool,
+    SKILL_READ_TOOL_NAME,
+    SKILL_RESOURCE_READ_TOOL_NAME,
     SkillReadTool,
+    SkillResourceReadTool,
     register_skill_tools,
 )
 
 __all__ = [
-    "DEFAULT_SKILLS_DIR",
+    "ACTIVE_SKILL_MESSAGE_NAME",
+    "DEFAULT_PROJECT_SKILLS_DIR",
+    "DEFAULT_USER_SKILLS_DIR",
+    "ParsedSkill",
+    "SKILL_CATALOG_MESSAGE_NAME",
+    "SKILL_DESCRIPTION_MAX_LENGTH",
+    "SKILL_FILE_NAME",
+    "SKILL_NAME_MAX_LENGTH",
+    "SKILL_READ_TOOL_NAME",
+    "SKILL_RESOURCE_READ_TOOL_NAME",
     "Skill",
-    "SkillListTool",
+    "SkillDiagnostic",
+    "SkillDiscovery",
+    "SkillMetadata",
+    "SkillParseError",
     "SkillReadTool",
+    "SkillResourceReadTool",
+    "SkillResources",
+    "SkillScope",
+    "SkillSettings",
     "SkillStore",
-    "parse_skill_markdown",
+    "SkillContextProvider",
+    "parse_skill_document",
     "register_skill_tools",
+    "safe_skill_dir",
+    "safe_skill_file",
+    "safe_skill_resource",
+    "valid_skill_name",
+    "validate_skill_name",
 ]

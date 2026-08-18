@@ -1,0 +1,28 @@
+id: skill-05
+group: skill
+name: 触发 structured-research 研究开放问题
+initial_skills:
+  - name: structured-research
+    description: 对开放性问题做结构化研究，拆解、搜集、交叉验证、标注置信度
+    body: |
+      # Structured Research
+      1. 拆解问题
+      2. 搜集信息，优先一手来源
+      3. 交叉验证，关键结论至少两个独立来源
+      4. 标注置信度（高/中/低）
+      5. 产出结论摘要与来源列表
+  - name: debug-python
+    description: 排查 Python 报错或异常的标准流程
+    body: |
+      # Debug Python
+      复现、读 traceback、查代码。
+user_input: >-
+  请研究一下：在本地 AI agent 中使用向量数据库做长期记忆，
+  相比纯文本检索有哪些优缺点？请给出带置信度的结论。
+max_steps: 8
+expect:
+  skill:
+    activated: [structured-research]
+    not_activated: [debug-python]
+  answer:
+    keypoints: ["置信度", "结论"]

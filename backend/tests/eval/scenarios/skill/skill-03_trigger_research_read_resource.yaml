@@ -1,0 +1,44 @@
+id: skill-03
+group: skill
+name: 触发 structured-research 并读取资源
+initial_skills:
+  - name: structured-research
+    description: 对开放性问题做结构化研究，产出带置信度的结论
+    body: |
+      # Structured Research
+      1. 拆解问题
+      2. 搜集信息
+      3. 交叉验证
+      4. 标注置信度
+      5. 产出结论
+      规范与模板见 references/ 目录，需要时用 skill_resource_read 读取。
+    reference_files:
+      - path: references/template.md
+        content: |
+          # Research Template
+          ## 1. 问题
+          ## 2. 结论摘要
+          ## 3. 推理过程
+          ## 4. 来源
+          ## 5. 未解决项
+  - name: debug-python
+    description: 排查 Python 报错或异常的标准流程
+    body: |
+      # Debug Python
+      复现、读 traceback、查代码。
+user_input: >-
+  帮我研究一下 SQLite WAL 模式相比传统回滚日志的优势，
+  请按研究模板产出结构化的结论。
+max_steps: 8
+expect:
+  skill:
+    activated: [structured-research]
+    not_activated: [debug-python]
+  tools:
+    must: [skill_read, skill_resource_read]
+    successful: [skill_resource_read]
+    args:
+      skill_resource_read:
+        path: references/template.md
+  answer:
+    keypoints: ["WAL"]

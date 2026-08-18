@@ -1139,22 +1139,145 @@ Harness 不会自动宣布语义步骤完成。注入视图折叠旧 done 步骤
 触发，并压到 45%（约 14.7K）目标；百万 Token 模型窗口只承担最终硬保护。这样降低每轮
 重复输入成本，同时仍为近期对话、Task、Memory、工具 Schema 和当前 Run 留出空间。
 
-## 31. Skill：可复用的操作流程（Procedural Knowledge）
+## 31. Skill Runtime V2：Agent Skills compatible + Progressive Disclosure
 
 Skill 回答“以后遇到这种任务应该怎么做”：调试某类模型的流程、某种部署方法、某类编码
 工作流、反复验证有效的操作经验。它与 Task、Memory 严格区分：Task 保存当前任务状态，
 Memory 保存跨会话事实，Skill 保存可复用流程。
 
-实现是标准的最小闭环：
+V1 是“Front Matter Markdown + `skill_list`/`skill_read`”的扁平实现。V2 升级为目录式
+`<name>/SKILL.md`、双层发现、metadata 与正文分离、Catalog 自动注入、Run-scoped 激活、
+Active 指令每 Step 注入与上下文预算约束、路径安全加载。设计目标是“模型需要多少上下文
+就注入多少，且注入后不会被压缩遗忘”。
 
-- 每个 Skill 是一个带 Front Matter 的 Markdown 文件（`skills/<name>.md`），Front Matter
-  保存 `name`（小写字母数字下划线）与 `description`，正文是可复用操作流程；
-- Skill 为预置只读：由开发者或用户维护，系统不提供模型写入，也不做自动 Skill 生成；
-- 模型通过 `skill_list`（发现：name + description）与 `skill_read`（加载完整流程）按需
-  访问；两个工具默认暴露，schema 很小（合计约 235 tokens）；
-- 不把 Skill 内容注入 Prompt：模型在当前任务匹配某个 Skill 的 description 时，先
-  `skill_list` 查找，再 `skill_read` 加载并遵循执行。
+### 31.1 与 V1 的差异（Bad Case 驱动）
 
-设计理由：Skill 是低频、可复用、内容较长（几十到上百行）的程序性知识，常驻 Prompt 会
-浪费 token，也稀释对当前任务更重要的系统提示与工具说明。按需加载让模型自主决定何时
-需要流程，符合本项目“模型自主决策 + Harness 提供持久化与治理”的总体取向。
+- V1 模型必须先 `skill_list` 才知道有哪些 Skill，多一步发现成本且容易漏看；V2 用 Catalog
+  自动注入替代 `skill_list`。
+- V1 激活后的正文只是普通 ToolResult，会被 ToolReducer / 滚动摘要压缩遗忘；V2 的 Active
+  指令是独立于 ToolResult 的每 Step 注入块，跨压缩保留。
+- V1 是扁平 `<name>.md`，没有 resources；V2 目录式支持 references/scripts/assets。
+- V1 文件名即 Skill 名，无严格校验；V2 name 必须过 `^[a-z0-9]+(?:-[a-z0-9]+)*$`（≤64，
+  拒绝大写/下划线/首尾连字符/连续 `--`）再参与路径计算。
+- V1 无分层；V2 分 user（`~/.oneagent/skills`）与 project（`backend/.oneagent/skills`），
+  project 同名覆盖 user。
+
+### 31.2 目录与数据模型
+
+```text
+skills/<name>/
+├── SKILL.md         必选（Front Matter + 指令正文）
+├── scripts/         可选
+├── references/      可选
+└── assets/          可选
+```
+
+数据模型（`app/skills/models.py`）：
+
+- `SkillMetadata`：name、description、scope（user/project）、location、license、
+  compatibility、metadata、allowed-tools —— **发现阶段只建立它**，不读正文；
+- `SkillResources`：scripts/references/assets 的相对路径元组 —— 仅清单，不加载内容；
+- `Skill`：metadata + content（正文）+ root + resources —— **激活阶段才加载**；
+- 常量：`SKILL_FILE_NAME="SKILL.md"`、`SKILL_NAME_MAX_LENGTH=64`、
+  `SKILL_DESCRIPTION_MAX_LENGTH=1024`。
+
+Front Matter 只允许固定字段：name、description、license、compatibility、metadata、
+allowed-tools/allowed_tools；description 缺失/空/超长、body 为空、name 与目录名不一致、
+YAML 非法都会抛 `SkillParseError`。
+
+### 31.3 双层发现与加载分离（Discovery / Store）
+
+`SkillDiscovery`：
+
+- `discover()` 先扫 project 再扫 user，`dict` 合并（project 覆盖 user），按 name 稳定排序；
+- 每个子目录先 `validate_skill_name`，再 `safe_skill_dir`，再读 `SKILL.md` 解析成 metadata；
+- 坏 Skill（非法名、坏 front matter、超 512KB、符号链接、越界）跳过并记录
+  `SkillDiagnostic`（scope/name/location/reason），**不影响其余 Skill 与 Agent 启动**。
+
+`SkillStore`：
+
+- `catalog()` → 轻量 metadata 元组（每 Run 首次发现后缓存）；
+- `load(name)` → 激活时才读正文 + `_discover_resources`（rglob 列资源相对路径）。
+
+分离的价值：Catalog 注入只付 metadata 的 token 成本；正文只有在模型明确要求时才读取。
+
+### 31.4 上下文注入策略（Progressive Disclosure）
+
+`SkillContextProvider`（`app/skills/context.py`）：
+
+- **Catalog（每 Step 注入）**：`oneagent_skill_catalog` system 消息，只含
+  `[name] description`，每 Step 重建（发现只做一次，消息每 Step 生成），不进持久历史。
+  模型因此始终能发现可用 Skill 并按需 `skill_read` 激活。
+- **Active 指令（每 Step 注入）**：`oneagent_active_skill` system 消息，渲染
+  `Skill.render_instructions()`（指令正文 + Resources 清单，提示用 `skill_resource_read`
+  按需读取）。去重、按激活顺序。独立于普通 ToolResult，因此不会被 ToolReducer /
+  ConversationReducer / Compaction 遗忘。
+- **预算**：`skill_context_max_tokens=4096`、`skill_max_active=4`；
+  `would_exceed_budget(current, candidate)` 按激活顺序确定性判断——超过数量上限或激活后
+  总指令 token 超预算则拒绝该候选。
+
+### 31.5 Run-scoped 激活
+
+激活只发生在 `AgentRuntime._run_once` 内部：
+
+```text
+模型调用 skill_read（工具已暴露）
+  → ToolResult 成功
+  → _skill_read_activated_name() 解析 output（JSON str → dict，检查 found/name）
+  → store.load(name)（不存在 → SKILL_ACTIVATION_FAILED）
+  → would_exceed_budget（超预算 → SKILL_ACTIVATION_FAILED）
+  → active_skills[name] = skill（Run 内局部 dict，不跨 Run 污染）
+  → emit SKILL_ACTIVATED（携带 scope、active_skill_names、active_skill_tokens）
+```
+
+`active_skills` 是 `_run_once` 的局部变量，因此 Skill 激活天然是 Run-scoped：一次 Run 的
+选择不会影响后续 Run，也不会产生并发会话状态串扰。
+
+### 31.6 安全边界
+
+- name 必须先通过严格校验再参与路径计算；
+- `safe_skill_dir` / `safe_skill_file` / `safe_skill_resource`：**先检查原始路径
+  `is_symlink()`，再 `resolve()`** 并用 `relative_to` 确认仍在 Skill 根内（先 resolve 再查
+  symlink 会让指向根内目录的链接逃过检查）；拒绝 `..`、绝对路径、符号链接、目录；
+- `skill_resource_read` 单文件 ≤64KB；
+- 模型只能读、不能写 Skill（不提供写工具）；resource 不自动加载。
+
+### 31.7 Runtime 数据流与装配
+
+- `AgentRuntime.__init__` 新增 `skill_store` / `skill_context_provider`（provider 非空但
+  store 为空时抛 `ValueError`）；
+- `_run_once` 顶部初始化 `active_skills={}`、`skill_catalog_loaded=False`、
+  `catalog_metadata=()`；ephemeral 构造段先注入 catalog（首次发现缓存）再注入 active；
+- tool 循环里对 `skill_read` 成功结果做激活检测（见 31.5）；
+- MODEL_STARTED 事件增加 `available_skill_count` / `skill_catalog_tokens` /
+  `active_skill_names` / `active_skill_tokens` 观测字段；
+- 事件 `SKILL_ACTIVATED` / `SKILL_ACTIVATION_FAILED` 由 Trace 事件驱动自动持久化，无需
+  额外改动；
+- CLI（`app/models/chat.py`）装配 `SkillStore` + `SkillContextProvider(SkillSettings())`，
+  `register_skill_tools` 后传入 `AgentRuntime`。
+
+### 31.8 工具面
+
+- `skill_read`（常驻）：按名加载 skill，返回 found/name/description/scope/content/resources；
+- `skill_resource_read`（常驻）：按 name + path 安全读取资源；
+- 不再有 `skill_list` —— Catalog 注入替代了发现职责。
+
+### 31.9 Token 影响
+
+- 示例 3 个 Skill：Catalog 每 Step 约 214 tokens；激活后每个 Active 指令约 60～190 tokens
+  每 Step；skill 工具 schema 约 289 tokens；
+- 未激活前只付 Catalog 的小额常驻成本；激活只在模型明确需要时发生。
+
+### 31.10 边界（尚未支持）
+
+- `allowed-tools` 已解析进 metadata，但尚未用于激活后的工具权限收窄；
+- `metadata:` 自由扩展字段暂无 schema 约束；
+- 无 Skill 编写/管理命令，用户级目录不自动创建；
+- 无向量 / LLM 路由 / 自动生成 / Marketplace（规格边界内）。
+
+### 31.11 关键取舍
+
+- metadata 常驻（每 Step catalog 注入）但完整 instructions 按需（激活后才注入）；
+- Active Skill 是 Run-scoped 的每 Step 注入块，不是普通 ToolResult，保证跨压缩不遗忘；
+- resource 需要时用 `skill_resource_read` 读取，不自动加载；
+- 模型不允许写 Skill，Skill 是“预置只读能力包”，由开发者/用户在两层目录维护。

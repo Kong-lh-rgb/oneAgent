@@ -1,0 +1,34 @@
+id: skill-14
+group: skill
+name: 遵循 structured-research 模板结构
+initial_skills:
+  - name: structured-research
+    description: 对开放性问题做结构化研究
+    body: |
+      # Structured Research
+      1. 拆解问题
+      2. 搜集信息并交叉验证
+      3. 标注置信度（高/中/低）
+      4. 按 references/template.md 的模板结构产出：
+         问题、结论摘要、推理过程、来源、未解决项
+    reference_files:
+      - path: references/template.md
+        content: |
+          # Research Template
+          ## 问题
+          ## 结论摘要
+          ## 推理过程
+          ## 来源
+          ## 未解决项
+user_input: >-
+  请使用 structured-research 技能研究「Python asyncio 相比多线程的优势」，
+  并按研究模板的结构输出完整结论。
+max_steps: 8
+expect:
+  skill:
+    activated: [structured-research]
+  tools:
+    must: [skill_resource_read]
+    successful: [skill_resource_read]
+  answer:
+    keypoints: ["结论摘要", "来源", "置信度"]

@@ -1,0 +1,23 @@
+id: skill-13
+group: skill
+name: 遵循 code-review 输出格式
+initial_skills:
+  - name: code-review
+    description: 对代码变更做结构化代码评审
+    body: |
+      # Code Review
+      评审一段代码时按以下步骤：
+      1. 先说明代码意图
+      2. 按正确性、可维护性、测试、安全逐项检查
+      3. 每条意见用 P0（严重）/P1（建议修复）/P2（可选优化）标注
+      4. 每条意见给出具体修改建议
+user_input: >-
+  请用 code-review 的标准格式评审以下函数：
+  `def process(items): return [x for x in items if x]`。
+  要求按 P0/P1/P2 分级输出意见。
+max_steps: 6
+expect:
+  skill:
+    activated: [code-review]
+  answer:
+    keypoints: ["P0", "P1", "P2"]

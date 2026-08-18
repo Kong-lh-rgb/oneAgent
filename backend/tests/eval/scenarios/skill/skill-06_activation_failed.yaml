@@ -1,0 +1,18 @@
+id: skill-06
+group: skill
+name: 激活不存在的 skill 触发失败
+initial_skills:
+  - name: debug-python
+    description: 排查 Python 报错或异常的标准流程
+    body: |
+      # Debug Python
+      复现、读 traceback、查代码、修复并验证。
+user_input: >-
+  请使用 write-notes 这个技能，帮我把今天的结论整理成笔记。
+  （注意：write-notes 并不在可用技能列表中，应触发激活失败。）
+max_steps: 6
+expect:
+  skill:
+    activated: []
+    not_activated: [debug-python]
+    activation_failed: [write-notes]

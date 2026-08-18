@@ -33,6 +33,8 @@ class AgentEventType(StrEnum):
     MEMORY_MAINTENANCE_COMPLETED = "memory_maintenance_completed"
     MEMORY_MAINTENANCE_FAILED = "memory_maintenance_failed"
     MEMORY_MAINTENANCE_SKIPPED = "memory_maintenance_skipped"
+    SKILL_ACTIVATED = "skill_activated"
+    SKILL_ACTIVATION_FAILED = "skill_activation_failed"
     AGENT_COMPLETED = "agent_completed"
     AGENT_FAILED = "agent_failed"
 
@@ -118,6 +120,13 @@ class AgentEvent(BaseModel):
     maintenance_max_active: int | None = Field(default=None, gt=0)
     maintenance_candidate_ids: tuple[str, ...] = ()
     maintenance_remaining_overflow: int | None = Field(default=None, ge=0)
+    skill_name: str | None = None
+    skill_scope: str | None = None
+    skill_error: str | None = None
+    available_skill_count: int | None = Field(default=None, ge=0)
+    skill_catalog_tokens: int | None = Field(default=None, ge=0)
+    active_skill_names: tuple[str, ...] = ()
+    active_skill_tokens: int | None = Field(default=None, ge=0)
 
     @field_validator("run_id")
     @classmethod

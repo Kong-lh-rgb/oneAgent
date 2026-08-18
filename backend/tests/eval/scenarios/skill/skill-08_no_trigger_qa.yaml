@@ -1,0 +1,29 @@
+id: skill-08
+group: skill
+name: 普通问答不触发 skill
+initial_skills:
+  - name: debug-python
+    description: 排查 Python 报错或异常的标准流程
+    body: |
+      # Debug Python
+      复现、读 traceback、查代码。
+  - name: code-review
+    description: 对代码变更做结构化代码评审
+    body: |
+      # Code Review
+      按正确性、可维护性、测试、安全维度评审。
+  - name: structured-research
+    description: 对开放性问题做结构化研究
+    body: |
+      # Structured Research
+      拆解问题、搜集信息、交叉验证。
+user_input: "Python 的 `with` 语句有什么作用？请简单解释一下。"
+max_steps: 4
+expect:
+  skill:
+    activated: []
+    not_activated: [debug-python, code-review, structured-research]
+  task:
+    created: false
+  answer:
+    keypoints: ["资源"]

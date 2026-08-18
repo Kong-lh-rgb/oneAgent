@@ -7,17 +7,62 @@
 ---
 ## 2026-08-18
 
-### 完成：Skill 系统（标准实现）
+### 完成：Skill Runtime V2（Agent Skills compatible + Progressive Disclosure）
 
-#### 设计与实现
-- [x] `app/skills/`：models.py（Skill + Front Matter 解析）、store.py（Markdown 文件加载/列出）、tools.py（skill_list / skill_read）、__init__.py
-- [x] 每个 Skill 是一个带 Front Matter 的 Markdown 文件（`skills/<name>.md`），Front Matter 保存 name + description，正文是可复用操作流程
-- [x] Skill 为预置只读（开发者/用户维护），不提供模型写入、不自动生成（边界内）
-- [x] 模型通过 `skill_list` 发现、`skill_read` 加载完整流程；不注入 Prompt（按需发现，省 token）
-- [x] 工具默认暴露，两个工具合计 schema 约 235 tokens（默认共 13 个工具 / 2461 tokens）
-- [x] 示例 Skill：`.oneagent/skills/debug_python.md`（Python 报错排查流程）
-- [x] 新增 `tests/test_skills.py`（8 例：解析、校验、list 排序、load 缺失、文件名不一致、工具 list/read）
-- [x] 全量验证：`pytest` 411 通过、`ruff`、`compileall`、`git diff --check` 通过
+> 规格 19 部分全部落地。V1 是"Front Matter Markdown + skill_list/skill_read"的扁平实现，
+> V2 升级为目录式 `<name>/SKILL.md`、双层发现、metadata 与正文分离、Catalog 自动注入、
+> Run-scoped 激活、Active 指令每 Step 注入与上下文预算约束、路径安全加载。
+
+#### V1 的 Bad Case
+- [x] 模型必须先调用 `skill_list` 才知道有哪些 Skill，多一步发现成本，且容易漏看
+- [x] 正文只有激活后才进上下文；但激活的指令只是普通 ToolResult，会被 ToolReducer / 滚动摘要压缩遗忘
+- [x] Skill 是扁平 `<name>.md`，没有 resources（references/scripts/assets）能力，无法承载带附件/模板的技能
+- [x] 文件名即 Skill 名，无严格 name 校验，`..`、大写、下划线都可能产生越界或歧义
+- [x] 无用户级/项目级分层，所有 Skill 混在一起，无法做项目覆盖
+
+#### 设计选择（与规格一致）
+- [x] **目录式布局**：`skills/<name>/SKILL.md`（必选）+ `scripts/`、`references/`、`assets/`（可选）
+- [x] **双层发现**：user（`~/.oneagent/skills`）与 project（`backend/.oneagent/skills`），project 同名覆盖 user，按 name 稳定排序
+- [x] **metadata 与正文分离**：Discovery 只建轻量 `SkillMetadata`（name+description+来源），激活时才读完整正文
+- [x] **Catalog 每 Step 注入**：只含 name+description 的 system message（`oneagent_skill_catalog`），不进持久历史，模型随时可发现并 `skill_read` 激活
+- [x] **Active 指令每 Step 注入**：`oneagent_active_skill`，独立于普通 ToolResult，不被压缩遗忘；Run-scoped，仅当前 Run 内有效，不污染后续 Run
+- [x] **上下文预算**：`skill_context_max_tokens=4096` / `skill_max_active=4`，超预算/超数量按激活顺序确定性拒绝
+- [x] **删除 skill_list**：catalog 自动注入替代；新增 `skill_resource_read` 安全读取资源（限制在 Skill 目录内、拒绝 `..`/绝对路径/符号链接，单文件 ≤64KB）
+- [x] **不做**：向量/LLM 路由、自动生成、Marketplace（边界内）
+
+#### 实现结果
+- [x] `app/skills/`：models.py（name 校验 `^[a-z0-9]+(?:-[a-z0-9]+)*$` ≤64、Metadata/Skill/SkillResources、scope USER/PROJECT）、parser.py（严格 Front Matter+正文，失败抛 SkillParseError）、discovery.py（双层发现 + safe_skill_dir/file/resource + symlink/越界防护 + 坏 Skill 降级诊断）、config.py（SkillSettings）、store.py（catalog/load/资源清单）、context.py（SkillContextProvider：catalog_message/active_messages/tokens/would_exceed_budget）、tools.py（skill_read/skill_resource_read + `SKILL_READ_TOOL_NAME`/`SKILL_RESOURCE_READ_TOOL_NAME`）、__init__.py（27 个导出）
+- [x] `app/agent/runtime.py`：构造参数 `skill_store`/`skill_context_provider`；`_run_once` 内 active_skills run-scoped、catalog 每 Step 注入（发现缓存）、active 每 Step 注入；tool 循环对 `skill_read` 成功结果做激活检测 → load → budget 检查 → 加入 active set；MODEL_STARTED 增加 `available_skill_count`/`skill_catalog_tokens`/`active_skill_names`/`active_skill_tokens`
+- [x] `app/agent/events.py`：新增 `SKILL_ACTIVATED`/`SKILL_ACTIVATION_FAILED` 事件与 `skill_name`/`skill_scope`/`skill_error`/`available_skill_count`/`skill_catalog_tokens`/`active_skill_names`/`active_skill_tokens` 字段；Trace 事件驱动自动持久化，无需额外改动
+- [x] `app/models/chat.py`：装配 `SkillStore` + `SkillContextProvider(SkillSettings)`，`register_skill_tools` 后传入 `AgentRuntime`
+- [x] 示例 Skills 迁移到目录式：`debug-python`、`code-review`、`structured-research`（带 `references/template.md`）
+- [x] 单元测试重写 `tests/test_skills.py`（54 例：名称校验/解析/路径安全/双层发现/坏 Skill 降级/资源清单/Context Provider budget/Runtime 集成激活与失败）
+- [x] Eval：新增 `skill` 组 15 场景（6 触发 / 4 不触发 / 2 相似 / 2 遵循 / 1 压缩后 Active 保留），scenario.py 加 InitialSkill/SkillExpectation，harness.py 装配 skill，assertions.py 加 `_check_skill`；离线冒烟 `tests/test_skills_eval.py`（3 例）验证 Harness 与断言
+
+#### 安全边界
+- [x] Skill name 必须先过严格校验再参与路径计算；目录/文件/资源一律 `resolve()` 后确认仍在 Skill 根内
+- [x] SKILL.md、references 等若为符号链接一律拒绝（修复了 symlink 指向根内目录可绕过检查的漏洞）
+- [x] 坏 Skill（非法名、坏 front matter、超大文件）跳过并记 `SkillDiagnostic`，不影响其余 Skill 与 Agent 启动
+- [x] 模型只能读、不能写 Skill（不提供写工具）；resource 不自动加载
+
+#### Context Token 影响
+- [x] 示例 3 个 Skill：Catalog 每 Step 约 214 tokens（固定小开销）；激活后每个 Active Skill 指令约 60～190 tokens 每 Step
+- [x] 相比 V1 需要 `skill_list` 调用：Catalog 注入免去发现轮次；未激活前只付 catalog 的小额常驻成本
+- [x] skill_read / skill_resource_read 两个工具 schema 约 289 tokens
+
+#### 测试结果
+- [x] 全量验证：`pytest` 460 通过（Skill V2 前 411 + 新增 49）、`ruff`、`compileall`、`git diff --check` 全部通过
+
+#### 尚未支持
+- [ ] `allowed-tools` 已被解析进 metadata，但尚未用于激活后的工具权限收窄（后续可在 ToolExecutor 挂钩）
+- [ ] SKILL.md 内 `metadata:` 自由扩展字段暂未做 schema 约束（仅要求是 mapping）
+- [ ] 没有 Skill 编写/管理命令（仅预置只读）；用户级 Skill 目录不会自动创建
+
+#### 关键取舍
+- [x] metadata 常驻（每 Step catalog 注入）但完整 instructions 按需（激活后才注入）
+- [x] Active Skill 是 Run-scoped 的每 Step 注入块，不是普通 ToolResult，保证跨压缩不遗忘
+- [x] resource 只在需要时用 `skill_resource_read` 读取，不自动加载，避免上下文膨胀
+- [x] 模型不允许写 Skill，Skill 是"预置只读能力包"，由开发者/用户在两层目录维护
 
 ---
 ## 2026-08-16

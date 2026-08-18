@@ -1,0 +1,34 @@
+id: skill-04
+group: skill
+name: 顺序激活多个 skill
+initial_skills:
+  - name: debug-python
+    description: 排查 Python 报错或异常的标准流程
+    body: |
+      # Debug Python
+      复现、读 traceback、查代码、修复并验证。
+  - name: code-review
+    description: 对代码变更做结构化代码评审
+    body: |
+      # Code Review
+      按正确性、可维护性、测试、安全维度评审，用 P0/P1/P2 标注严重程度。
+  - name: structured-research
+    description: 对开放性问题做结构化研究
+    body: |
+      # Structured Research
+      拆解问题、搜集信息、交叉验证。
+user_input: >-
+  先帮我排查这个 Python 报错：IndexError: list index out of range，
+  修复之后再对修复后的代码做一次代码评审。
+max_steps: 10
+expect:
+  skill:
+    activated: [debug-python, code-review]
+    not_activated: [structured-research]
+  tools:
+    must: [skill_read]
+    count:
+      skill_read: 2
+    ordered: [skill_read, skill_read]
+  answer:
+    keypoints: ["IndexError"]

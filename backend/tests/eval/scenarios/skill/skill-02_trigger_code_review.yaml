@@ -1,0 +1,36 @@
+id: skill-02
+group: skill
+name: 触发 code-review
+initial_skills:
+  - name: debug-python
+    description: 排查 Python 报错或异常的标准流程
+    body: |
+      # Debug Python
+      复现、读 traceback、查代码、修复验证。
+  - name: code-review
+    description: 对代码变更做结构化代码评审，按 P0/P1/P2 输出
+    body: |
+      # Code Review
+      1. 理解意图
+      2. 正确性
+      3. 可维护性
+      4. 测试
+      5. 安全
+      输出按「严重程度 → 问题 → 建议」逐条列出，用 P0/P1/P2 标注。
+  - name: structured-research
+    description: 对开放性问题做结构化研究
+    body: |
+      # Structured Research
+      拆解问题、搜集信息、交叉验证。
+user_input: >-
+  请帮我评审这段代码变更：`def add(a, b): return a + b`。按结构化评审流程给出意见。
+max_steps: 6
+expect:
+  skill:
+    activated: [code-review]
+    not_activated: [debug-python, structured-research]
+  tools:
+    must: [skill_read]
+    successful: [skill_read]
+  answer:
+    keypoints: ["P0", "P1", "P2"]

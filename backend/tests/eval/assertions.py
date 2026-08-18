@@ -19,6 +19,7 @@ from .scenario import Scenario
 _CHECK_NAMES = (
     "tools",
     "task",
+    "skill",
     "files",
     "answer",
     "compaction",
@@ -66,6 +67,7 @@ async def run_checks(
         )
     )
     checks.append(_check_tools(scenario, result, outcome.events))
+    checks.append(_check_skill(scenario, outcome.events))
     checks.append(
         await _check_task(
             scenario,
@@ -193,6 +195,84 @@ def _check_tools(
         and order_ok
         and not missing_denials
         and args_ok,
+        "; ".join(detail_parts),
+    )
+
+
+def _check_skill(
+    scenario: Scenario,
+    events: list[AgentEvent],
+) -> CheckResult:
+    """检查 Skill 是否按预期激活 / 不激活 / 激活失败。"""
+
+    expect = scenario.expect.skill
+    applicable = any(
+        (
+            expect.activated,
+            expect.not_activated,
+            expect.activation_failed,
+        )
+    )
+    if not applicable:
+        return CheckResult("skill", True, "未声明 Skill 期望", applicable=False)
+
+    activated = {
+        event.skill_name
+        for event in events
+        if event.type is AgentEventType.SKILL_ACTIVATED
+        and event.skill_name is not None
+    }
+    failed = {
+        event.skill_name
+        for event in events
+        if event.type is AgentEventType.SKILL_ACTIVATION_FAILED
+        and event.skill_name is not None
+    }
+
+    missing_activated = [
+        name for name in expect.activated if name not in activated
+    ]
+    wrongly_activated = [
+        name for name in expect.not_activated if name in activated
+    ]
+    missing_failed = [
+        name for name in expect.activation_failed if name not in failed
+    ]
+
+    compaction_ok = True
+    if expect.survives_compaction:
+        started = [
+            event for event in events if event.type is AgentEventType.MODEL_STARTED
+        ]
+        compacted_indexes = [
+            index
+            for index, event in enumerate(started)
+            if event.compaction_stage not in (None, "none")
+        ]
+        if not compacted_indexes:
+            compaction_ok = False
+        else:
+            last_compacted = compacted_indexes[-1]
+            after = started[last_compacted + 1 :]
+            compaction_ok = any(
+                bool(event.active_skill_names) for event in after
+            )
+
+    detail_parts = [f"activated={sorted(activated)}"]
+    if missing_activated:
+        detail_parts.append(f"missing_activated={missing_activated}")
+    if wrongly_activated:
+        detail_parts.append(f"wrongly_activated={wrongly_activated}")
+    if missing_failed:
+        detail_parts.append(f"missing_activation_failed={missing_failed}")
+    if expect.survives_compaction and not compaction_ok:
+        detail_parts.append("active skill 未在压缩后保留")
+    return CheckResult(
+        "skill",
+        not missing_activated
+        and not wrongly_activated
+        and not missing_failed
+        and compaction_ok,
         "; ".join(detail_parts),
     )
 

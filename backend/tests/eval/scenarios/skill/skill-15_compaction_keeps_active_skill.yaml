@@ -1,0 +1,36 @@
+id: skill-15
+group: skill
+name: 压缩后 Active Skill 指令仍保留
+initial_skills:
+  - name: debug-python
+    description: 排查 Python 报错或异常的标准流程
+    body: |
+      # Debug Python
+      遇到报错时：1. 复现 2. 读 traceback 3. 查代码 4. 修复并验证。
+initial_history:
+  - role: user
+    content: "开始排查几个历史报错。"
+  - role: assistant
+    content: "好的，我会逐一记录历史报错及其处理过程，并说明每一步的排查依据。为了保持排查的完整上下文，我会把之前的报错症状、尝试过的修复和验证结果都保留在对话里，避免遗漏关键信息。"
+  - role: user
+    content: "继续记录更多报错细节。"
+  - role: assistant
+    content: "继续补充历史报错：首先是 KeyError 场景，根因是字典访问缺键，处理方式是先用 get 提供默认值；其次是 IndexError 场景，根因是列表越界，处理方式是先判断长度。每一个报错我都记录了复现步骤、根因分析和验证结果。为了完整性，我把排查流程、环境信息以及已应用的修复方案都保留在这里，确保后续能无缝继续。"
+  - role: user
+    content: "再补充一批报错记录。"
+  - role: assistant
+    content: "再补充：AttributeError 场景根因是 None 对象访问属性，处理方式是判空；TypeError 场景根因是类型不匹配，处理方式是显式转换。我已经把全部报错记录按时间顺序整理好，包含每一条的症状描述、定位方法、修复代码与验证结果，方便在接下来的排查中保持完整上下文并继续沿用相同的处理流程。"
+context:
+  window_override: 2000
+user_input: >-
+  现在按标准流程排查最新的报错：ValueError: invalid literal for int()。
+max_steps: 8
+expect:
+  skill:
+    activated: [debug-python]
+    survives_compaction: true
+  tools:
+    must: [skill_read]
+    successful: [skill_read]
+  answer:
+    keypoints: ["int", "ValueError"]

@@ -1,73 +1,99 @@
-"""Skill 的 Markdown 文件存储。
+"""Skill Store：双层发现 + 激活加载 + 资源清单。
 
-每个 Skill 保存为 ``skills/<name>.md``。技能是预置的、由开发者或用户维护的
-可复用流程，系统只负责加载与列出，不提供模型写入（自动生成 Skill 属于边界外）。
+- ``catalog()`` 只建立轻量 metadata（不读完整正文）；
+- ``load(name)`` 在激活时才读取 SKILL.md 正文与资源清单；
+- 所有路径经 discovery 安全解析，越界/符号链接一律拒绝。
 """
 
 from __future__ import annotations
 
-import asyncio
-import logging
 from pathlib import Path
 
-from .models import Skill, parse_skill_markdown
-
-DEFAULT_SKILLS_DIR = Path(__file__).resolve().parents[2] / ".oneagent" / "skills"
-_MAX_SKILL_FILE_BYTES = 256_000
-
-logger = logging.getLogger("oneagent.skills.store")
+from .config import SkillSettings
+from .discovery import (
+    DEFAULT_PROJECT_SKILLS_DIR,
+    DEFAULT_USER_SKILLS_DIR,
+    SkillDiagnostic,
+    SkillDiscovery,
+    safe_skill_file,
+)
+from .models import Skill, SkillMetadata, SkillResources
+from .parser import SkillParseError, parse_skill_document
 
 
 class SkillStore:
-    """Skill 的加载与列出。"""
+    """Skill 的发现与激活加载。"""
 
-    def __init__(self, skills_dir: str | Path = DEFAULT_SKILLS_DIR) -> None:
-        self.skills_dir = Path(skills_dir).expanduser().resolve()
+    def __init__(
+        self,
+        user_dir: str | Path = DEFAULT_USER_SKILLS_DIR,
+        project_dir: str | Path = DEFAULT_PROJECT_SKILLS_DIR,
+        *,
+        settings: SkillSettings | None = None,
+    ) -> None:
+        self.user_dir = Path(user_dir).expanduser().resolve()
+        self.project_dir = Path(project_dir).expanduser().resolve()
+        self.settings = settings or SkillSettings()
+        self.discovery = SkillDiscovery(
+            user_dir=self.user_dir,
+            project_dir=self.project_dir,
+        )
 
     async def initialize(self) -> None:
-        """创建 skills 目录。"""
+        """确保 project 根目录存在（可选目录不自动创建）。"""
 
-        await asyncio.to_thread(self.skills_dir.mkdir, parents=True, exist_ok=True)
+        self.project_dir.mkdir(parents=True, exist_ok=True)
 
-    async def list(self) -> tuple[Skill, ...]:
-        """列出所有 Skill（name + description + 正文），按名称排序。"""
+    async def catalog(self) -> tuple[SkillMetadata, ...]:
+        """发现全部 Skill 的轻量 metadata（project 覆盖 user）。"""
 
-        skills: list[Skill] = []
-        for path in sorted(self.skills_dir.glob("*.md")):
-            if await asyncio.to_thread(path.is_symlink):
-                continue
-            try:
-                skills.append(await asyncio.to_thread(_read_skill, path))
-            except (ValueError, OSError) as exc:
-                logger.warning("skip unreadable skill %s: %s", path.name, exc)
-        return tuple(skills)
+        return self.discovery.discover()
+
+    def diagnostics(self) -> tuple[SkillDiagnostic, ...]:
+        return self.discovery.diagnostics()
 
     async def load(self, name: str) -> Skill | None:
-        """按名称加载 Skill；不存在或损坏时返回 None。"""
+        """按名称激活加载 Skill（正文 + 资源清单）；不存在返回 None。"""
 
-        normalized = name.strip().lower()
-        path = self.skills_dir / f"{normalized}.md"
-        if not await asyncio.to_thread(path.is_file):
-            return None
-        if await asyncio.to_thread(path.is_symlink):
+        for metadata in await self.catalog():
+            if metadata.name == name:
+                return self._load_metadata(metadata)
+        return None
+
+    def _load_metadata(self, metadata: SkillMetadata) -> Skill | None:
+        skill_dir = metadata.location.parent
+        skill_file = safe_skill_file(skill_dir)
+        if skill_file is None:
             return None
         try:
-            return await asyncio.to_thread(_read_skill, path)
-        except (ValueError, OSError):
+            text = skill_file.read_text(encoding="utf-8")
+            parsed = parse_skill_document(text, expected_name=metadata.name)
+        except (OSError, UnicodeError, SkillParseError):
             return None
-
-
-def _read_skill(path: Path) -> Skill:
-    if path.stat().st_size > _MAX_SKILL_FILE_BYTES:
-        raise ValueError(f"skill file too large: {path.name}")
-    text = path.read_text(encoding="utf-8")
-    skill = parse_skill_markdown(text)
-    if path.stem != skill.name:
-        raise ValueError(
-            f"skill file name '{path.stem}' does not match front matter name "
-            f"'{skill.name}'"
+        return Skill(
+            metadata=metadata,
+            content=parsed.body,
+            root=skill_dir,
+            resources=self._discover_resources(skill_dir),
         )
-    return skill
+
+    def _discover_resources(self, skill_dir: Path) -> SkillResources:
+        return SkillResources(
+            scripts=_list_resource_dir(skill_dir, "scripts"),
+            references=_list_resource_dir(skill_dir, "references"),
+            assets=_list_resource_dir(skill_dir, "assets"),
+        )
 
 
-__all__ = ["DEFAULT_SKILLS_DIR", "SkillStore"]
+def _list_resource_dir(skill_dir: Path, subdir: str) -> tuple[str, ...]:
+    directory = skill_dir / subdir
+    if not directory.is_dir() or directory.is_symlink():
+        return ()
+    entries: list[str] = []
+    for path in sorted(directory.rglob("*")):
+        if path.is_file() and not path.is_symlink():
+            entries.append(path.relative_to(skill_dir).as_posix())
+    return tuple(entries)
+
+
+__all__ = ["SkillStore"]

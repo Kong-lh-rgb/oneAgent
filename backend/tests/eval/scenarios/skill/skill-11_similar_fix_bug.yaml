@@ -1,0 +1,23 @@
+id: skill-11
+group: skill
+name: 相似场景 - 修 bug 激活 debug-python 而非 code-review
+initial_skills:
+  - name: debug-python
+    description: 排查 Python 报错或异常的标准流程
+    body: |
+      # Debug Python
+      遇到 bug 或报错时：1. 复现 2. 读 traceback 3. 查代码 4. 修复并验证。
+  - name: code-review
+    description: 对代码变更做结构化代码评审
+    body: |
+      # Code Review
+      按正确性、可维护性、测试、安全维度评审，用 P0/P1/P2 标注。
+user_input: >-
+  我有一段 Python 代码有 bug，结果总是算错。请帮我定位并修复这个 bug。
+max_steps: 6
+expect:
+  skill:
+    activated: [debug-python]
+    not_activated: [code-review]
+  tools:
+    must: [skill_read]

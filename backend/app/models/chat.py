@@ -47,7 +47,12 @@ from app.memory import (
     PostRunMemoryReflector,
     register_memory_tools,
 )
-from app.skills import SkillStore, register_skill_tools
+from app.skills import (
+    SkillContextProvider,
+    SkillSettings,
+    SkillStore,
+    register_skill_tools,
+)
 from app.task import (
     DEFAULT_TASKS_DIR,
     FileTaskStore,
@@ -554,6 +559,11 @@ async def _run(args: argparse.Namespace) -> int:
     skill_store = SkillStore()
     await skill_store.initialize()
     register_skill_tools(tool_registry, skill_store)
+    skill_settings = SkillSettings()
+    skill_context_provider = SkillContextProvider(
+        max_tokens=skill_settings.skill_context_max_tokens,
+        max_active=skill_settings.skill_max_active,
+    )
     _mark_deferred_tools(
         tool_registry,
         frozenset(
@@ -645,6 +655,8 @@ async def _run(args: argparse.Namespace) -> int:
         memory_manager=memory_manager,
         memory_reflector=memory_reflector,
         memory_maintenance_reflector=memory_maintenance_reflector,
+        skill_store=skill_store,
+        skill_context_provider=skill_context_provider,
     )
     try:
         if args.message is not None:

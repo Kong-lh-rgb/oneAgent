@@ -36,6 +36,13 @@ from app.models.types import (
     ToolCall,
     ToolResult,
 )
+from app.skills import (
+    SKILL_READ_TOOL_NAME,
+    Skill,
+    SkillContextProvider,
+    SkillMetadata,
+    SkillStore,
+)
 from app.task.context import TaskContextProvider
 from app.tools.approval import ApprovalGate
 from app.tools.catalog import (
@@ -100,6 +107,8 @@ class AgentRuntime:
         memory_manager: MemoryManager | None = None,
         memory_reflector: PostRunMemoryReflector | None = None,
         memory_maintenance_reflector: MemoryMaintenanceReflector | None = None,
+        skill_store: SkillStore | None = None,
+        skill_context_provider: SkillContextProvider | None = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -111,6 +120,8 @@ class AgentRuntime:
             raise ValueError("memory_reflector requires memory_manager")
         if memory_maintenance_reflector is not None and memory_manager is None:
             raise ValueError("memory_maintenance_reflector requires memory_manager")
+        if skill_context_provider is not None and skill_store is None:
+            raise ValueError("skill_context_provider requires skill_store")
 
         self._model_registry = model_registry
         self._tool_registry = tool_registry
@@ -125,6 +136,8 @@ class AgentRuntime:
         self._memory_manager = memory_manager
         self._memory_reflector = memory_reflector
         self._memory_maintenance_reflector = memory_maintenance_reflector
+        self._skill_store = skill_store
+        self._skill_context_provider = skill_context_provider
         self._tool_executor = tool_executor or ToolExecutor(
             tool_registry,
             approval_gate=approval_gate,
@@ -270,6 +283,9 @@ class AgentRuntime:
         current_summary_state = summary_state
         memory_context_messages: tuple[Message, ...] = ()
         memory_context_loaded = False
+        active_skills: dict[str, Skill] = {}
+        skill_catalog_loaded = False
+        catalog_metadata: tuple[SkillMetadata, ...] = ()
         activated_tools: set[str] = set()
         ensure_tool_search_registered(self._tool_registry)
 
@@ -347,6 +363,29 @@ class AgentRuntime:
                         memory_context_messages = ()
                 if memory_context_messages:
                     ephemeral_messages.extend(memory_context_messages)
+                if (
+                    self._skill_context_provider is not None
+                    and self._skill_store is not None
+                ):
+                    if not skill_catalog_loaded:
+                        skill_catalog_loaded = True
+                        try:
+                            catalog_metadata = await self._skill_store.catalog()
+                        except Exception:
+                            catalog_metadata = ()
+                    catalog_message = (
+                        self._skill_context_provider.catalog_message(
+                            catalog_metadata
+                        )
+                    )
+                    if catalog_message is not None:
+                        ephemeral_messages.append(catalog_message)
+                if self._skill_context_provider is not None and active_skills:
+                    ephemeral_messages.extend(
+                        self._skill_context_provider.active_messages(
+                            tuple(active_skills.values())
+                        )
+                    )
                 if recovery_checkpoint is not None:
                     ephemeral_messages.append(
                         render_checkpoint_context(recovery_checkpoint)
@@ -461,6 +500,26 @@ class AgentRuntime:
                 ),
                 summary_usage=context_decision.summary_usage,
                 summary_error=context_decision.summary_error,
+                available_skill_count=(
+                    len(catalog_metadata)
+                    if self._skill_context_provider is not None
+                    else None
+                ),
+                skill_catalog_tokens=(
+                    self._skill_context_provider.catalog_tokens(
+                        catalog_metadata
+                    )
+                    if self._skill_context_provider is not None
+                    else None
+                ),
+                active_skill_names=tuple(active_skills),
+                active_skill_tokens=(
+                    self._skill_context_provider.active_tokens(
+                        tuple(active_skills.values())
+                    )
+                    if self._skill_context_provider is not None
+                    else None
+                ),
             )
             if context_decision.exceeds_input_budget:
                 return await stop_with_error(
@@ -588,6 +647,16 @@ class AgentRuntime:
                         for name in activated_tool_names(result.output)
                         if self._tool_registry.is_deferred(name)
                     )
+                if (
+                    tool_call.name == SKILL_READ_TOOL_NAME
+                    and result.success
+                ):
+                    await self._activate_skill_from_tool_result(
+                        result,
+                        active_skills,
+                        emitter=emitter,
+                        step=step,
+                    )
 
             tool_rounds.append(
                 ToolRound(
@@ -611,6 +680,52 @@ class AgentRuntime:
             usage=usage,
             error=error,
             summary_state=current_summary_state,
+        )
+
+    async def _activate_skill_from_tool_result(
+        self,
+        result: ToolResult,
+        active_skills: dict[str, Skill],
+        *,
+        emitter: _EventEmitter,
+        step: int,
+    ) -> None:
+        """尝试把 skill_read 命中的 skill 加入本 run 的 active set（受预算约束）。"""
+        if self._skill_store is None or self._skill_context_provider is None:
+            return
+        skill_name = _skill_read_activated_name(result.output)
+        if not skill_name or skill_name in active_skills:
+            return
+        skill = await self._skill_store.load(skill_name)
+        if skill is None:
+            await emitter.emit(
+                AgentEventType.SKILL_ACTIVATION_FAILED,
+                step=step,
+                skill_name=skill_name,
+                skill_error="skill not found",
+            )
+            return
+        if self._skill_context_provider.would_exceed_budget(
+            tuple(active_skills.values()),
+            skill,
+        ):
+            await emitter.emit(
+                AgentEventType.SKILL_ACTIVATION_FAILED,
+                step=step,
+                skill_name=skill_name,
+                skill_error="active skill context budget exceeded",
+            )
+            return
+        active_skills[skill.metadata.name] = skill
+        await emitter.emit(
+            AgentEventType.SKILL_ACTIVATED,
+            step=step,
+            skill_name=skill.metadata.name,
+            skill_scope=skill.metadata.scope.value,
+            active_skill_names=tuple(active_skills),
+            active_skill_tokens=self._skill_context_provider.active_tokens(
+                tuple(active_skills.values())
+            ),
         )
 
     async def _run_post_run_memory_reflection(
@@ -1176,6 +1291,23 @@ class AgentRuntime:
             default=str,
         )
         return f"{tool_call.name}:{canonical_arguments}"
+
+
+def _skill_read_activated_name(output: object) -> str | None:
+    """从 skill_read 的工具结果中提取被命中激活的 skill 名。"""
+    if isinstance(output, str):
+        try:
+            payload = json.loads(output)
+        except (ValueError, TypeError):
+            return None
+    elif isinstance(output, dict):
+        payload = output
+    else:
+        return None
+    if not payload.get("found"):
+        return None
+    name = payload.get("name")
+    return name if isinstance(name, str) and name else None
 
 
 def _add_usage(total: ModelUsage, current: ModelUsage) -> ModelUsage:

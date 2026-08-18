@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.agent.result import AgentStopReason
 from app.task import TaskStatus, TaskStepStatus
 
-VALID_GROUPS = ("basic", "tools", "task", "context", "safety")
+VALID_GROUPS = ("basic", "tools", "task", "context", "safety", "skill")
 
 
 class InitialMessage(BaseModel):
@@ -57,6 +57,24 @@ class InitialFile(BaseModel):
 
     path: str
     content: str = ""
+
+
+class InitialSkill(BaseModel):
+    """预置到评测环境的一个 Skill（目录式：<name>/SKILL.md + 可选 references）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    description: str
+    body: str = "# 步骤\n\n1. 执行"
+    reference_files: tuple[InitialFile, ...] = ()
+
+    @field_validator("name")
+    @classmethod
+    def valid_name(cls, value: str) -> str:
+        from app.skills import validate_skill_name
+
+        return validate_skill_name(value)
 
 
 class ApprovalPolicy(BaseModel):
@@ -145,11 +163,36 @@ class AnswerExpectation(BaseModel):
     any_of: tuple[str, ...] = ()
 
 
+class SkillExpectation(BaseModel):
+    """Skill 激活期望：应激活 / 不应激活 / 应激活失败。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    activated: tuple[str, ...] = ()
+    not_activated: tuple[str, ...] = ()
+    activation_failed: tuple[str, ...] = ()
+    survives_compaction: bool = False
+
+    @model_validator(mode="after")
+    def no_conflicts(self) -> SkillExpectation:
+        conflicts = (
+            set(self.activated)
+            & (set(self.not_activated) | set(self.activation_failed))
+        )
+        if conflicts:
+            raise ValueError(
+                f"skill cannot be both activated and forbidden/failed: "
+                f"{sorted(conflicts)}"
+            )
+        return self
+
+
 class Expectation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tools: ToolExpectation = Field(default_factory=ToolExpectation)
     task: TaskExpectation = Field(default_factory=TaskExpectation)
+    skill: SkillExpectation = Field(default_factory=SkillExpectation)
     files: tuple[FileExpectation, ...] = ()
     answer: AnswerExpectation = Field(default_factory=AnswerExpectation)
     requires_compaction: bool = False
@@ -171,6 +214,7 @@ class Scenario(BaseModel):
     initial_history: tuple[InitialMessage, ...] = ()
     initial_tasks: tuple[InitialTask, ...] = ()
     initial_files: tuple[InitialFile, ...] = ()
+    initial_skills: tuple[InitialSkill, ...] = ()
     allowed_tools: tuple[str, ...] | None = None
     max_steps: int = 10
     max_tool_rounds: int | None = None
