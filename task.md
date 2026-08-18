@@ -417,6 +417,37 @@
 - [x] 全量：`pytest` 521 通过（+12 筛选测试）、`ruff`、`compileall`、
   `git diff --check` 全部通过
 
+### 完成：Human Gate UPDATE Accept 直接覆盖正式 Skill（去掉 Proposal 中间态）
+
+> 修复语义不一致：UPDATE Candidate Accept 只生成 replacement proposal、正式 Skill
+> 未修改，导致 Candidate.status=ACCEPTED 与真实系统状态不一致。
+> 新语义：Human Gate 是唯一最终决策点 —— Accept CREATE 创建、Accept UPDATE 更新、
+> Reject 什么都不改，不再存在"尚未应用的 Proposal"这层多余状态。
+
+#### service.py
+- [x] `accept()` UPDATE 分支：`_update_skill` 原子覆盖 existing_skill_name 对应正式
+  SKILL.md；写入成功后才 ACCEPTED；写失败抛错、正式 Skill 与 Candidate 均保持原样
+- [x] `_update_skill` 安全性：existing_skill_name 非空且能 load；目标必须是该 Existing
+  Skill 的真实 SKILL.md（校验 location 的 name/parent，不使用 proposed_name 改路径）；
+  用 Candidate 的 description/procedure/pitfalls/verification 渲染完整 SKILL.md
+- [x] `_render_updated_skill`：渲染干净完整 SKILL.md（name 固定 = existing_skill_name，
+  description = candidate.description）；删除"提案 / 来源 Task / 审计信息"文案
+- [x] 新增 `_atomic_write_text`（临时文件 → flush → replace 原子写）
+- [x] CREATE 行为不变（`_create_skill`）；Reject 不变
+
+#### store.py / chat.py
+- [x] 删除 `proposal_path` / `write_proposal`（无其他用途）
+- [x] CLI 文案同步：accept 区分 CREATE/UPDATE，UPDATE 显示
+  "Updated Skill: <name> / Path / Status: ACCEPTED"
+
+#### 测试（+7）
+- [x] UPDATE Accept 真正覆盖正式 Skill（含 Procedure B，无提案文案）/ 保持原 Skill name
+  （proposed_name 异常不影响路径）/ 使用 candidate.description / Existing Skill 不存在
+  → 报错且 PENDING / 写失败 → 仍 PENDING 且原内容不变 / Reject → Skill 不变且 REJECTED /
+  CREATE Accept 回归
+- [x] 全量：`pytest` 528 通过（+7 Gate 测试）、`ruff`、`compileall`、
+  `git diff --check` 全部通过
+
 ---
 ## 2026-08-16
 

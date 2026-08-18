@@ -446,9 +446,13 @@ class SkillLearningService:
         *,
         scope: str | None = None,
     ) -> tuple[SkillCandidate, Path | None]:
-        """接受候选：CREATE 生成正式 SKILL.md；UPDATE 生成 replacement proposal。
+        """接受候选（Human Gate 是最终决策点）。
 
-        不会静默覆盖已有 Skill。返回 (更新后的候选, 写入的路径或 None)。
+        - CREATE：创建正式 <scope>/<name>/SKILL.md，成功后 ACCEPTED；
+        - UPDATE：原子覆盖 existing_skill_name 对应的正式 SKILL.md，成功后 ACCEPTED；
+          不再生成"尚未应用的 Proposal"。
+        写入失败时抛明确错误，正式 Skill 与 Candidate 均保持原样（不会出现
+        "文件未更新但 Candidate 已 ACCEPTED"）。
         """
 
         candidate = await self.candidate_store.get(candidate_id)
@@ -463,9 +467,7 @@ class SkillLearningService:
         if candidate.action is SkillCandidateAction.CREATE:
             target = await self._create_skill(candidate, resolved_scope)
         else:
-            existing = await self.skill_store.load(candidate.existing_skill_name or "")
-            markdown = _render_updated_skill(candidate, existing)
-            target = await self.candidate_store.write_proposal(candidate.id, markdown)
+            target = await self._update_skill(candidate)
         updated = candidate.model_copy(
             update={
                 "status": SkillCandidateStatus.ACCEPTED,
@@ -513,6 +515,35 @@ class SkillLearningService:
             raise ValueError(f"skill file already exists: {target}")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(_render_new_skill(candidate), encoding="utf-8")
+        return target
+
+    async def _update_skill(self, candidate: SkillCandidate) -> Path:
+        """接受 UPDATE：原子覆盖 existing_skill_name 对应的正式 SKILL.md。
+
+        安全性：
+        - existing_skill_name 非空且能 load 到正式 Skill；
+        - 目标路径来自这个 Existing Skill 的真实 SKILL.md（不使用 proposed_name
+          改路径 / 不修改其他 Skill）；
+        - 用 Candidate 的 description/procedure/pitfalls/verification 渲染完整
+          SKILL.md（不追加 Proposal / 审计信息）；
+        - 临时文件 → flush → replace 原子写；写失败抛错，正式 Skill 与 Candidate
+          均保持原样。
+        """
+
+        name = candidate.existing_skill_name
+        if not name:
+            raise ValueError("update candidate requires existing_skill_name")
+        existing = await self.skill_store.load(name)
+        if existing is None:
+            raise ValueError(f"existing skill '{name}' not found; cannot update")
+        # 目标必须是该 Existing Skill 的真实 SKILL.md 路径。
+        target = existing.metadata.location
+        if target.name != "SKILL.md" or target.parent.name != existing.metadata.name:
+            raise ValueError(
+                f"refusing to update unexpected skill path: {target}"
+            )
+        markdown = _render_updated_skill(candidate, existing)
+        _atomic_write_text(target, markdown)
         return target
 
     # ------------------------------------------------------------------
@@ -635,50 +666,59 @@ def _render_new_skill(candidate: SkillCandidate) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _render_updated_skill(
-    candidate: SkillCandidate,
-    existing: Skill | None,
-) -> str:
-    """生成 UPDATE 的 replacement SKILL.md（不直接覆盖正式文件）。"""
+def _render_updated_skill(candidate: SkillCandidate, existing: Skill) -> str:
+    """渲染 UPDATE 后的完整正式 SKILL.md（干净，无提案/审计信息）。
 
-    if existing is not None:
-        base = [
-            "---",
-            f"name: {existing.metadata.name}",
-            f"description: {existing.metadata.description}",
-            "---",
-            "",
-            existing.content.strip(),
-        ]
-        header = "\n".join(base)
-    else:
-        header = f"# {candidate.proposed_name.replace('-', ' ').title()}"
+    - name 固定为 existing_skill_name（UPDATE 的目标唯一由它决定，不因
+      proposed_name 异常而重命名）；
+    - description 使用 candidate.description（模型新描述或继承的旧描述）；
+    - procedure/pitfalls/verification 全部来自 Candidate（V1 不二次 merge）。
+    审计信息（source task / reason / candidate id / review）保留在 Candidate Store，
+    不进入正式 Skill。
+    """
+
+    name = candidate.existing_skill_name or existing.metadata.name
+    title = name.replace("-", " ").title()
     lines = [
-        header,
+        "---",
+        f"name: {name}",
+        f"description: {candidate.description}",
+        "---",
         "",
-        "> 以下为 Skill Learning 生成的 UPDATE 提案，尚未应用到正式 Skill。",
+        f"# {title}",
         "",
-        "## Procedure（提案）",
+        "## Procedure",
         "",
     ]
     for index, step in enumerate(candidate.procedure, 1):
         lines.append(f"{index}. {step}")
     if candidate.pitfalls:
         lines.append("")
-        lines.append("## Pitfalls（提案）")
+        lines.append("## Pitfalls")
         lines.append("")
         lines.extend(f"- {item}" for item in candidate.pitfalls)
     if candidate.verification:
         lines.append("")
-        lines.append("## Verification（提案）")
+        lines.append("## Verification")
         lines.append("")
         lines.extend(f"- {item}" for item in candidate.verification)
-    lines.append("")
-    lines.append(
-        f"来源 Task: {' '.join(candidate.source_task_ids)} · "
-        f"原因: {candidate.reason}"
-    )
     return "\n".join(lines) + "\n"
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """原子写文本文件：临时文件 → flush → replace。
+
+    避免写一半导致正式 Skill 损坏；失败时原文件保持原样。
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(
+        f".{path.name}.tmp.{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}"
+    )
+    with temp.open("w", encoding="utf-8") as handle:
+        handle.write(content)
+        handle.flush()
+    temp.replace(path)
 
 
 __all__ = ["SkillLearningOutcome", "SkillLearningService"]

@@ -1511,3 +1511,194 @@ async def test_service_loads_anchor_bounded_events(tmp_path: Path) -> None:
     events = await service._load_task_events(task)
     # 只保留 step 2~4（in_progress → done），step1/step5 无关不进入。
     assert [event.step for event in events] == [2, 3, 4]
+
+
+# ---------------------------------------------------------------------------
+# 10. Human Gate：UPDATE Accept 直接覆盖正式 Skill（不再生成 Proposal）
+# ---------------------------------------------------------------------------
+
+
+def _seed_skill(
+    env,
+    name: str = "debug-python",
+    description: str = "old",
+    body: str = "# Debug Python\n\n1. Procedure A",
+) -> None:
+    skill_root = env["skill_store"].project_dir / name
+    skill_root.mkdir(parents=True, exist_ok=True)
+    (skill_root / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\n\n{body}",
+        encoding="utf-8",
+    )
+
+
+def _update_candidate(
+    *,
+    existing: str = "debug-python",
+    proposed: str = "debug-python",
+    description: str = "new",
+    procedure: tuple[str, ...] = ("Procedure B",),
+) -> SkillCandidate:
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    return SkillCandidate(
+        id=uuid4().hex,
+        action=SkillCandidateAction.UPDATE,
+        proposed_name=proposed,
+        description=description,
+        reason="补充 Procedure B",
+        procedure=procedure,
+        pitfalls=("不要跳过验证",),
+        verification=("pytest 通过",),
+        source_task_ids=("a", "b", "c"),
+        existing_skill_name=existing,
+        created_at=datetime.now(UTC),
+    )
+
+
+def _learning_service(env, root) -> SkillLearningService:
+    registry, _ = _fake_registry([])
+    return SkillLearningService(
+        env["task_store"],
+        env["trace_store"],
+        env["skill_store"],
+        env["candidate_store"],
+        registry,
+        settings=_settings(root, batch_size=3),
+        default_provider="fake",
+    )
+
+
+@pytest.mark.asyncio
+async def test_accept_update_overwrites_real_skill(tmp_path: Path) -> None:
+    env, root = await _make_env(tmp_path)
+    _seed_skill(env, body="# Debug Python\n\n1. Procedure A")
+    await env["candidate_store"].create(_update_candidate(procedure=("Procedure B",)))
+    service = _learning_service(env, root)
+
+    updated, target = await service.accept((await service_candidates(env))[0].id)
+    assert updated.status is SkillCandidateStatus.ACCEPTED
+    assert target is not None and target.name == "SKILL.md"
+    skill = await env["skill_store"].load("debug-python")
+    assert skill is not None
+    assert "Procedure B" in skill.content
+    # 不再有旧 Proposal 文案 / 审计信息。
+    assert "提案" not in skill.content
+    assert "来源 Task" not in skill.content
+
+
+@pytest.mark.asyncio
+async def test_accept_update_keeps_skill_name(tmp_path: Path) -> None:
+    """UPDATE 目标唯一由 existing_skill_name 决定，proposed_name 异常不影响。"""
+    env, root = await _make_env(tmp_path)
+    _seed_skill(env)
+    await env["candidate_store"].create(
+        _update_candidate(proposed="evil-name")
+    )
+    service = _learning_service(env, root)
+
+    _, target = await service.accept((await service_candidates(env))[0].id)
+    skill = await env["skill_store"].load("debug-python")
+    assert skill is not None and skill.metadata.name == "debug-python"
+    # 不创建 / 不更新其他路径。
+    assert await env["skill_store"].load("evil-name") is None
+    assert "debug-python" in str(target)
+
+
+@pytest.mark.asyncio
+async def test_accept_update_uses_candidate_description(tmp_path: Path) -> None:
+    env, root = await _make_env(tmp_path)
+    _seed_skill(env, description="old")
+    await env["candidate_store"].create(_update_candidate(description="new"))
+    service = _learning_service(env, root)
+
+    await service.accept((await service_candidates(env))[0].id)
+    skill = await env["skill_store"].load("debug-python")
+    assert skill is not None
+    # description 使用 Candidate 的新描述（front matter）。
+    assert skill.metadata.description == "new"
+
+
+@pytest.mark.asyncio
+async def test_accept_update_missing_skill_fails(tmp_path: Path) -> None:
+    env, root = await _make_env(tmp_path)
+    await env["candidate_store"].create(
+        _update_candidate(existing="ghost-skill")
+    )
+    service = _learning_service(env, root)
+
+    with pytest.raises(ValueError):
+        await service.accept((await service_candidates(env))[0].id)
+    # Candidate 仍 PENDING，且不创建新 Skill。
+    after = (await service_candidates(env))[0]
+    assert after.status is SkillCandidateStatus.PENDING
+    assert await env["skill_store"].load("ghost-skill") is None
+
+
+@pytest.mark.asyncio
+async def test_accept_update_write_failure_keeps_pending(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    env, root = await _make_env(tmp_path)
+    _seed_skill(env, body="# Debug Python\n\n1. Procedure A")
+    await env["candidate_store"].create(_update_candidate())
+    service = _learning_service(env, root)
+
+    from app.skill_learning import service as svc
+
+    def boom(path, content):  # noqa: ARG001
+        raise OSError("disk full")
+
+    monkeypatch.setattr(svc, "_atomic_write_text", boom)
+    with pytest.raises(OSError):
+        await service.accept((await service_candidates(env))[0].id)
+    # 写失败：Candidate 仍 PENDING，正式 Skill 原样。
+    after = (await service_candidates(env))[0]
+    assert after.status is SkillCandidateStatus.PENDING
+    skill = await env["skill_store"].load("debug-python")
+    assert skill is not None and "Procedure A" in skill.content
+
+
+@pytest.mark.asyncio
+async def test_reject_update_keeps_skill(tmp_path: Path) -> None:
+    env, root = await _make_env(tmp_path)
+    _seed_skill(env, body="# Debug Python\n\n1. Procedure A")
+    await env["candidate_store"].create(_update_candidate())
+    service = _learning_service(env, root)
+
+    await service.reject((await service_candidates(env))[0].id)
+    # Reject：不修改正式 Skill，Candidate REJECTED。
+    skill = await env["skill_store"].load("debug-python")
+    assert skill is not None and "Procedure A" in skill.content
+    after = (await service_candidates(env))[0]
+    assert after.status is SkillCandidateStatus.REJECTED
+
+
+@pytest.mark.asyncio
+async def test_accept_create_regression(tmp_path: Path) -> None:
+    """CREATE Accept 行为不变：创建正式 Skill。"""
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    env, root = await _make_env(tmp_path)
+    candidate = SkillCandidate(
+        id=uuid4().hex,
+        action=SkillCandidateAction.CREATE,
+        proposed_name="new-skill",
+        description="描述",
+        reason="原因",
+        procedure=("步骤",),
+        source_task_ids=("a", "b", "c"),
+        created_at=datetime.now(UTC),
+    )
+    await env["candidate_store"].create(candidate)
+    service = _learning_service(env, root)
+
+    updated, target = await service.accept(candidate.id)
+    assert updated.status is SkillCandidateStatus.ACCEPTED
+    assert target is not None and target.name == "SKILL.md"
+    skill = await env["skill_store"].load("new-skill")
+    assert skill is not None
+    assert "步骤" in skill.content

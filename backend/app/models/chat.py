@@ -112,7 +112,8 @@ _HELP_TEXT = (
     "/permissions clear 清除当前会话的全部审批规则\n"
     "/skill-candidates 查看待人工评审的 Skill Learning 候选\n"
     "/skill-candidate <ID> 查看候选详情\n"
-    "/skill-candidate <ID> accept [scope] 接受候选并生成 Skill（默认 project）\n"
+    "/skill-candidate <ID> accept [scope] 接受候选：CREATE 创建 / UPDATE 更新"
+    "正式 Skill（默认 project）\n"
     "/skill-candidate <ID> reject 拒绝候选\n"
     "/clear 清空当前会话\n"
     "/exit 退出聊天"
@@ -911,12 +912,21 @@ async def _run(args: argparse.Namespace) -> int:
                     except (KeyError, ValueError) as exc:
                         print(exc)
                         continue
-                    print(
-                        "已接受候选 "
-                        f"{updated.proposed_name}（{updated.action.value}）。"
-                    )
+                    if updated.action.value == "update":
+                        print(
+                            "已接受 UPDATE 候选，已应用更新到正式 Skill "
+                            f"{updated.existing_skill_name}。"
+                        )
+                        print(f"Updated Skill: {updated.existing_skill_name}")
+                    else:
+                        print(
+                            "已接受 CREATE 候选，已创建正式 Skill "
+                            f"{updated.proposed_name}。"
+                        )
+                        print(f"Created Skill: {updated.proposed_name}")
                     if target is not None:
-                        print(f"写入：{target}")
+                        print(f"Path: {target}")
+                    print(f"Status: {updated.status.value.upper()}")
                     continue
                 if action_word == "reject":
                     try:

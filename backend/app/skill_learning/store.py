@@ -215,21 +215,6 @@ class SkillCandidateStore:
             )
 
     # ------------------------------------------------------------------
-    # Proposal（UPDATE accept 的 replacement 内容，不覆盖正式 Skill）
-    # ------------------------------------------------------------------
-
-    def proposal_path(self, candidate_id: str) -> Path:
-        return self.data_dir / "proposals" / f"{candidate_id}.md"
-
-    async def write_proposal(self, candidate_id: str, markdown: str) -> Path:
-        """把 UPDATE 的 replacement SKILL.md 写入 proposals 目录。"""
-
-        path = self.proposal_path(candidate_id)
-        await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
-        await asyncio.to_thread(path.write_text, markdown, encoding="utf-8")
-        return path
-
-    # ------------------------------------------------------------------
     # 基础设施
     # ------------------------------------------------------------------
 
