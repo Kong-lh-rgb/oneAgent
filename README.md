@@ -60,6 +60,7 @@ cp .env.example .env
 
 目前支持 OpenAI、Qwen、DeepSeek 和 Anthropic。
 
+```md
 🏗️ What's inside?
 Conversation   → 发生过什么
 Task           → 现在正在做什么
