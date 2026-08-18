@@ -1702,3 +1702,102 @@ async def test_accept_create_regression(tmp_path: Path) -> None:
     skill = await env["skill_store"].load("new-skill")
     assert skill is not None
     assert "步骤" in skill.content
+
+
+# ---------------------------------------------------------------------------
+# 11. Distillation 失败不能提前 processed batch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_distillation_failure_keeps_batch_inflight(tmp_path: Path) -> None:
+    """Pattern Mining 成功 → Distillation 失败 → batch 仍 inflight / 未 processed，
+    下次触发点可重试并成功创建 Candidate。"""
+    env, root = await _make_env(tmp_path, batch_size=3)
+    task_ids: list[str] = []
+    for index in range(3):
+        task_ids.append(
+            await _create_completed(
+                env["task_store"],
+                title=f"Python 报错{index}",
+                steps=("复现", "读 traceback", "修复"),
+                run_ids=(f"r{index}",),
+            )
+        )
+    cluster_json = _mining_cluster_json(tuple(task_ids))
+    # 响应序列：第一次 mining 成功 + distill 抛异常；第二次 mining 成功 + distill 成功。
+    registry, adapter = _fake_registry(
+        [
+            _model_response(cluster_json),
+            RuntimeError("model down"),
+            _model_response(cluster_json),
+            _model_response(_DISTILL_CREATE_JSON),
+        ]
+    )
+    service = SkillLearningService(
+        env["task_store"],
+        env["trace_store"],
+        env["skill_store"],
+        env["candidate_store"],
+        registry,
+        settings=_settings(root, batch_size=3),
+        default_provider="fake",
+    )
+
+    # 第一次：mining 成功但蒸馏失败 → batch 仍 inflight、未 processed。
+    outcome1 = await service.maybe_run_mining()
+    assert outcome1.cluster_count == 1
+    assert outcome1.candidate_count == 0
+    assert outcome1.error
+    watermark1 = await env["candidate_store"].load_watermark()
+    assert watermark1.inflight is not None
+    assert watermark1.inflight.attempt == 1
+    assert not set(task_ids).issubset(set(watermark1.processed_task_ids))
+
+    # 第二次重试：蒸馏成功 → Candidate 创建 + batch processed。
+    outcome2 = await service.maybe_run_mining()
+    assert outcome2.candidate_count == 1
+    watermark2 = await env["candidate_store"].load_watermark()
+    assert watermark2.inflight is None
+    assert set(task_ids).issubset(set(watermark2.processed_task_ids))
+
+
+# ---------------------------------------------------------------------------
+# 12. failed task_update 不能进入 "Task 变更"
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_failed_task_update_not_in_task_changes(tmp_path: Path) -> None:
+    """失败的 task_update 只进入"失败工具调用"，不视为真实状态变化。"""
+    env, _ = await _make_env(tmp_path)
+    task_id = await _create_completed(
+        env["task_store"],
+        title="修复报错",
+        run_ids=("r1",),
+    )
+    task = await env["task_store"].get(task_id)
+    assert task is not None
+    events = (
+        _tool_started("r1", 1, "task_update", {"task_id": task_id, "goal": "新目标"}),
+        _tool_completed("r1", 2, "task_update", {"task_id": task_id, "goal": "新目标"}),
+        _tool_started(
+            "r1", 3, "task_update",
+            {"task_id": task_id, "constraints": ["不要重装"]},
+        ),
+        _tool_completed(
+            "r1", 4, "task_update",
+            {"task_id": task_id, "constraints": ["不要重装"]},
+            success=False,
+            error="boom",
+        ),
+    )
+    builder = TraceEvidenceBuilder(_settings(tmp_path))
+    text = builder.build(task, events)
+    # 成功的 task_update 进入 Task 变更。
+    assert "goal: 新目标" in text
+    # 失败的 task_update 只进失败工具调用。
+    assert "失败工具调用" in text
+    assert "boom" in text
+    # 失败的不进 Task 变更。
+    assert "constraints added: 不要重装" not in text

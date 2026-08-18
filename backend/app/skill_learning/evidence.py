@@ -69,7 +69,13 @@ class TraceEvidenceBuilder:
                     failed_calls.append(
                         f"{tool_name}: {result.error or 'failed'}"
                     )
-                if tool_name in _TASK_TOOL_NAMES and result is not None:
+                # 只有成功的 task_create/task_update 才算真实状态变化；
+                # 失败的 task_update 只进"失败工具调用"，不进"Task 变更"。
+                if (
+                    tool_name in _TASK_TOOL_NAMES
+                    and result is not None
+                    and result.success
+                ):
                     summary = self._task_tool_summary(event)
                     if summary:
                         task_updates.append(summary)

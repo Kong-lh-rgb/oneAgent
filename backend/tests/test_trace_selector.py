@@ -323,3 +323,43 @@ def test_overlapping_ranges_deduplicate() -> None:
     # s1:[2,6] ∪ s2:[3,5] = {2,3,4,5,6}，无重复、顺序不变。
     assert selected == [2, 3, 4, 5, 6]
     assert len(selected) == len(set(selected))
+
+
+# ---------------------------------------------------------------------------
+# 11. 重复 in_progress：保留最早的 start anchor，不因续跑 in_progress 丢失早期 Trace
+# ---------------------------------------------------------------------------
+
+
+def test_repeated_in_progress_keeps_earliest_segment() -> None:
+    """同一 TaskStep 在多个 Run 重复收到 in_progress → 保留最早那段执行。"""
+    task = _task(run_ids=("r1", "r2", "r3"))
+    run1 = _run(
+        _tool_event(
+            "r1", 1, 2, "task_update",
+            {"task_id": TASK_A, "step_id": "s1", "step_status": "in_progress"},
+        ),  # 最早的 start anchor
+        _tool_event("r1", 2, 3, "read_file", {}),
+    )
+    run2 = _run(
+        _tool_event("r2", 1, 1, "read_file", {}),
+        _tool_event(
+            "r2", 2, 2, "task_update",
+            {"task_id": TASK_A, "step_id": "s1", "step_status": "in_progress"},
+        ),  # 重复 in_progress → continuation，不重置
+        _tool_event("r2", 3, 3, "run_pytest", {}, success=False),
+    )
+    run3 = _run(
+        _tool_event("r3", 1, 1, "read_file", {}),
+        _tool_event("r3", 2, 2, "edit_file", {}),
+        _tool_event("r3", 3, 3, "run_pytest", {}),
+        _tool_event(
+            "r3", 4, 4, "task_update",
+            {"task_id": TASK_A, "step_id": "s1", "step_status": "done",
+             "step_note": "ok"},
+        ),
+    )
+    selector = TaskTraceSelector()
+    # run-1（最早 in_progress）必须包含：r1[2,3] + r2[1,2,3] + r3[1,2,3,4]。
+    assert _selected_steps(
+        selector, task, {"r1": run1, "r2": run2, "r3": run3}
+    ) == [2, 3, 1, 2, 3, 1, 2, 3, 4]

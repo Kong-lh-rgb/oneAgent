@@ -448,6 +448,39 @@
 - [x] 全量：`pytest` 528 通过（+7 Gate 测试）、`ruff`、`compileall`、
   `git diff --check` 全部通过
 
+### 修复：锁版本前 3 个 P1（不改主架构）
+
+#### P1-1：TaskTraceSelector 重复 in_progress 覆盖最早 start anchor
+- [x] 根因：同一 TaskStep 再次收到 in_progress 会直接覆盖 `open_segment`，更早的执行
+  Trace 丢失
+- [x] 修复：已有未闭合 in_progress 时，后续 in_progress 视为 continuation，保留最早的
+  start anchor，直到 done / blocked 才闭合
+- [x] 测试：跨多个 Run 重复 in_progress，Evidence 必须包含最早那段执行
+  （r1[2,3] + r2[1,2,3] + r3[1,2,3,4]）
+
+#### P1-2：Distillation 失败提前 processed batch
+- [x] 根因：Pattern Mining 成功后就推进 watermark 到 processed，再做 Distillation；
+  蒸馏失败时该批永久失去重试机会
+- [x] 修复：有 clusters 时先保持 batch inflight，完成全部 Cluster 的
+  Evidence → Distillation → Candidate 后再标记 processed；某 Cluster 蒸馏失败 →
+  保留 inflight（attempt+1）供下次触发点重试，达到 max_attempts 才放弃；
+  已创建的 Candidate 靠 duplicate-source / pending 去重避免重试重复创建；
+  无 cluster 仍直接 processed
+- [x] 测试：mining 成功 → distill 失败 → batch 仍 inflight / 未 processed →
+  下次重试成功创建 Candidate 并 processed
+
+#### P1-3：failed task_update 进入 "Task 变更"
+- [x] 根因：TraceEvidenceBuilder 对 task_create/task_update 的 Task 变更摘要不检查
+  result.success，失败调用同时出现在"失败工具调用"和"Task 变更"
+- [x] 修复：result.success == true 才生成 Task 变更摘要；failed task_update 只进
+  "失败工具调用"
+- [x] 测试：成功 task_update 进 Task 变更，失败 task_update 只进失败调用、不进
+  Task 变更
+
+#### 验证
+- [x] 全量：`pytest` 531 通过（+3 P1 回归）、`ruff`、`compileall`、
+  `git diff --check` 全部通过；未改 Task schema / Mining / Distillation Prompt
+
 ---
 ## 2026-08-16
 

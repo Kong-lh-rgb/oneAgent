@@ -284,20 +284,20 @@ class SkillLearningService:
                 error=mining.error,
             )
 
-        # 3) 成功：先推进 watermark（无论有无 cluster）。
-        new_processed = tuple(sorted(processed | set(scan_ids)))
-        await self.candidate_store.save_watermark(
-            watermark.model_copy(
-                update={
-                    "processed_task_ids": new_processed,
-                    "pending_task_ids": new_pending,
-                    "inflight": None,
-                    "last_error": None,
-                    "last_mining_at": datetime.now(UTC),
-                }
-            )
-        )
+        # 3) 成功（mining 无 error）。没有 cluster → 直接 processed。
         if not mining.clusters:
+            new_processed = tuple(sorted(processed | set(scan_ids)))
+            await self.candidate_store.save_watermark(
+                watermark.model_copy(
+                    update={
+                        "processed_task_ids": new_processed,
+                        "pending_task_ids": new_pending,
+                        "inflight": None,
+                        "last_error": None,
+                        "last_mining_at": datetime.now(UTC),
+                    }
+                )
+            )
             return SkillLearningOutcome(
                 triggered=True,
                 pending_count=len(new_pending),
@@ -313,7 +313,10 @@ class SkillLearningService:
                 total_duration_ms=pattern_duration,
             )
 
-        # 4) 每个 Cluster：Evidence → Distillation → Candidate（pending）。
+        # 4) 有 clusters：先保持 batch inflight，完成全部 Cluster 的 Evidence →
+        #    Distillation → Candidate 后再标记 processed。某个 Cluster 蒸馏失败时
+        #    保留 inflight 供后续触发点重试（不提前 processed，已创建的 Candidate
+        #    靠 duplicate-source / pending 去重，避免重试重复创建）。
         created: list[SkillCandidate] = []
         errors: list[str] = []
         distillations: list[DistillationRecord] = []
@@ -380,6 +383,100 @@ class SkillLearningService:
 
         total_usage = _add_usage(usage, distill_usage)
         total_duration = pattern_duration + distill_duration
+
+        if errors:
+            # 蒸馏部分失败：不 processed，保留 inflight 供下次触发点重试；
+            # 达到 max_attempts 才放弃（标记 processed，防无限重试）。
+            distill_error = "; ".join(errors)
+            new_attempt = inflight.attempt + 1
+            if new_attempt >= self.settings.skill_learning_max_attempts:
+                new_processed = tuple(sorted(processed | set(scan_ids)))
+                await self.candidate_store.save_watermark(
+                    watermark.model_copy(
+                        update={
+                            "processed_task_ids": new_processed,
+                            "pending_task_ids": new_pending,
+                            "inflight": None,
+                            "last_error": distill_error,
+                            "last_mining_at": datetime.now(UTC),
+                        }
+                    )
+                )
+                return SkillLearningOutcome(
+                    triggered=True,
+                    pending_count=len(new_pending),
+                    scanned_task_count=len(cards),
+                    cluster_count=len(mining.clusters),
+                    clusters=mining.clusters,
+                    candidate_count=len(created),
+                    distillations=tuple(distillations),
+                    usage=total_usage,
+                    pattern_mining_calls=1,
+                    distillation_calls=distill_calls,
+                    input_tokens=total_usage.input_tokens,
+                    output_tokens=total_usage.output_tokens,
+                    total_tokens=total_usage.total_tokens,
+                    pattern_mining_duration_ms=pattern_duration,
+                    distillation_duration_ms=distill_duration,
+                    total_duration_ms=total_duration,
+                    error=(
+                        "distillation failed after "
+                        f"{self.settings.skill_learning_max_attempts} attempts: "
+                        f"{distill_error}"
+                    ),
+                )
+            await self.candidate_store.save_watermark(
+                watermark.model_copy(
+                    update={
+                        "inflight": inflight.model_copy(
+                            update={
+                                "attempt": new_attempt,
+                                "last_error": distill_error,
+                            }
+                        ),
+                        "last_error": distill_error,
+                    }
+                )
+            )
+            logger.warning(
+                "distillation failed (attempt %s/%s): %s",
+                new_attempt,
+                self.settings.skill_learning_max_attempts,
+                distill_error,
+            )
+            return SkillLearningOutcome(
+                triggered=True,
+                pending_count=len(new_pending),
+                scanned_task_count=len(cards),
+                cluster_count=len(mining.clusters),
+                clusters=mining.clusters,
+                candidate_count=len(created),
+                distillations=tuple(distillations),
+                usage=total_usage,
+                pattern_mining_calls=1,
+                distillation_calls=distill_calls,
+                input_tokens=total_usage.input_tokens,
+                output_tokens=total_usage.output_tokens,
+                total_tokens=total_usage.total_tokens,
+                pattern_mining_duration_ms=pattern_duration,
+                distillation_duration_ms=distill_duration,
+                total_duration_ms=total_duration,
+                error=distill_error,
+            )
+
+        # 全部 Cluster 处理成功（含 action=none）→ 标记 processed。
+        new_processed = tuple(sorted(processed | set(scan_ids)))
+        await self.candidate_store.save_watermark(
+            watermark.model_copy(
+                update={
+                    "processed_task_ids": new_processed,
+                    "pending_task_ids": new_pending,
+                    "inflight": None,
+                    "last_error": None,
+                    "last_mining_at": datetime.now(UTC),
+                }
+            )
+        )
         return SkillLearningOutcome(
             triggered=True,
             pending_count=len(new_pending),

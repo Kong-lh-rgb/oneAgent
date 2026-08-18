@@ -197,7 +197,10 @@ class TaskTraceSelector:
             open_segment: tuple[int, str, int] | None = None
             for run_index, run_id, step, status in items:
                 if status == "in_progress":
-                    open_segment = (run_index, run_id, step)
+                    if open_segment is None:
+                        open_segment = (run_index, run_id, step)
+                    # 已有未闭合的 in_progress：视为 continuation，保留最早的
+                    # start anchor，不重置，直到 done / blocked 才闭合。
                 else:  # done / blocked
                     if open_segment is None:
                         # 没有 in_progress 锚点 → bounded backward window。
