@@ -54,13 +54,16 @@ cd oneAgent/backend
 
 python -m venv .venv
 pip install -r requirements.txt
+```
 
+```bash
 cp .env.example .env
 .venv/bin/python -m app.models.chat
+```
 
 目前支持 OpenAI、Qwen、DeepSeek 和 Anthropic。
 
-```md
+```text
 🏗️ What's inside?
 Conversation   → 发生过什么
 Task           → 现在正在做什么
@@ -68,5 +71,7 @@ Memory         → 以后还应该知道什么
 Skill          → 以后这种事情怎么做
 Trace          → 这次具体怎么执行的
 Checkpoint     → 中断后从哪里继续
+```
+
 oneAgent 试着把这些东西真正拆开，
 再由 Agent Runtime 在每次模型调用前组合成当前需要的 Context。
