@@ -56,9 +56,45 @@ Rules:
   (same meaning, even if the proposed name differs slightly), return action
   "none" so we do not create a duplicate pending candidate. Do not invent a
   merge; just avoid duplicates.
+- The "related_skills" field below contains the FULL body of up to 3 existing
+  skills that were pre-selected as plausibly related (name + description alone
+  cannot prove coverage). Read their bodies carefully before choosing action:
+  - If a related skill's body ALREADY fully covers this procedure (the same
+    stable steps / pitfalls / verification), return action "none".
+  - If the procedure belongs to the SAME existing skill but multiple completed
+    tasks provide stable NEW steps / pitfalls / verification that are NOT in its
+    body, return action "update" with that existing_skill_name set.
+  - If no related skill's body covers the procedure, return action "create".
+  If no related_skills were provided, decide based on name + description alone.
 - procedure: the ordered stable steps. pitfalls: repeated mistakes to avoid.
   verification: how to confirm the procedure works.
 - Do not invent evidence not present in the provided execution summaries. If the
   evidence is too thin to support a stable procedure, return action "none"."""  # noqa: E501
 
-__all__ = ["_DISTILLATION_PROMPT", "_PATTERN_MINING_PROMPT"]
+
+_RELEVANCE_PROMPT = """You are OneAgent's Skill Relevance Selector.
+
+A Pattern Miner found a cluster of similar COMPLETED tasks that may be worth
+learning as a procedure. You receive the cluster summary and the catalog of
+existing skills (name + description ONLY, no body).
+
+Your only job: decide which existing skills (if any) are semantically related to
+this cluster, so their full body can be loaded and checked for actual coverage.
+You do NOT decide create/update/none; you only pre-filter.
+
+Rules:
+- Output strict JSON only, no markdown fence:
+  {"related_skills": ["name1", ...]}
+- A skill is related only if it plausibly covers this kind of task (same domain /
+  same procedure area, e.g. both are about debugging Python errors). Do NOT list
+  clearly unrelated skills.
+- Return at most 3 skill names. Return {"related_skills": []} when nothing is
+  clearly related.
+- This is a cheap pre-filter: prefer precision (only clearly-related skills) over
+  recall. Missing a skill here only means we treat it as unrelated."""  # noqa: E501
+
+__all__ = [
+    "_DISTILLATION_PROMPT",
+    "_PATTERN_MINING_PROMPT",
+    "_RELEVANCE_PROMPT",
+]

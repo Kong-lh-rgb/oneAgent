@@ -40,6 +40,20 @@ logger = logging.getLogger("oneagent.skill_learning.service")
 _MAX_COMPLETED_TASKS = 1_000_000
 
 
+class DistillationRecord(BaseModel):
+    """一次蒸馏的报告记录（action=none 也保留模型实际判断与理由）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    cluster_name: str
+    action: str | None = None
+    reason: str | None = None
+    proposed_name: str | None = None
+    existing_skill_name: str | None = None
+    related_skill_names: tuple[str, ...] = ()
+    error: str | None = None
+
+
 class SkillLearningOutcome(BaseModel):
     """一次 maybe_run_mining 的结构化结果（含完整 Usage 聚合）。"""
 
@@ -52,6 +66,7 @@ class SkillLearningOutcome(BaseModel):
     cluster_count: int = 0
     clusters: tuple[TaskPatternCluster, ...] = ()
     candidate_count: int = 0
+    distillations: tuple[DistillationRecord, ...] = ()
     usage: ModelUsage = Field(default_factory=ModelUsage)
     pattern_mining_calls: int = 0
     distillation_calls: int = 0
@@ -299,6 +314,7 @@ class SkillLearningService:
         # 4) 每个 Cluster：Evidence → Distillation → Candidate（pending）。
         created: list[SkillCandidate] = []
         errors: list[str] = []
+        distillations: list[DistillationRecord] = []
         distill_usage = ModelUsage()
         distill_duration = 0.0
         distill_calls = 0
@@ -329,8 +345,20 @@ class SkillLearningService:
                 run_ids=run_ids_map,
                 catalog=catalog,
                 pending_candidates=pending_candidates,
+                skill_loader=self.skill_store.load,
             )
-            distill_calls += 1
+            distillations.append(
+                DistillationRecord(
+                    cluster_name=cluster.pattern_name,
+                    action=distill.action,
+                    reason=distill.reason,
+                    proposed_name=distill.proposed_name,
+                    existing_skill_name=distill.existing_skill_name,
+                    related_skill_names=distill.related_skill_names,
+                    error=distill.error,
+                )
+            )
+            distill_calls += distill.model_call_count
             distill_usage = _add_usage(distill_usage, distill.usage)
             distill_duration += distill.duration_ms
             if distill.error:
@@ -357,6 +385,7 @@ class SkillLearningService:
             cluster_count=len(mining.clusters),
             clusters=mining.clusters,
             candidate_count=len(created),
+            distillations=tuple(distillations),
             usage=total_usage,
             pattern_mining_calls=1,
             distillation_calls=distill_calls,

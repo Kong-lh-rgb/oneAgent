@@ -2,65 +2,15 @@ id: learning-06
 group: learning
 name: Candidate 未经确认 → SkillStore 不可见
 user_input: "learning pipeline"
-initial_tasks:
-  - alias: p1
-    title: 修复 Python ImportError
-    goal: 恢复启动
-    status: completed
-    run_ids: [r1]
-    steps:
-      - {id: s1, title: 复现, status: done, note: 完成}
-      - {id: s2, title: 读 traceback, status: done, note: 完成}
-      - {id: s3, title: 修复, status: done, note: 完成}
-  - alias: p2
-    title: 修复 Python TypeError
-    goal: 恢复启动
-    status: completed
-    run_ids: [r2]
-    steps:
-      - {id: s1, title: 复现, status: done, note: 完成}
-      - {id: s2, title: 读 traceback, status: done, note: 完成}
-      - {id: s3, title: 修复, status: done, note: 完成}
-  - alias: p3
-    title: 修复 Python KeyError
-    goal: 恢复启动
-    status: completed
-    run_ids: [r3]
-    steps:
-      - {id: s1, title: 复现, status: done, note: 完成}
-      - {id: s2, title: 读 traceback, status: done, note: 完成}
-      - {id: s3, title: 修复, status: done, note: 完成}
-initial_runs:
-  - run_id: r1
-    events:
-      - {type: tool_started, tool_name: read_file, arguments: {path: main.py}}
-      - {type: tool_completed, tool_name: read_file, arguments: {path: main.py}}
-      - {type: tool_started, tool_name: run_pytest, arguments: {}}
-      - {type: tool_completed, tool_name: run_pytest, arguments: {}, success: false, error: ImportError}
-      - {type: tool_started, tool_name: task_update, arguments: {status: completed}}
-      - {type: tool_completed, tool_name: task_update, arguments: {status: completed}}
-      - {type: agent_completed}
-  - run_id: r2
-    events:
-      - {type: tool_started, tool_name: read_file, arguments: {path: app.py}}
-      - {type: tool_completed, tool_name: read_file, arguments: {path: app.py}}
-      - {type: tool_started, tool_name: run_pytest, arguments: {}}
-      - {type: tool_completed, tool_name: run_pytest, arguments: {}, success: false, error: TypeError}
-      - {type: tool_started, tool_name: task_update, arguments: {status: completed}}
-      - {type: tool_completed, tool_name: task_update, arguments: {status: completed}}
-      - {type: agent_completed}
-  - run_id: r3
-    events:
-      - {type: tool_started, tool_name: read_file, arguments: {path: models.py}}
-      - {type: tool_completed, tool_name: read_file, arguments: {path: models.py}}
-      - {type: tool_started, tool_name: run_pytest, arguments: {}}
-      - {type: tool_completed, tool_name: run_pytest, arguments: {}, success: false, error: KeyError}
-      - {type: tool_started, tool_name: task_update, arguments: {status: completed}}
-      - {type: tool_completed, tool_name: task_update, arguments: {status: completed}}
-      - {type: agent_completed}
+# Human Gate 机制测试：直接预置 Candidate，不跑真实模型产候选。
+initial_pending_candidates:
+  - proposed_name: python-runtime-debug
+    description: 已待评审的 Python 调试候选
+    action: create
+    source_task_ids: [seed-a, seed-b, seed-c]
 expect:
   learning:
     batch_size: 3
+    human_gate_only: true
     candidate_count: 1
     created_skill_names: []
-    expected_pattern_task_aliases: [p1, p2, p3]

@@ -229,13 +229,18 @@ async def run_learning_scenario(
         default_provider=provider,
         default_model=model,
     )
-    try:
-        mining = await service.maybe_run_mining()
-        mining_error = getattr(mining, "error", None)
-        error = mining_error if isinstance(mining_error, str) else None
-    except Exception as exc:  # noqa: BLE001
-        mining = None
-        error = f"{type(exc).__name__}: {exc}"
+    # Human Gate 机制测试：预置 Candidate，不跑真实模型产候选，
+    # 避免 Distiller 偶发返回 none 把机制本身判失败。
+    mining = None
+    error = None
+    if not learning.human_gate_only:
+        try:
+            mining = await service.maybe_run_mining()
+            mining_error = getattr(mining, "error", None)
+            error = mining_error if isinstance(mining_error, str) else None
+        except Exception as exc:  # noqa: BLE001
+            mining = None
+            error = f"{type(exc).__name__}: {exc}"
 
     from app.skill_learning import SkillCandidateStatus
 

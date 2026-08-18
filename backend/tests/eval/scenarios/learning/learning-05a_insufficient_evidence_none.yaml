@@ -1,6 +1,6 @@
-id: learning-05
+id: learning-05a
 group: learning
-name: 已存在 debug-python Skill + 新类似 Task → UPDATE 而不是 CREATE
+name: 证据不足 + 已有 debug-python Skill 覆盖 → 预期 NONE
 user_input: "learning pipeline"
 initial_skills:
   - name: debug-python
@@ -18,8 +18,7 @@ initial_tasks:
     run_ids: [r1]
     steps:
       - {id: s1, title: 复现错误, status: done, note: 已复现}
-      - {id: s2, title: 确认 virtualenv, status: done, note: 是关键步骤}
-      - {id: s3, title: 修复并验证, status: done, note: 已验证}
+      - {id: s2, title: 修复并验证, status: done, note: 已验证}
   - alias: v2
     title: 排查 Python 依赖报错
     goal: 恢复运行
@@ -27,8 +26,7 @@ initial_tasks:
     run_ids: [r2]
     steps:
       - {id: s1, title: 复现错误, status: done, note: 已复现}
-      - {id: s2, title: 确认 virtualenv, status: done, note: 是关键步骤}
-      - {id: s3, title: 修复并验证, status: done, note: 已验证}
+      - {id: s2, title: 修复并验证, status: done, note: 已验证}
   - alias: v3
     title: 排查 Python 路径报错
     goal: 恢复启动
@@ -36,8 +34,7 @@ initial_tasks:
     run_ids: [r3]
     steps:
       - {id: s1, title: 复现错误, status: done, note: 已复现}
-      - {id: s2, title: 确认 virtualenv, status: done, note: 是关键步骤}
-      - {id: s3, title: 修复并验证, status: done, note: 已验证}
+      - {id: s2, title: 修复并验证, status: done, note: 已验证}
   - alias: v4
     title: 排查 Python 环境报错
     goal: 恢复运行
@@ -45,8 +42,9 @@ initial_tasks:
     run_ids: [r4]
     steps:
       - {id: s1, title: 复现错误, status: done, note: 已复现}
-      - {id: s2, title: 确认 virtualenv, status: done, note: 是关键步骤}
-      - {id: s3, title: 修复并验证, status: done, note: 已验证}
+      - {id: s2, title: 修复并验证, status: done, note: 已验证}
+# 证据不足：Trace 只有“复现失败 → 更新元数据”，没有任何证据证明
+# 需要给现有 debug-python Skill 增加新步骤。
 initial_runs:
   - run_id: r1
     events:
@@ -79,8 +77,8 @@ initial_runs:
 expect:
   learning:
     batch_size: 4
-    candidate_count: 1
+    candidate_count: 0
     create_count: 0
-    update_count: 1
-    expected_names: [debug-python]
+    update_count: 0
+    expected_action: none
     expected_pattern_task_aliases: [v1, v2, v3, v4]

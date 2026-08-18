@@ -1023,6 +1023,12 @@ async def _run_batch(
         task_ids.append(task_id)
     responses: list = [_model_response(_mining_cluster_json(task_ids))]
     if distill_response is not None:
+        # catalog 非空时 distiller 会先做相关性筛选（额外一次模型调用）。
+        catalog = await env["skill_store"].catalog()
+        if catalog:
+            responses.append(
+                _model_response('{"related_skills": ["debug-python"]}')
+            )
         responses.append(_model_response(distill_response))
     registry, _ = _fake_registry(responses)
     service = SkillLearningService(
@@ -1152,3 +1158,277 @@ async def test_accepted_skill_in_catalog_drives_update(tmp_path: Path) -> None:
     assert candidates[0].action is SkillCandidateAction.UPDATE
     assert candidates[0].existing_skill_name == "debug-python"
     assert candidates[0].proposed_name == "debug-python"
+
+
+# ---------------------------------------------------------------------------
+# 8. Progressive Disclosure：Distiller 按需加载相关 Skill 正文
+# ---------------------------------------------------------------------------
+
+
+async def _run_progressive_disclosure(
+    env,
+    root,
+    *,
+    relevance: list[str],
+    distill: str,
+):
+    """创建 3 个 Python 环境类任务，跑 mining + relevance + distill，返回 adapter。"""
+
+    task_ids: list[str] = []
+    for index in range(3):
+        task_id = await _create_completed(
+            env["task_store"],
+            title=f"排查 Python 环境报错{index}",
+            steps=("复现", "确认 virtualenv", "修复", "验证"),
+            run_ids=(f"r{index}",),
+        )
+        task_ids.append(task_id)
+    responses = [
+        _model_response(_mining_cluster_json(task_ids)),
+        _model_response(
+            json.dumps({"related_skills": relevance}, ensure_ascii=False)
+        ),
+        _model_response(distill),
+    ]
+    registry, adapter = _fake_registry(responses)
+    service = SkillLearningService(
+        env["task_store"],
+        env["trace_store"],
+        env["skill_store"],
+        env["candidate_store"],
+        registry,
+        settings=_settings(root, batch_size=3),
+        default_provider="fake",
+    )
+    outcome = await service.maybe_run_mining()
+    return service, outcome, adapter
+
+
+@pytest.mark.asyncio
+async def test_distiller_returns_none_when_skill_body_covers_procedure(
+    tmp_path: Path,
+) -> None:
+    """Existing Skill 正文已包含 virtualenv 检查，新 Task 同样流程 → NONE。
+
+    验证 Distiller 确实把相关 Skill 的完整正文传给了最终判断（progressive
+    disclosure 生效），模型基于正文判断"已覆盖"→ none。
+    """
+    env, root = await _make_env(tmp_path)
+    skill_root = env["skill_store"].project_dir / "debug-python"
+    skill_root.mkdir(parents=True)
+    (skill_root / "SKILL.md").write_text(
+        "---\nname: debug-python\ndescription: 排查 Python 虚拟环境报错\n---\n\n"
+        "# Debug Python\n\n1. 复现\n2. 确认 virtualenv（内置步骤）\n3. 修复并验证",
+        encoding="utf-8",
+    )
+    _, outcome, adapter = await _run_progressive_disclosure(
+        env,
+        root,
+        relevance=["debug-python"],
+        distill=json.dumps(
+            {"action": "none", "reason": "正文已包含确认 virtualenv 步骤"},
+            ensure_ascii=False,
+        ),
+    )
+    assert outcome.candidate_count == 0
+    # 最终蒸馏请求确实携带了 debug-python 完整正文。
+    final_content = adapter.requests[-1].messages[-1].content or ""
+    assert "内置步骤" in final_content
+    assert '"related_skills"' in final_content
+
+
+@pytest.mark.asyncio
+async def test_distiller_loads_related_skill_body_for_update(
+    tmp_path: Path,
+) -> None:
+    """Existing Skill 正文不含 virtualenv，多个 Task 稳定证明是必要步骤 → UPDATE。
+
+    验证正文被加载，且模型基于正文差异选择 update 而非 create。
+    """
+    env, root = await _make_env(tmp_path)
+    skill_root = env["skill_store"].project_dir / "debug-python"
+    skill_root.mkdir(parents=True)
+    (skill_root / "SKILL.md").write_text(
+        "---\nname: debug-python\ndescription: 排查 Python 虚拟环境报错\n---\n\n"
+        "# Debug Python\n\n1. 复现\n2. 读 traceback\n3. 修复并验证",
+        encoding="utf-8",
+    )
+    _, outcome, adapter = await _run_progressive_disclosure(
+        env,
+        root,
+        relevance=["debug-python"],
+        distill=_DISTILL_UPDATE_JSON,
+    )
+    assert outcome.candidate_count == 1
+    candidates = await service_candidates(env)
+    assert candidates[0].action is SkillCandidateAction.UPDATE
+    assert candidates[0].existing_skill_name == "debug-python"
+    # 正文（"读 traceback"）确实被加载进最终请求。
+    final_content = adapter.requests[-1].messages[-1].content or ""
+    assert "读 traceback" in final_content
+
+
+@pytest.mark.asyncio
+async def test_distiller_creates_when_related_skill_unrelated(
+    tmp_path: Path,
+) -> None:
+    """catalog 里的 Skill 完全不同领域（relevance 返回空）→ CREATE，且不加载正文。"""
+    env, root = await _make_env(tmp_path)
+    skill_root = env["skill_store"].project_dir / "weekly-report"
+    skill_root.mkdir(parents=True)
+    (skill_root / "SKILL.md").write_text(
+        "---\nname: weekly-report\ndescription: 撰写每周工作周报\n---\n\n"
+        "# 周报\n\n1. 收集信息\n2. 写总结",
+        encoding="utf-8",
+    )
+    _, outcome, adapter = await _run_progressive_disclosure(
+        env,
+        root,
+        relevance=[],
+        distill=_DISTILL_CREATE_JSON,
+    )
+    assert outcome.candidate_count == 1
+    candidates = await service_candidates(env)
+    assert candidates[0].action is SkillCandidateAction.CREATE
+    # 无关 skill 的正文没有被加载进最终请求。
+    final_content = adapter.requests[-1].messages[-1].content or ""
+    assert '"related_skills":[]' in final_content
+    assert "写总结" not in final_content
+
+
+@pytest.mark.asyncio
+async def test_update_candidate_inherits_description_when_model_omits(
+    tmp_path: Path,
+) -> None:
+    """UPDATE 时模型省略 description（常见于只补步骤）→ 从 catalog 继承，不被丢弃。"""
+    env, root = await _make_env(tmp_path)
+    skill_root = env["skill_store"].project_dir / "debug-python"
+    skill_root.mkdir(parents=True)
+    description = "排查 Python 虚拟环境报错的标准流程"
+    (skill_root / "SKILL.md").write_text(
+        "---\nname: debug-python\n"
+        f"description: {description}\n---\n\n"
+        "# Debug Python\n\n1. 复现\n2. 读 traceback\n3. 修复并验证",
+        encoding="utf-8",
+    )
+    update_no_desc = json.dumps(
+        {
+            "action": "update",
+            "proposed_name": None,
+            "description": None,
+            "reason": "正文缺 virtualenv 确认步骤",
+            "procedure": ["复现", "确认 virtualenv", "修复", "验证"],
+            "pitfalls": [],
+            "verification": ["pytest 通过"],
+            "existing_skill_name": "debug-python",
+        },
+        ensure_ascii=False,
+    )
+    _, outcome, _ = await _run_progressive_disclosure(
+        env,
+        root,
+        relevance=["debug-python"],
+        distill=update_no_desc,
+    )
+    assert outcome.candidate_count == 1
+    candidates = await service_candidates(env)
+    assert candidates[0].action is SkillCandidateAction.UPDATE
+    assert candidates[0].existing_skill_name == "debug-python"
+    assert candidates[0].description == description
+
+
+@pytest.mark.asyncio
+async def test_update_candidate_uses_model_description_when_provided(
+    tmp_path: Path,
+) -> None:
+    """UPDATE 时模型提供了 description → 使用模型输出，不覆盖为 catalog 描述。"""
+    env, root = await _make_env(tmp_path)
+    skill_root = env["skill_store"].project_dir / "debug-python"
+    skill_root.mkdir(parents=True)
+    catalog_desc = "排查 Python 虚拟环境报错的标准流程"
+    (skill_root / "SKILL.md").write_text(
+        "---\nname: debug-python\n"
+        f"description: {catalog_desc}\n---\n\n"
+        "# Debug Python\n\n1. 复现\n2. 读 traceback\n3. 修复并验证",
+        encoding="utf-8",
+    )
+    model_desc = "模型给的新描述：先确认 virtualenv"
+    update_with_desc = json.dumps(
+        {
+            "action": "update",
+            "proposed_name": None,
+            "description": model_desc,
+            "reason": "补充 virtualenv 步骤",
+            "procedure": ["复现", "确认 virtualenv", "修复", "验证"],
+            "pitfalls": [],
+            "verification": ["pytest 通过"],
+            "existing_skill_name": "debug-python",
+        },
+        ensure_ascii=False,
+    )
+    _, outcome, _ = await _run_progressive_disclosure(
+        env,
+        root,
+        relevance=["debug-python"],
+        distill=update_with_desc,
+    )
+    assert outcome.candidate_count == 1
+    candidates = await service_candidates(env)
+    assert candidates[0].action is SkillCandidateAction.UPDATE
+    assert candidates[0].description == model_desc
+
+
+@pytest.mark.asyncio
+async def test_update_candidate_fails_when_existing_skill_missing(
+    tmp_path: Path,
+) -> None:
+    """UPDATE 指向 catalog 中不存在的 Skill → 明确失败，不静默生成空 description。"""
+    env, root = await _make_env(tmp_path)
+    update_ghost = json.dumps(
+        {
+            "action": "update",
+            "proposed_name": None,
+            "description": None,
+            "reason": "指向不存在的 skill",
+            "procedure": ["复现", "修复"],
+            "pitfalls": [],
+            "verification": ["验证"],
+            "existing_skill_name": "ghost-skill",
+        },
+        ensure_ascii=False,
+    )
+    _, outcome, _ = await _run_batch(
+        env,
+        root,
+        distill_response=update_ghost,
+    )
+    assert outcome.candidate_count == 0
+    assert outcome.error is not None
+    assert "ghost-skill" in outcome.error
+    assert "not found" in outcome.error
+
+
+@pytest.mark.asyncio
+async def test_create_candidate_still_requires_description(tmp_path: Path) -> None:
+    """CREATE 时模型缺失 description → 仍然明确失败（不允许继承或兜底）。"""
+    env, root = await _make_env(tmp_path)
+    create_no_desc = json.dumps(
+        {
+            "action": "create",
+            "proposed_name": "new-skill",
+            "description": None,
+            "reason": "缺少 description",
+            "procedure": ["步骤"],
+            "pitfalls": [],
+            "verification": [],
+        },
+        ensure_ascii=False,
+    )
+    _, outcome, _ = await _run_batch(
+        env,
+        root,
+        distill_response=create_no_desc,
+    )
+    assert outcome.candidate_count == 0
+    assert outcome.error is not None
+    assert "create candidate requires" in outcome.error

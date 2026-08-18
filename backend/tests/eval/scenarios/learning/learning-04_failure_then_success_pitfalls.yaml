@@ -77,6 +77,9 @@ expect:
     batch_size: 4
     candidate_count: 1
     create_count: 1
+    expected_action: create
     expected_names: [ci-cache-recovery]
     expected_pattern_task_aliases: [b1, b2, b3, b4]
-    expected_pitfall_keywords: [cache, reinstall, 缓存, 环境]
+    # pitfall 期望必须来自真实 Trace：run_build 失败(cache lock/corrupt) →
+    # clean_cache → run_build 成功。只写 Trace 里真实存在的内容。
+    expected_pitfall_keywords: [cache, 缓存, log, 日志, retry, 清理]

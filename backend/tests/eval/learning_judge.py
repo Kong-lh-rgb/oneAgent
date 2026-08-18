@@ -30,9 +30,15 @@ class ScenarioVerdict:
     passed: bool
     reasons: list[str] = field(default_factory=list)
     clusters: list[ClusterEval] = field(default_factory=list)
+    pattern_detected: bool | None = None
     action_correct: bool | None = None
+    abstained: bool = False
     false_positive: bool = False
     duplicate_candidate: bool = False
+    negative_scenario: bool = False
+    positive_scenario: bool = False
+    duplicate_scenario: bool = False
+    counts_for_abstention: bool = False
     candidate_actions: tuple[str, ...] = ()
     candidate_names: tuple[str, ...] = ()
     pitfall_recall: float | None = None
@@ -40,12 +46,25 @@ class ScenarioVerdict:
 
 
 def judge_scenario(scenario, outcome) -> ScenarioVerdict:
-    """对一次 Learning 运行给出 PASS / FAIL 与指标。"""
+    """对一次 Learning 运行给出 PASS / FAIL 与指标。
+
+    指标口径（Eval 收口）：
+    - Pattern Detection Recall：positive 场景（expected_pattern_task_aliases 非空）
+      必须记 0 或 1，没发现 cluster 记 0，不能跳过；
+    - Action Accuracy：只看 CREATE / UPDATE / NONE 是否正确（expected_action），
+      不依赖 Skill 名字；
+    - False Positive Rate：只除 negative 场景（no_candidates）；
+    - Duplicate Rate：只除 duplicate 场景（expects_no_duplicate）。
+    """
 
     expect = scenario.expect.learning
     env = outcome.environment
     candidates = list(outcome.candidates)
     mining = outcome.mining
+
+    positive = bool(expect.expected_pattern_task_aliases)
+    negative = expect.no_candidates
+    duplicate_scenario = expect.expects_no_duplicate
 
     actual_names = {candidate.proposed_name for candidate in candidates}
     expected_aliases = {
@@ -61,7 +80,7 @@ def judge_scenario(scenario, outcome) -> ScenarioVerdict:
     false_positive = False
     duplicate = False
 
-    # 1) 无候选期望
+    # 1) 无候选期望（negative 场景）
     if expect.no_candidates:
         if candidates:
             passed = False
@@ -100,7 +119,7 @@ def judge_scenario(scenario, outcome) -> ScenarioVerdict:
             reasons.append(f"update_count={actual} expected {expect.update_count}")
 
     # 5) accept 后应 discover 的 Skill（Live 中候选名不可预知：只要求 accept 产生了
-    #     Skill，并记录实际名字，名字差异不判 FAIL）。
+    #    Skill，并记录实际名字，名字差异不判 FAIL）。
     if expect.created_skill_names:
         if not outcome.created_skills:
             passed = False
@@ -113,7 +132,20 @@ def judge_scenario(scenario, outcome) -> ScenarioVerdict:
                     f"expected names {list(expect.created_skill_names)}"
                 )
 
-    # 6) Cluster Precision / Recall
+    # 6) Pattern Detection（positive 场景必须记 0 或 1）
+    pattern_detected: bool | None = None
+    if positive:
+        detected = any(
+            set(cluster.task_ids) & expected_ids for cluster in clusters
+        ) if expected_ids else bool(clusters)
+        pattern_detected = bool(detected)
+        if not detected:
+            passed = False
+            reasons.append(
+                "pattern not detected (0 clusters or no overlap with expected tasks)"
+            )
+
+    # 7) Cluster Precision / Recall（按已产出 cluster 计算）
     cluster_evals: list[ClusterEval] = []
     for cluster in clusters:
         ids = set(cluster.task_ids)
@@ -133,32 +165,40 @@ def judge_scenario(scenario, outcome) -> ScenarioVerdict:
             )
         )
 
-    # 7) Action Accuracy（仅当期望名字且产出候选时）
+    # 8) Action Accuracy（只看 CREATE / UPDATE / NONE，不依赖名字）
     action_correct: bool | None = None
-    if expect.expected_names:
-        expected_action = "update" if expect.update_count else "create"
-        matched = [
-            c for c in candidates if c.proposed_name in set(expect.expected_names)
-        ]
-        if matched:
-            action_correct = all(c.action.value == expected_action for c in matched)
-            if not action_correct:
-                passed = False
-                reasons.append(
-                    f"action not {expected_action}: "
-                    f"{[c.action.value for c in matched]}"
-                )
+    if expect.expected_action is not None:
+        if expect.expected_action == "none":
+            action_correct = not candidates
+        elif expect.expected_action == "create":
+            action_correct = any(c.action.value == "create" for c in candidates)
+        else:  # update
+            action_correct = any(c.action.value == "update" for c in candidates)
+        if not action_correct:
+            passed = False
+            reasons.append(
+                f"action not {expect.expected_action}: "
+                f"{[c.action.value for c in candidates]}"
+            )
 
-    # 8) Duplicate（同一期望名出现多次 = 重复创建）
-    for expected_name in expect.expected_names:
-        hits = [c for c in candidates if c.proposed_name == expected_name]
-        if len(hits) > 1:
+    # 9) Positive Abstention：positive 且期望 create/update 但无候选
+    counts_for_abstention = bool(
+        positive and expect.expected_action in ("create", "update")
+    )
+    abstained = bool(counts_for_abstention and not candidates)
+
+    # 10) Duplicate（只对 duplicate 场景）：产出数量超过预置数量 = 重复创建
+    if duplicate_scenario:
+        seeded = len(scenario.initial_pending_candidates)
+        if len(candidates) > seeded:
             duplicate = True
-            if expect.candidate_count == 1:
-                passed = False
-                reasons.append(f"duplicate candidate created for {expected_name}")
+            passed = False
+            reasons.append(
+                f"duplicate candidate created (seeded={seeded}, "
+                f"actual={len(candidates)})"
+            )
 
-    # 9) Pitfall Recall
+    # 11) Pitfall Recall
     pitfall_recall: float | None = None
     pitfall_found: tuple[str, ...] = ()
     if expect.expected_pitfall_keywords and candidates:
@@ -178,9 +218,15 @@ def judge_scenario(scenario, outcome) -> ScenarioVerdict:
         passed=passed,
         reasons=reasons,
         clusters=cluster_evals,
+        pattern_detected=pattern_detected,
         action_correct=action_correct,
+        abstained=abstained,
         false_positive=false_positive,
         duplicate_candidate=duplicate,
+        negative_scenario=negative,
+        positive_scenario=positive,
+        duplicate_scenario=duplicate_scenario,
+        counts_for_abstention=counts_for_abstention,
         candidate_actions=tuple(c.action.value for c in candidates),
         candidate_names=tuple(c.proposed_name for c in candidates),
         pitfall_recall=pitfall_recall,
@@ -196,10 +242,21 @@ class LiveSummary:
     passed_runs: int = 0
     precision_values: list[float] = field(default_factory=list)
     recall_values: list[float] = field(default_factory=list)
+    # Pattern Detection Recall（场景级）：positive 场景 detected 数 / positive 场景数。
+    pattern_detected_runs: int = 0
+    pattern_positive_runs: int = 0
+    # Action Accuracy：expected_action 定义的 CREATE / UPDATE / NONE。
     action_total: int = 0
     action_correct: int = 0
+    # Positive Abstention：positive 期望 create/update 但无候选。
+    abstained_runs: int = 0
+    abstention_denominator: int = 0
+    # False Positive：只除 negative 场景。
     false_positive_runs: int = 0
+    negative_runs: int = 0
+    # Duplicate：只除 duplicate 场景。
     duplicate_runs: int = 0
+    duplicate_scenario_runs: int = 0
     pitfall_recalls: list[float] = field(default_factory=list)
     total_model_calls: int = 0
     total_input_tokens: int = 0
@@ -225,16 +282,36 @@ class LiveSummary:
         return sum(self.recall_values) / len(self.recall_values)
 
     @property
+    def pattern_detection_recall(self) -> float | None:
+        if not self.pattern_positive_runs:
+            return None
+        return self.pattern_detected_runs / self.pattern_positive_runs
+
+    @property
     def action_accuracy(self) -> float | None:
         return self.action_correct / self.action_total if self.action_total else None
 
     @property
-    def false_positive_rate(self) -> float:
-        return self.false_positive_runs / self.total_runs if self.total_runs else 0.0
+    def positive_abstention_rate(self) -> float | None:
+        if not self.abstention_denominator:
+            return None
+        return self.abstained_runs / self.abstention_denominator
 
     @property
-    def duplicate_candidate_rate(self) -> float:
-        return self.duplicate_runs / self.total_runs if self.total_runs else 0.0
+    def false_positive_rate(self) -> float | None:
+        return (
+            self.false_positive_runs / self.negative_runs
+            if self.negative_runs
+            else None
+        )
+
+    @property
+    def duplicate_candidate_rate(self) -> float | None:
+        return (
+            self.duplicate_runs / self.duplicate_scenario_runs
+            if self.duplicate_scenario_runs
+            else None
+        )
 
     @property
     def avg_pitfall_recall(self) -> float | None:
@@ -248,7 +325,17 @@ class LiveSummary:
 
     @property
     def avg_tokens_per_batch(self) -> float:
+        """平均每个 eval batch（一次 run）的 tokens。"""
         return self.total_tokens / self.total_runs if self.total_runs else 0.0
+
+    @property
+    def avg_tokens_per_scanned_task(self) -> float | None:
+        """平均每个被扫描 Task 的 tokens（仅统计触发了 mining 的 run）。"""
+        return (
+            self.total_tokens / self.total_scanned_tasks
+            if self.total_scanned_tasks
+            else None
+        )
 
 
 def aggregate(verdicts: list[ScenarioVerdict], outcomes: list) -> LiveSummary:
@@ -269,14 +356,26 @@ def aggregate(verdicts: list[ScenarioVerdict], outcomes: list) -> LiveSummary:
             for cluster in verdict.clusters
             if cluster.recall is not None
         )
+        if verdict.pattern_detected is not None:
+            summary.pattern_positive_runs += 1
+            if verdict.pattern_detected:
+                summary.pattern_detected_runs += 1
         if verdict.action_correct is not None:
             summary.action_total += 1
             if verdict.action_correct:
                 summary.action_correct += 1
-        if verdict.false_positive:
-            summary.false_positive_runs += 1
-        if verdict.duplicate_candidate:
-            summary.duplicate_runs += 1
+        if verdict.abstained:
+            summary.abstained_runs += 1
+        if verdict.counts_for_abstention:
+            summary.abstention_denominator += 1
+        if verdict.negative_scenario:
+            summary.negative_runs += 1
+            if verdict.false_positive:
+                summary.false_positive_runs += 1
+        if verdict.duplicate_scenario:
+            summary.duplicate_scenario_runs += 1
+            if verdict.duplicate_candidate:
+                summary.duplicate_runs += 1
         if verdict.pitfall_recall is not None:
             summary.pitfall_recalls.append(verdict.pitfall_recall)
         if outcome is not None:

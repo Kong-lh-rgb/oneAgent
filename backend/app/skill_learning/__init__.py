@@ -23,11 +23,12 @@ from .models import (
     TaskCard,
     TaskPatternCluster,
 )
-from .service import SkillLearningOutcome, SkillLearningService
+from .service import DistillationRecord, SkillLearningOutcome, SkillLearningService
 from .store import InflightBatch, MiningWatermark, SkillCandidateStore
 
 __all__ = [
     "DistillationOutcome",
+    "DistillationRecord",
     "InflightBatch",
     "MiningWatermark",
     "PatternMiningOutcome",

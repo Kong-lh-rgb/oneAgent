@@ -252,16 +252,39 @@ class SkillLearningExpectation(BaseModel):
     expected_names: tuple[str, ...] = ()
     no_candidates: bool = False
     created_skill_names: tuple[str, ...] = ()
-    # 预期属于同一模式簇的 Task alias（用于 Live Eval 计算 Cluster Precision/Recall）。
+    # 期望动作（CREATE / UPDATE / NONE）。Action Accuracy 只按此判定，不依赖名字。
+    expected_action: str | None = None
+    # Human Gate 机制测试：预置 Candidate，不跑真实模型产候选。
+    human_gate_only: bool = False
+    # Duplicate 防重场景：期望模型不重复创建（Duplicate Rate 只除这类场景）。
+    expects_no_duplicate: bool = False
+    # 预期属于同一模式簇的 Task alias（用于 Live Eval 计算 Cluster Precision/Recall
+    # 与 Pattern Detection Recall；非空即 positive 场景）。
     expected_pattern_task_aliases: tuple[str, ...] = ()
     # 期望被提炼进 pitfalls 的关键词（用于 Pitfall Recall 估算）。
     expected_pitfall_keywords: tuple[str, ...] = ()
+
+    @field_validator("expected_action")
+    @classmethod
+    def valid_expected_action(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if normalized not in {"create", "update", "none"}:
+            raise ValueError(
+                f"expected_action must be one of create/update/none: {value}"
+            )
+        return normalized
 
     @model_validator(mode="after")
     def validate_expectation(self) -> SkillLearningExpectation:
         if self.no_candidates and self.candidate_count not in (None, 0):
             raise ValueError(
                 "no_candidates conflicts with a positive candidate_count"
+            )
+        if self.expected_action == "none" and self.candidate_count not in (None, 0):
+            raise ValueError(
+                "expected_action=none conflicts with a positive candidate_count"
             )
         return self
 
@@ -366,6 +389,16 @@ class Scenario(BaseModel):
                 raise ValueError(
                     f"required tools are hidden by allowed_tools: {sorted(hidden)}"
                 )
+
+        learning = self.expect.learning
+        if learning.human_gate_only and not self.initial_pending_candidates:
+            raise ValueError(
+                "human_gate_only learning scenarios must seed pending candidates"
+            )
+        if learning.expects_no_duplicate and not self.initial_pending_candidates:
+            raise ValueError(
+                "expects_no_duplicate learning scenarios must seed pending candidates"
+            )
         return self
 
 

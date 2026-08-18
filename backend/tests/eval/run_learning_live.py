@@ -109,6 +109,18 @@ def _run_record(scenario, run_index: int, outcome, verdict: ScenarioVerdict) -> 
             "cluster_count": len(clusters),
             "clusters": clusters,
         },
+        "distillations": [
+            {
+                "cluster_name": d.cluster_name,
+                "action": d.action,
+                "reason": d.reason,
+                "proposed_name": d.proposed_name,
+                "existing_skill_name": d.existing_skill_name,
+                "related_skill_names": list(d.related_skill_names),
+                "error": d.error,
+            }
+            for d in (getattr(mining, "distillations", ()) or ())
+        ],
         "candidates": [_candidate_record(c) for c in outcome.candidates],
         "created_skills": list(outcome.created_skills),
         "error": outcome.error,
@@ -123,6 +135,10 @@ def _run_record(scenario, run_index: int, outcome, verdict: ScenarioVerdict) -> 
         "verdict": {
             "passed": verdict.passed,
             "reasons": verdict.reasons,
+            "pattern_detected": verdict.pattern_detected,
+            "abstained": verdict.abstained,
+            "negative_scenario": verdict.negative_scenario,
+            "duplicate_scenario": verdict.duplicate_scenario,
             "precision": [
                 c.precision for c in verdict.clusters if c.precision is not None
             ],
@@ -254,9 +270,28 @@ def _render_report(
                  f"({summary.passed_runs}/{summary.total_runs})")
     lines.append(f"- cluster precision (avg): {_fmt_opt(summary.avg_precision)}")
     lines.append(f"- cluster recall (avg): {_fmt_opt(summary.avg_recall)}")
-    lines.append(f"- candidate action accuracy: {_fmt_opt(summary.action_accuracy)}")
-    lines.append(f"- false positive rate: {summary.false_positive_rate:.0%}")
-    lines.append(f"- duplicate candidate rate: {summary.duplicate_candidate_rate:.0%}")
+    lines.append(
+        f"- pattern detection recall: {_fmt_opt(summary.pattern_detection_recall)} "
+        f"({summary.pattern_detected_runs}/{summary.pattern_positive_runs})"
+    )
+    lines.append(
+        f"- action accuracy (create/update/none): "
+        f"{_fmt_opt(summary.action_accuracy)} "
+        f"({summary.action_correct}/{summary.action_total})"
+    )
+    lines.append(
+        f"- positive abstention rate: {_fmt_opt(summary.positive_abstention_rate)} "
+        f"({summary.abstained_runs}/{summary.abstention_denominator})"
+    )
+    lines.append(
+        f"- false positive rate: {_fmt_opt(summary.false_positive_rate)} "
+        f"({summary.false_positive_runs}/{summary.negative_runs})"
+    )
+    lines.append(
+        f"- duplicate candidate rate: "
+        f"{_fmt_opt(summary.duplicate_candidate_rate)} "
+        f"({summary.duplicate_runs}/{summary.duplicate_scenario_runs})"
+    )
     lines.append(f"- pitfall recall (avg): {_fmt_opt(summary.avg_pitfall_recall)}")
     lines.append(f"- total model calls: {summary.total_model_calls}")
     lines.append(f"- total input tokens: {summary.total_input_tokens}")
@@ -264,9 +299,27 @@ def _render_report(
     lines.append(f"- total tokens: {summary.total_tokens}")
     lines.append(f"- total duration: {summary.total_duration_ms / 1000:.1f}s")
     lines.append(
-        f"- average tokens / 20-Task batch: {summary.avg_tokens_per_batch:.0f}"
+        f"- avg tokens / eval batch: {summary.avg_tokens_per_batch:.0f}"
     )
-    lines.append(f"- average latency / batch: {summary.avg_duration_ms / 1000:.1f}s")
+    lines.append(
+        f"- avg tokens / scanned task: "
+        f"{_fmt_opt(summary.avg_tokens_per_scanned_task)}"
+    )
+    lines.append(
+        f"- avg latency / eval batch: {summary.avg_duration_ms / 1000:.1f}s"
+    )
+    # 真正 20-Task 场景单独统计成本。
+    twenty_runs = [r for r in runs if r["input"]["completed_task_count"] == 20]
+    if twenty_runs:
+        twenty_tokens = sum(r["usage"]["total_tokens"] for r in twenty_runs)
+        twenty_duration = sum(r["usage"]["duration_ms"] for r in twenty_runs)
+        lines.append(
+            f"- 20-Task 场景单独统计: runs={len(twenty_runs)} · "
+            f"tokens={twenty_tokens} · "
+            f"avg tokens/batch={twenty_tokens / len(twenty_runs):.0f} · "
+            f"duration={twenty_duration / 1000:.1f}s · "
+            f"avg latency/batch={twenty_duration / len(twenty_runs) / 1000:.1f}s"
+        )
     lines.append("")
     lines.append("## Scenario Results")
     lines.append("")
@@ -300,6 +353,29 @@ def _render_run(record: dict) -> list[str]:
         lines.append(json.dumps(pm["clusters"], ensure_ascii=False, indent=2))
         lines.append("```")
     lines.append("")
+    lines.append("Actual Distillation:")
+    if not record["distillations"]:
+        lines.append("（无蒸馏调用）")
+    else:
+        for dist in record["distillations"]:
+            lines.append("```json")
+            lines.append(
+                json.dumps(
+                    {
+                        "cluster": dist["cluster_name"],
+                        "action": dist["action"],
+                        "reason": dist["reason"],
+                        "proposed_name": dist["proposed_name"],
+                        "existing_skill_name": dist["existing_skill_name"],
+                        "related_skills": dist["related_skill_names"],
+                        "error": dist["error"],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            lines.append("```")
+    lines.append("")
     lines.append("Actual Candidates:")
     if not record["candidates"]:
         lines.append("（无候选）")
@@ -327,7 +403,9 @@ def _render_run(record: dict) -> list[str]:
         for reason in v["reasons"]:
             lines.append(f"- {reason}")
     lines.append(
-        f"- precision={_fmt_opt_list(v['precision'])} "
+        f"- pattern_detected={v['pattern_detected']} "
+        f"abstained={v['abstained']} "
+        f"precision={_fmt_opt_list(v['precision'])} "
         f"recall={_fmt_opt_list(v['recall'])} "
         f"action_correct={v['action_correct']} "
         f"false_positive={v['false_positive']} "

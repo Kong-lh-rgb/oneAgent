@@ -67,5 +67,6 @@ expect:
   learning:
     batch_size: 3
     candidate_count: 1
+    expects_no_duplicate: true
     expected_names: [python-runtime-debug]
     expected_pattern_task_aliases: [q1, q2, q3]

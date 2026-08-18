@@ -82,5 +82,6 @@ expect:
     candidate_count: 1
     create_count: 1
     update_count: 0
+    expected_action: create
     expected_names: [python-runtime-debug]
     expected_pattern_task_aliases: [d1, d2, d3, d4]

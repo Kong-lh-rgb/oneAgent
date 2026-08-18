@@ -1,0 +1,125 @@
+id: learning-05c
+group: learning
+name: 已有 Skill 正文已含 virtualenv 检查，新 Task 同样流程 → 预期 NONE
+user_input: "learning pipeline"
+# 与 learning-05b 对照：这里 debug-python 正文已经包含"确认 virtualenv"，
+# 蒸馏阶段模型应看到正文确认已覆盖 → NONE（而不是 UPDATE）。
+initial_skills:
+  - name: debug-python
+    description: 排查 Python 虚拟环境、依赖、路径报错的标准流程
+    body: |
+      # Debug Python
+      1. 复现
+      2. 读 traceback
+      3. 确认 virtualenv
+      4. 修复并验证
+initial_tasks:
+  - alias: v1
+    title: 排查 Python 虚拟环境报错
+    goal: 恢复运行
+    status: completed
+    run_ids: [r1, r2]
+    steps:
+      - {id: s1, title: 复现错误, status: done, note: 已复现}
+      - {id: s2, title: 确认 virtualenv, status: done, note: 每次修复前先确认 virtualenv 是关键步骤}
+      - {id: s3, title: 修复并验证, status: done, note: pytest 通过}
+  - alias: v2
+    title: 排查 Python 依赖报错
+    goal: 恢复运行
+    status: completed
+    run_ids: [r3, r4]
+    steps:
+      - {id: s1, title: 复现错误, status: done, note: 已复现}
+      - {id: s2, title: 确认 virtualenv, status: done, note: 每次修复前先确认 virtualenv 是关键步骤}
+      - {id: s3, title: 修复并验证, status: done, note: pytest 通过}
+  - alias: v3
+    title: 排查 Python 路径报错
+    goal: 恢复启动
+    status: completed
+    run_ids: [r5, r6]
+    steps:
+      - {id: s1, title: 复现错误, status: done, note: 已复现}
+      - {id: s2, title: 确认 virtualenv, status: done, note: 每次修复前先确认 virtualenv 是关键步骤}
+      - {id: s3, title: 修复并验证, status: done, note: pytest 通过}
+  - alias: v4
+    title: 排查 Python 环境报错
+    goal: 恢复运行
+    status: completed
+    run_ids: [r7, r8]
+    steps:
+      - {id: s1, title: 复现错误, status: done, note: 已复现}
+      - {id: s2, title: 确认 virtualenv, status: done, note: 每次修复前先确认 virtualenv 是关键步骤}
+      - {id: s3, title: 修复并验证, status: done, note: pytest 通过}
+initial_runs:
+  - run_id: r1
+    events:
+      - {type: tool_started, tool_name: run_pytest, arguments: {}}
+      - {type: tool_completed, tool_name: run_pytest, arguments: {}, success: false, error: venv}
+      - {type: tool_started, tool_name: run_shell, arguments: {command: 'python -c "import sys; print(sys.prefix)"'}}
+      - {type: tool_completed, tool_name: run_shell, arguments: {command: 'python -c "import sys; print(sys.prefix)"'}, success: true}
+      - {type: tool_started, tool_name: task_update, arguments: {steps: [{id: s1, title: 复现错误}, {id: s2, title: 确认 virtualenv}, {id: s3, title: 修复并验证}], step_id: s2, step_status: done, step_note: 确认 virtualenv 是关键步骤}}
+      - {type: tool_completed, tool_name: task_update, arguments: {steps: [{id: s1, title: 复现错误}, {id: s2, title: 确认 virtualenv}, {id: s3, title: 修复并验证}], step_id: s2, step_status: done, step_note: 确认 virtualenv 是关键步骤}}
+      - {type: agent_completed}
+  - run_id: r2
+    events:
+      - {type: tool_started, tool_name: run_pytest, arguments: {}}
+      - {type: tool_completed, tool_name: run_pytest, arguments: {}, success: true}
+      - {type: tool_started, tool_name: task_update, arguments: {status: completed}}
+      - {type: tool_completed, tool_name: task_update, arguments: {status: completed}}
+      - {type: agent_completed}
+  - run_id: r3
+    events:
+      - {type: tool_started, tool_name: run_pytest, arguments: {}}
+      - {type: tool_completed, tool_name: run_pytest, arguments: {}, success: false, error: venv missing}
+      - {type: tool_started, tool_name: run_shell, arguments: {command: 'python -c "import sys; print(sys.prefix)"'}}
+      - {type: tool_completed, tool_name: run_shell, arguments: {command: 'python -c "import sys; print(sys.prefix)"'}, success: true}
+      - {type: tool_started, tool_name: task_update, arguments: {steps: [{id: s1, title: 复现错误}, {id: s2, title: 确认 virtualenv}, {id: s3, title: 修复并验证}], step_id: s2, step_status: done, step_note: 确认 virtualenv 是关键步骤}}
+      - {type: tool_completed, tool_name: task_update, arguments: {steps: [{id: s1, title: 复现错误}, {id: s2, title: 确认 virtualenv}, {id: s3, title: 修复并验证}], step_id: s2, step_status: done, step_note: 确认 virtualenv 是关键步骤}}
+      - {type: agent_completed}
+  - run_id: r4
+    events:
+      - {type: tool_started, tool_name: run_pytest, arguments: {}}
+      - {type: tool_completed, tool_name: run_pytest, arguments: {}, success: true}
+      - {type: tool_started, tool_name: task_update, arguments: {status: completed}}
+      - {type: tool_completed, tool_name: task_update, arguments: {status: completed}}
+      - {type: agent_completed}
+  - run_id: r5
+    events:
+      - {type: tool_started, tool_name: run_pytest, arguments: {}}
+      - {type: tool_completed, tool_name: run_pytest, arguments: {}, success: false, error: path not found}
+      - {type: tool_started, tool_name: run_shell, arguments: {command: 'python -c "import sys; print(sys.prefix)"'}}
+      - {type: tool_completed, tool_name: run_shell, arguments: {command: 'python -c "import sys; print(sys.prefix)"'}, success: true}
+      - {type: tool_started, tool_name: task_update, arguments: {steps: [{id: s1, title: 复现错误}, {id: s2, title: 确认 virtualenv}, {id: s3, title: 修复并验证}], step_id: s2, step_status: done, step_note: 确认 virtualenv 是关键步骤}}
+      - {type: tool_completed, tool_name: task_update, arguments: {steps: [{id: s1, title: 复现错误}, {id: s2, title: 确认 virtualenv}, {id: s3, title: 修复并验证}], step_id: s2, step_status: done, step_note: 确认 virtualenv 是关键步骤}}
+      - {type: agent_completed}
+  - run_id: r6
+    events:
+      - {type: tool_started, tool_name: run_pytest, arguments: {}}
+      - {type: tool_completed, tool_name: run_pytest, arguments: {}, success: true}
+      - {type: tool_started, tool_name: task_update, arguments: {status: completed}}
+      - {type: tool_completed, tool_name: task_update, arguments: {status: completed}}
+      - {type: agent_completed}
+  - run_id: r7
+    events:
+      - {type: tool_started, tool_name: run_pytest, arguments: {}}
+      - {type: tool_completed, tool_name: run_pytest, arguments: {}, success: false, error: environment mismatch}
+      - {type: tool_started, tool_name: run_shell, arguments: {command: 'python -c "import sys; print(sys.prefix)"'}}
+      - {type: tool_completed, tool_name: run_shell, arguments: {command: 'python -c "import sys; print(sys.prefix)"'}, success: true}
+      - {type: tool_started, tool_name: task_update, arguments: {steps: [{id: s1, title: 复现错误}, {id: s2, title: 确认 virtualenv}, {id: s3, title: 修复并验证}], step_id: s2, step_status: done, step_note: 确认 virtualenv 是关键步骤}}
+      - {type: tool_completed, tool_name: task_update, arguments: {steps: [{id: s1, title: 复现错误}, {id: s2, title: 确认 virtualenv}, {id: s3, title: 修复并验证}], step_id: s2, step_status: done, step_note: 确认 virtualenv 是关键步骤}}
+      - {type: agent_completed}
+  - run_id: r8
+    events:
+      - {type: tool_started, tool_name: run_pytest, arguments: {}}
+      - {type: tool_completed, tool_name: run_pytest, arguments: {}, success: true}
+      - {type: tool_started, tool_name: task_update, arguments: {status: completed}}
+      - {type: tool_completed, tool_name: task_update, arguments: {status: completed}}
+      - {type: agent_completed}
+expect:
+  learning:
+    batch_size: 4
+    candidate_count: 0
+    create_count: 0
+    update_count: 0
+    expected_action: none
+    expected_pattern_task_aliases: [v1, v2, v3, v4]

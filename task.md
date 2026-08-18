@@ -259,6 +259,128 @@
 - [x] 三种结论明确分开：A) 确定性单元测试 501 passed；B) 离线 Fake Eval learning-01..09
   通过；C) 真实模型 Live Eval 见报告（18/27 pass + 完整模型输出与失败分析）
 
+### 完成：Skill Learning V1 Eval 收口（指标修正 + Distillation 真实输出 + 场景修正）
+
+> 不修改主架构、不调 Prompt。目标是测清楚"模型到底卡在 Pattern Mining 还是 Distillation"，
+> 并让 Human Gate 机制测试与模型随机性解耦。
+
+#### 1. Eval 指标修正（`tests/eval/learning_judge.py`）
+- [x] **Pattern Detection Recall**：positive 场景（`expected_pattern_task_aliases` 非空）
+  没发现 cluster 记 0，不再跳过（场景级 0/1，聚合 = detected/positive runs）
+- [x] **Action Accuracy**：只看 `expected_action`（CREATE/UPDATE/NONE），不依赖 Skill 名
+- [x] **False Positive Rate**：只除 negative 场景（`no_candidates`，learning-01/03）
+- [x] **Duplicate Rate**：只除 duplicate 场景（`expects_no_duplicate`，learning-09）
+- [x] 新增 **Positive Abstention Rate**：positive 期望 create/update 但无候选的比例
+
+#### 2. Distillation 真实输出进报告
+- [x] `DistillationOutcome` 增加 `reason`/`proposed_name`/`existing_skill_name`
+  （action=none 也保留模型判断）；`SkillLearningOutcome.distillations` 记录每个 cluster 的
+  action/reason/proposed_name/existing_skill_name/error
+- [x] `run_learning_live.py` 报告新增 "Actual Distillation" 块，action=none 也展示模型
+  为什么不沉淀（含完整 reason）
+
+#### 3. 测试场景修正
+- [x] learning-04：pitfall 期望改为真实 Trace 内容（cache/缓存/log/日志/retry/清理），
+  去掉 Trace 中不存在的 reinstall/环境
+- [x] learning-05 拆成两个：
+  - learning-05a：证据不足 + 已有 debug-python 覆盖 → 预期 NONE
+  - learning-05b：强证据（run_shell 实际确认 virtualenv + 每 task 2 runs + 验证成功闭环
+    + debug-python 覆盖环境领域）→ 预期 UPDATE
+- [x] learning-06/07/08：改为 `human_gate_only` 直接预置 Candidate（Pending 不可见 /
+  accept discover / reject 不产生 Skill），不依赖模型产候选
+- [x] learning-09：标记 `expects_no_duplicate` 为 duplicate 场景
+
+#### 4. 成本报告修正（`run_learning_live.py`）
+- [x] avg tokens / eval batch、avg tokens / scanned task、真正 20-Task 场景单独统计
+
+#### 真实模型 Live Eval（deepseek / deepseek-v4-flash，3 runs × 10 场景）
+- [x] 报告 `tests/eval/reports/skill_learning_live_20260818b.md`：**pass rate 87% (26/30)**
+- [x] Pattern Detection Recall **0.93 (14/15)**：唯一未检测 = learning-05a run2（mining 空）
+- [x] Cluster Precision/Recall **1.00 / 1.00**；Action Accuracy **0.75 (9/12)**；
+  Positive Abstention **0.33 (3/9)**；False Positive **0% (0/6)**；Duplicate **0% (0/3)**
+- [x] Human Gate 3/3：learning-06/07/08 预置 Candidate 全部 PASS（不再因蒸馏随机判失败）
+- [x] **模型卡在哪（核心结论）**：
+  - 卡在 Pattern Mining：learning-05a run2（1/15 detection 失败，mining 直接空 clusters）
+  - 卡在 Distillation（UPDATE）：learning-05b 3/3 —— mining 每次 100% 检测到 cluster，
+    但蒸馏面对"已有 debug-python + 强执行证据"选择 `none`（"description 已覆盖 → 冗余"），
+    未输出 UPDATE
+  - **CREATE / NONE 判断可靠；UPDATE 是模型最弱的一环**（倾向"已覆盖→none"或
+    "新专项→create"，很少稳定选 update）
+- [x] 成本：35 calls · 43,042 tokens · 96.1s；avg 1435 tokens/eval batch、334 tokens/
+  scanned task；20-Task 场景 2409 tokens/batch、1.9s
+
+#### 验证
+- [x] 全量：`pytest` 502 通过、`ruff`、`compileall`、`git diff --check` 全部通过
+- [x] 三种结论分开：A) 确定性单测 502 passed；B) 离线 Fake Eval learning-01..09（含
+  05a/05b/预置 Gate）通过；C) 真实模型 Live Eval 见报告（26/30 pass + Distillation 真实
+  输出 + 失败分析）
+
+### 完成：Skill Learning Distiller Progressive Disclosure（只加载相关 Skill 正文）
+
+> 修复"只看 name+description 无法可靠区分 UPDATE vs NONE"的问题。不改其他架构、
+> 不做 embedding/vector/RAG；相关性筛选用一次轻量模型调用完成语义判断。
+
+#### 实现（`distiller.py` / `prompts.py` / `service.py`）
+- [x] 两阶段蒸馏：① `_RELEVANCE_PROMPT` 用 cluster 摘要 + catalog(name+description)
+  轻量筛选相关 Skill（≤3，可空）；② `skill_loader`（绑定 `skill_store.load`）加载相关
+  Skill 完整正文（截断 4000 chars/个），随 `related_skills` 进入最终 CREATE/UPDATE/NONE
+  判断；catalog 为空或 loader 缺失时跳过筛选，直接最终判断
+- [x] `DistillationOutcome` 增加 `related_skill_names` / `model_call_count`；service 按
+  实际模型调用数聚合 `distill_calls`；报告展示 `related_skills`
+- [x] 判断规则（写入 `_DISTILLATION_PROMPT`，结构性规则非调分措辞）：
+  无相关 Skill → CREATE；正文已完整覆盖 → NONE；同一 Skill 但多个 Task 提供正文缺失的
+  稳定新步骤/pitfalls/verification → UPDATE
+- [x] Pending Candidate 去重、Human Gate 逻辑保持不变
+
+#### 真实模型验证（deepseek-v4-flash，3 runs × 关键场景，报告 skill_learning_live_20260818c.md）
+- [x] **CREATE 可靠**：learning-02（无相关 Skill）3/3 create
+- [x] **NONE 可靠（正文已覆盖）**：learning-05c（debug-python 正文已含"确认 virtualenv"）
+  3/3 none，reason 引用正文"body contains the exact same stable steps"
+- [x] **UPDATE 不稳定**：learning-05b（正文缺 virtualenv + 强执行证据）在 create 专项 /
+  none(minor enrichment) / update 三种结果间波动；最终轮 2/3 成功 update
+- [x] 全组 pass rate **91% (30/33)**；Action Accuracy **0.87 (13/15)**；FP 0%；Duplicate 0%
+
+#### 新发现的 Bad Case（已修复）
+- [x] **UPDATE 时模型常省略 description** → `SkillCandidate.description` 非空校验拒绝，
+  合理 UPDATE 被丢弃（上一轮 learning-05b 因此 0/3）。已修复：UPDATE 且 description 为空
+  时从 catalog 同名 Skill 继承；补回归测试
+- [x] UPDATE vs NONE 不稳定的根因（模型行为）：description 是否隐含该步骤、证据厚度
+  （模型要求可观察的执行细节而非 plan 声明）、create 与 update 的边界判断
+
+#### 成本增量（vs 无正文 b 报告）
+- [x] calls 35→48 (+37%)、tokens 43,042→55,231 (+28%)、avg 1435→1674 tokens/eval batch
+  (+17%)、duration 96.1s→132.1s (+37%)；无/无关 Skill 场景成本不变
+
+#### 验证
+- [x] 全量：`pytest` 506 通过（+1 description 继承回归）、`ruff`、`compileall`、
+  `git diff --check` 全部通过
+- [x] 补测试：正文已覆盖→NONE / 正文缺步骤→UPDATE / 完全不同领域→CREATE /
+  UPDATE description 继承（4 例）
+
+### 修复：UPDATE description 输出契约 Bad Case
+
+> 真实模型在 UPDATE 场景正确返回 action=update + existing_skill_name=debug-python，
+> 但没返回 description。`_to_candidate` 把缺失 description 转成 ""，而 SkillCandidate
+> 要求非空 → Candidate 构造失败（"candidate text fields cannot be empty"）。
+> 属于 Distillation 输出契约与 SkillCandidate 数据模型契约不一致。只修这个，
+> 不改 Eval、不改 mining/distillation 判断逻辑。
+
+#### 修复（`distiller.py` `_to_candidate`）
+- [x] CREATE：模型必须提供 description，缺失 → 明确失败（不允许继承/兜底）
+- [x] UPDATE：模型提供 description 则用模型输出；未提供则继承
+  `existing_skill_name` 对应 Existing Skill 的 description
+- [x] 不允许最终 description 为空：`existing_skill_name` 在 catalog 中找不到 →
+  明确 `ValueError` 报错，不再静默生成 `"更新 ... 的过程知识"` 兜底
+- [x] 回归测试 4 例：UPDATE+desc=null→继承创建成功 / UPDATE+desc 非空→用模型输出 /
+  UPDATE 指向不存在 skill→明确失败 / CREATE+desc 缺失→仍失败
+
+#### 真实模型复验（learning-05b，3 runs）
+- [x] 模型返回 `action=update` + 无 description → **candidate 成功创建**（继承 catalog
+  description，error=null）——之前的 "candidate validation failed" 已消失
+- [x] 其余 run 模型返回 `none`（UPDATE vs NONE 不稳定，已识别模型行为，非本 Bad Case）
+- [x] 全量：`pytest` 509 通过（+3 契约回归）、`ruff`、`compileall`、`git diff --check`
+  全部通过
+
 ---
 ## 2026-08-16
 
