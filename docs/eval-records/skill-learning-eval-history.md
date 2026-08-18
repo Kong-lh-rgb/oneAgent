@@ -1,6 +1,7 @@
 # Skill Learning V1：Bad Case 修复与 Eval 效果提升记录
 
-> 与 `task.md` 同级。记录最近几轮 Skill Learning V1 的真实 Bad Case、修复方式，
+> 原与根目录 `task.md` 同级，现集中到 `docs/` 下（`docs/task.md` 为任务日志）。
+> 本文件记录最近几轮 Skill Learning V1 的真实 Bad Case、修复方式，
 > 以及每一次修复带来的 Eval 效果提升（全部为真实模型 deepseek-v4-flash 实测，
 > 不是"测试通过"的口头承诺）。
 >

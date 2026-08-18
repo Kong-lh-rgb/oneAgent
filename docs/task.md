@@ -752,7 +752,7 @@
 ### 完成：首轮长期记忆 Live Eval 结果归档
 
 - [x] 读取 Qwen `qwen3.7-plus` 的 10 场景 × 3 次真实 Memory Eval 输出和原始报告
-- [x] 将结果写入根目录 `evaluation.md` 的独立“长期记忆测评”大章节，与通用 Agent Runtime 测评分区
+- [x] 将结果写入 `docs/eval-records/runtime-agent-evaluation.md` 的独立“长期记忆测评”大章节，与通用 Agent Runtime 测评分区（原根目录 `evaluation.md`，已并入 eval 记录目录）
 - [x] 使用表格记录基线信息、核心指标、Recall/Reflection/Maintenance 分区结果、逐场景稳定性、平均 Token/耗时和失败优先级
 - [x] 原始自动结果为 27/33（81.8%）；人工复核发现 memory-01 三次均保留英文 `vector database` 否定事实，属于中文关键字断言误报，真实稳定缺陷集中在 memory-05 UPDATE 漏判
 - [x] 保留原断言作为回归，不通过降低标准迎合当前模型；下一轮应采集 Reflection 原始输入/输出并补跑 Memory OFF 对照
@@ -785,7 +785,7 @@
 #### 实现结果
 - [x] CLI 启动命令提示和 `/help` 补充长期记忆列表、详情命令，并抽取为共享文本避免两处再次漂移
 - [x] 新增 CLI 帮助文本回归测试
-- [x] 新增 `docs/memory-evaluation.md`，明确确定性不变量测试与真实模型语义测评分层
+- [x] 新增 `docs/eval-records/memory-evaluation-design.md`，明确确定性不变量测试与真实模型语义测评分层（原 `docs/memory-evaluation.md`，已并入 eval 记录目录）
 - [x] 设计独立多阶段 Memory Eval：同一临时 Store 跨 Run/会话执行，采集 Main、Reflection、Maintenance、文件快照与分模型成本
 - [x] 定义 Recall、Reflection、跨会话、Update、Maintenance 五组场景以及写入精度、召回精度、层级误写、关键记忆误归档等指标
 - [x] 明确 Memory ON/OFF 对照、独立 Judge 与人工抽查原则，避免使用被测模型自评或让测试反向绑死策略
@@ -1227,7 +1227,7 @@
   - 压缩未触发（3）：eval-05/21/23 的 window override 疑似未生效（stage=none/trimmed=False），需排查 ContextSettings→ModelCapabilityRegistry 链路
   - 回答为空（2）：压缩场景 max_output_tokens=64/32 太小
 - [x] 结论：系统核心能力稳健（Task 状态机/会话隔离/审批链路全部通过）；4 处场景断言待修 + 1 处压缩触发配置待排查
-- [x] 基线固化：`tests/eval/reports/baseline_20260806_full.md`；分析记录于 `evaluation.md`「基线结果」章节
+- [x] 基线固化：`tests/eval/reports/baseline_20260806_full.md`；分析记录于 `docs/eval-records/runtime-agent-evaluation.md`「基线结果」章节
 
 ### 完成：压缩未触发根因诊断（已回滚 · 标记待修）
 - [x] 排查结论：**override 链路正常**（window=1200、capability_source=override、input_budget=1086、trigger=868 均已生效）；未触发是因为**场景初始历史太短**，估算低于 trigger（eval-05=710 / eval-21=369 / eval-23=389 < 868）
@@ -1245,7 +1245,7 @@
 - [x] 重跑全量 30 条 × 1 次 → **通过率 86.7%（26/30）**（首轮 76.7%）
 - [x] 指标：工具选择准确率 96.2%、Task 状态正确率 100%、安全组 100%；平均 steps 1.8 / 工具 1.0 / tokens 4553 / 耗时 5.5s
 - [x] 剩余 4 失败：eval-05/21/23（压缩场景，待修）+ eval-14（已单独重跑 ✅，属波动）
-- [x] 基线固化：`tests/eval/reports/baseline_20260806_v2_86.7.md`；分析记录于 `evaluation.md`
+- [x] 基线固化：`tests/eval/reports/baseline_20260806_v2_86.7.md`；分析记录于 `docs/eval-records/runtime-agent-evaluation.md`
 - [x] 全量验证：`pytest` 284 个用例全部通过，`ruff` 无告警
 
 ---

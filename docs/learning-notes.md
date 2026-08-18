@@ -1,7 +1,7 @@
 # OneAgent 学习记录：层次架构与关键设计
 
 > 本文记录 OneAgent 当前已经落地的架构、设计理由和重要边界。
-> `task.md` 负责记录每天完成了什么；本文负责解释系统为什么这样设计、
+> `docs/task.md` 负责记录每天完成了什么；本文负责解释系统为什么这样设计、
 > 各层如何协作，以及后续开发时不能破坏的约束。
 
 ## 1. 当前系统定位
@@ -1395,3 +1395,64 @@ Multi-Agent / Task Graph / Planner DAG。Pattern Mining V1 完全用一次结构
 - **成本**：每 20-Task batch 约 1 次 mining + 1 次 distillation，实测约 1,923 tokens /
   4.8s；Live Eval 用正式 `tests/eval/run_learning_live.py` + `learning_judge.py` 驱动并
   生成带真实模型输出的报告。
+
+## 33. Skill Learning 收口：钉死 CREATE/UPDATE/NONE 语义 + 修 Eval pitfall 跨语言误判（2026-08-18）
+
+> 只修 learning-10 真实 Eval 暴露的两个问题，不改主架构、不调 Prompt 迎合测试、
+> 不放宽 Eval 期望。
+
+### 33.1 背景与 Bad Case
+
+- **learning-10（20-Task 真实 Eval）上一轮 3/3 FAIL**：模型 3 次都返回 `create` 专项名
+  （fix-python-interpreter-mismatch / debug-python-interpreter-mismatch），而非期望的
+  `update debug-python`。根因在 `_DISTILLATION_PROMPT` 最后一句
+  "If no related skill's body covers the procedure, return action create" —— 当已有
+  debug-python 但正文未覆盖 interpreter/virtualenv 专项时，模型 reason 明确说
+  "正文只覆盖通用 traceback，缺专项诊断，故新建技能"。
+- **Eval pitfall 关键词判断是纯 substring**：learning-10 run2 模型 pitfalls 用英文
+  "global pip"/"interpreter"，关键词是中文 "全局"/"解释器" → 中英跨语言时 substring
+  不匹配，recall 被错算成 0.00（Eval 误判，不是模型质量）。
+
+### 33.2 修复 1：Distillation 判定语义 = task family / capability domain
+
+`app/skill_learning/prompts.py` 的 related_skills 判定段重写为：
+- 先判"新 procedure 是否属于已有 Skill 的同一 task family"；
+- **同一 family**：body 已完整覆盖 → `NONE`；正文未覆盖但多次 completed task 提供
+  稳定新步骤 / pitfalls / verification → `UPDATE`（**明确禁止"因正文缺具体步骤就改
+  CREATE"**，同一 family 意味着扩展现有 Skill）；
+- **不同 family**：有独立稳定复用价值 → `CREATE`，否则 `NONE`；
+- 附 3 个示例：debug-python + interpreter/virtualenv mismatch → update；
+  + PostgreSQL slow query → create；+ 发布到 PyPI → create。
+- 未加 hard-coded skill name、未改模型输出 schema、未改生产数据结构。
+
+### 33.3 修复 2：Eval pitfall 支持中英同义组（concept-based recall）
+
+- `tests/eval/scenario.py`：`expected_pitfall_keywords` 类型
+  `tuple[str, ...]` → `tuple[str | tuple[str, ...], ...]`（旧单字符串格式向后兼容）；
+- `tests/eval/learning_judge.py`：pitfall 计算改为 concept-based —— 每组命中任意一个
+  alias 即算该 concept 命中，recall = 命中 concept 数 / concept 总数；
+- learning-10 YAML：`[全局, 解释器]` → `[[全局, global], [解释器, interpreter]]`，
+  `expected_action=update`、min thresholds 不变。
+
+### 33.4 验证（离线 + 真实模型）
+
+- 离线新增 5 例（`_pitfall_concept` 归一化 / 英文 synonym 命中 / 部分命中恰好过阈 /
+  全 miss FAIL / 旧单字符串兼容），全量 **545 passed**；
+- 真实模型（deepseek-v4-flash，learning-10 × 3）：**3/3 PASS**（上一轮 0/3）。
+  - 三次 action 全部 `update`、`existing_skill_name=debug-python`；
+  - 模型 reason 三次都明确引用 task family 语义（"same task family as existing
+    'debug-python' … naturally extend the existing skill, therefore update"）——
+    Prompt 语义修改直接生效；
+  - cluster precision / recall 三次均 1.00 / 1.00；trace deterministic checks 全过
+    （py1~py6 selected steps 与 `expected_trace_steps` exact match、Evidence 含全部
+    关键词无禁词）；
+  - pitfall recall 三次均 1.00（上一轮 run2 被跨语言误判成 0.00）；
+  - 成本：9 calls / 20,179 tokens / 30.3s，avg 6,726 tokens per 20-Task batch。
+
+### 33.5 结论
+
+- UPDATE vs CREATE 的稳定边界**可以**通过把"同一 task family 扩展现有 Skill"写进
+  Distillation 语义来修正（此前历史结论"UPDATE 稳定性是纯模型行为难点"在本场景被
+  推翻 —— 它同时是 Prompt 语义问题）；
+- 无新功能性 Bad Case；仅候选文本风格波动（procedure 项是否带编号前缀、
+  verification 条数 1~4 不等），不影响 Eval 与生产（生产走 Human Gate 评审）。
