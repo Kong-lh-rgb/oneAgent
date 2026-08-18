@@ -1138,3 +1138,23 @@ Harness 不会自动宣布语义步骤完成。注入视图折叠旧 done 步骤
 经济预算也不能只为避免窗口溢出服务。32K 日常工作上限仍保留，但默认在 70%（约 22.9K）
 触发，并压到 45%（约 14.7K）目标；百万 Token 模型窗口只承担最终硬保护。这样降低每轮
 重复输入成本，同时仍为近期对话、Task、Memory、工具 Schema 和当前 Run 留出空间。
+
+## 31. Skill：可复用的操作流程（Procedural Knowledge）
+
+Skill 回答“以后遇到这种任务应该怎么做”：调试某类模型的流程、某种部署方法、某类编码
+工作流、反复验证有效的操作经验。它与 Task、Memory 严格区分：Task 保存当前任务状态，
+Memory 保存跨会话事实，Skill 保存可复用流程。
+
+实现是标准的最小闭环：
+
+- 每个 Skill 是一个带 Front Matter 的 Markdown 文件（`skills/<name>.md`），Front Matter
+  保存 `name`（小写字母数字下划线）与 `description`，正文是可复用操作流程；
+- Skill 为预置只读：由开发者或用户维护，系统不提供模型写入，也不做自动 Skill 生成；
+- 模型通过 `skill_list`（发现：name + description）与 `skill_read`（加载完整流程）按需
+  访问；两个工具默认暴露，schema 很小（合计约 235 tokens）；
+- 不把 Skill 内容注入 Prompt：模型在当前任务匹配某个 Skill 的 description 时，先
+  `skill_list` 查找，再 `skill_read` 加载并遵循执行。
+
+设计理由：Skill 是低频、可复用、内容较长（几十到上百行）的程序性知识，常驻 Prompt 会
+浪费 token，也稀释对当前任务更重要的系统提示与工具说明。按需加载让模型自主决定何时
+需要流程，符合本项目“模型自主决策 + Harness 提供持久化与治理”的总体取向。

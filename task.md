@@ -5,6 +5,21 @@
 > 对架构调整和缺陷修复，应同时记录 Bad Case、影响、根因和修复结果，避免只记录最终功能。
 
 ---
+## 2026-08-18
+
+### 完成：Skill 系统（标准实现）
+
+#### 设计与实现
+- [x] `app/skills/`：models.py（Skill + Front Matter 解析）、store.py（Markdown 文件加载/列出）、tools.py（skill_list / skill_read）、__init__.py
+- [x] 每个 Skill 是一个带 Front Matter 的 Markdown 文件（`skills/<name>.md`），Front Matter 保存 name + description，正文是可复用操作流程
+- [x] Skill 为预置只读（开发者/用户维护），不提供模型写入、不自动生成（边界内）
+- [x] 模型通过 `skill_list` 发现、`skill_read` 加载完整流程；不注入 Prompt（按需发现，省 token）
+- [x] 工具默认暴露，两个工具合计 schema 约 235 tokens（默认共 13 个工具 / 2461 tokens）
+- [x] 示例 Skill：`.oneagent/skills/debug_python.md`（Python 报错排查流程）
+- [x] 新增 `tests/test_skills.py`（8 例：解析、校验、list 排序、load 缺失、文件名不一致、工具 list/read）
+- [x] 全量验证：`pytest` 411 通过、`ruff`、`compileall`、`git diff --check` 通过
+
+---
 ## 2026-08-16
 
 ### 完成：工具按需暴露（节省固定 schema 开销）

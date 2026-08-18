@@ -47,6 +47,7 @@ from app.memory import (
     PostRunMemoryReflector,
     register_memory_tools,
 )
+from app.skills import SkillStore, register_skill_tools
 from app.task import (
     DEFAULT_TASKS_DIR,
     FileTaskStore,
@@ -550,6 +551,9 @@ async def _run(args: argparse.Namespace) -> int:
     memory_manager = MemoryManager()
     await memory_manager.initialize()
     register_memory_tools(tool_registry, memory_manager)
+    skill_store = SkillStore()
+    await skill_store.initialize()
+    register_skill_tools(tool_registry, skill_store)
     _mark_deferred_tools(
         tool_registry,
         frozenset(
