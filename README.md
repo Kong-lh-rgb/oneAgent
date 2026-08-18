@@ -57,6 +57,7 @@ pip install -r requirements.txt
 
 cp .env.example .env
 .venv/bin/python -m app.models.chat
+
 目前支持 OpenAI、Qwen、DeepSeek 和 Anthropic。
 
 🏗️ What's inside?
