@@ -1,0 +1,26 @@
+id: learning-03
+group: learning
+name: 高频简单 rename 操作 → 不形成 Candidate
+user_input: "learning pipeline"
+initial_tasks:
+  - title: 重命名文件 a.txt
+    status: completed
+    steps:
+      - {id: s1, title: 重命名, status: done, note: 完成}
+  - title: 重命名文件 b.txt
+    status: completed
+    steps:
+      - {id: s1, title: 重命名, status: done, note: 完成}
+  - title: 重命名文件 c.txt
+    status: completed
+    steps:
+      - {id: s1, title: 重命名, status: done, note: 完成}
+  - title: 重命名文件 d.txt
+    status: completed
+    steps:
+      - {id: s1, title: 重命名, status: done, note: 完成}
+expect:
+  learning:
+    batch_size: 4
+    no_candidates: true
+    candidate_count: 0

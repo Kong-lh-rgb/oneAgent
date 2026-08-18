@@ -102,11 +102,28 @@ async def _run_one(
 
 
 async def main(args: argparse.Namespace) -> int:
+    all_scenarios = load_scenarios()
     scenarios = select_scenarios(
-        load_scenarios(),
+        all_scenarios,
         scenario_ids=tuple(args.scenario or ()),
         groups=tuple(args.group or ()),
     )
+    # learning 组由 tests/eval/learning_harness 以 Mock 模型驱动，不走普通 Agent Run。
+    explicit_learning = (
+        "learning" in (args.group or ())
+        or any(scenario.group == "learning" for scenario in scenarios)
+    )
+    if not (args.group or args.scenario):
+        scenarios = tuple(
+            scenario for scenario in scenarios if scenario.group != "learning"
+        )
+    elif explicit_learning:
+        print(
+            "learning 组场景由 tests/eval/learning_harness 驱动（Mock 模型），"
+            "请运行 tests/test_skill_learning_eval.py 验证。",
+            file=sys.stderr,
+        )
+        return 0
     if not scenarios:
         print("没有匹配的场景。", file=sys.stderr)
         return 2

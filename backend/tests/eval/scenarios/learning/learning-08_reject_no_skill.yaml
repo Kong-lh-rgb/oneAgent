@@ -1,0 +1,31 @@
+id: learning-08
+group: learning
+name: Candidate reject → 不产生正式 Skill
+user_input: "learning pipeline"
+initial_tasks:
+  - title: 修复 Python ImportError
+    goal: 恢复启动
+    status: completed
+    steps:
+      - {id: s1, title: 复现, status: done, note: 完成}
+      - {id: s2, title: 读 traceback, status: done, note: 完成}
+      - {id: s3, title: 修复, status: done, note: 完成}
+  - title: 修复 Python TypeError
+    goal: 恢复启动
+    status: completed
+    steps:
+      - {id: s1, title: 复现, status: done, note: 完成}
+      - {id: s2, title: 读 traceback, status: done, note: 完成}
+      - {id: s3, title: 修复, status: done, note: 完成}
+  - title: 修复 Python KeyError
+    goal: 恢复启动
+    status: completed
+    steps:
+      - {id: s1, title: 复现, status: done, note: 完成}
+      - {id: s2, title: 读 traceback, status: done, note: 完成}
+      - {id: s3, title: 修复, status: done, note: 完成}
+expect:
+  learning:
+    batch_size: 3
+    candidate_count: 1
+    created_skill_names: []

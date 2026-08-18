@@ -1,0 +1,49 @@
+id: learning-04
+group: learning
+name: 相似任务有稳定失败→修正→成功 → pitfalls 含应避免做法
+user_input: "learning pipeline"
+initial_tasks:
+  - title: 修复构建失败（依赖缓存问题）
+    goal: 恢复 CI
+    status: completed
+    run_ids: [r1]
+    steps:
+      - {id: s1, title: 查看失败日志, status: done, note: 定位缓存问题}
+      - {id: s2, title: 清理缓存重试, status: done, note: 已解决}
+  - title: 修复构建失败（依赖缓存问题）
+    goal: 恢复 CI
+    status: completed
+    run_ids: [r2]
+    steps:
+      - {id: s1, title: 查看失败日志, status: done, note: 定位缓存问题}
+      - {id: s2, title: 清理缓存重试, status: done, note: 已解决}
+  - title: 修复构建失败（依赖缓存问题）
+    goal: 恢复 CI
+    status: completed
+    run_ids: [r3]
+    steps:
+      - {id: s1, title: 查看失败日志, status: done, note: 定位缓存问题}
+      - {id: s2, title: 清理缓存重试, status: done, note: 已解决}
+  - title: 修复构建失败（依赖缓存问题）
+    goal: 恢复 CI
+    status: completed
+    run_ids: [r4]
+    steps:
+      - {id: s1, title: 查看失败日志, status: done, note: 定位缓存问题}
+      - {id: s2, title: 清理缓存重试, status: done, note: 已解决}
+initial_runs:
+  - run_id: r1
+    events:
+      - {type: tool_started, tool_name: run_build, arguments: {}}
+      - {type: tool_completed, tool_name: run_build, arguments: {}, success: false, error: cache lock}
+      - {type: tool_started, tool_name: clean_cache, arguments: {}}
+      - {type: tool_completed, tool_name: clean_cache, arguments: {}}
+      - {type: tool_started, tool_name: run_build, arguments: {}}
+      - {type: tool_completed, tool_name: run_build, arguments: {}}
+      - {type: agent_completed}
+expect:
+  learning:
+    batch_size: 4
+    candidate_count: 1
+    create_count: 1
+    expected_names: [ci-cache-recovery]

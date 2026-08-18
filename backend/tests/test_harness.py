@@ -48,15 +48,24 @@ async def _run(scenario: Scenario, tmp_path, responses):
 
 
 def test_loads_all_starting_scenarios(scenarios: tuple[Scenario, ...]) -> None:
-    assert len(scenarios) == 45
+    assert len(scenarios) == 53
     ids = [scenario.id for scenario in scenarios]
-    assert len(set(ids)) == 45
+    assert len(set(ids)) == 53
     base_ids = {f"eval-{index:02d}" for index in range(1, 31)}
     skill_ids = {f"skill-{index:02d}" for index in range(1, 16)}
-    assert set(ids) == base_ids | skill_ids
+    learning_ids = {f"learning-{index:02d}" for index in range(1, 9)}
+    assert set(ids) == base_ids | skill_ids | learning_ids
     groups = {scenario.group for scenario in scenarios}
-    assert groups == {"basic", "tools", "task", "context", "safety", "skill"}
-    # 每个基础分组 6 条，skill 组 15 条。
+    assert groups == {
+        "basic",
+        "tools",
+        "task",
+        "context",
+        "safety",
+        "skill",
+        "learning",
+    }
+    # 每个基础分组 6 条，skill 组 15 条，learning 组 8 条。
     from collections import Counter
 
     counts = Counter(scenario.group for scenario in scenarios)
@@ -67,6 +76,7 @@ def test_loads_all_starting_scenarios(scenarios: tuple[Scenario, ...]) -> None:
         "context": 6,
         "safety": 6,
         "skill": 15,
+        "learning": 8,
     }
 
 

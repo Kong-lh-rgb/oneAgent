@@ -47,6 +47,12 @@ from app.memory import (
     PostRunMemoryReflector,
     register_memory_tools,
 )
+from app.skill_learning import (
+    SkillCandidate,
+    SkillCandidateStore,
+    SkillLearningService,
+    SkillLearningSettings,
+)
 from app.skills import (
     SkillContextProvider,
     SkillSettings,
@@ -87,6 +93,7 @@ _COMMAND_OVERVIEW = (
     "/runs 查看运行，/checkpoints 查看恢复点，/trace <id> 查看轨迹，"
     "/mcp 查看 MCP Server 与工具，"
     "/permissions 查看审批规则，"
+    "/skill-candidates 查看 Skill Learning 候选，"
     "/clear 清空当前会话，/help 查看帮助，/exit 退出"
 )
 
@@ -103,6 +110,10 @@ _HELP_TEXT = (
     "/permissions 查看当前会话的审批规则\n"
     "/permission remove <规则ID> 删除一条审批规则\n"
     "/permissions clear 清除当前会话的全部审批规则\n"
+    "/skill-candidates 查看待人工评审的 Skill Learning 候选\n"
+    "/skill-candidate <ID> 查看候选详情\n"
+    "/skill-candidate <ID> accept [scope] 接受候选并生成 Skill（默认 project）\n"
+    "/skill-candidate <ID> reject 拒绝候选\n"
     "/clear 清空当前会话\n"
     "/exit 退出聊天"
 )
@@ -417,6 +428,42 @@ def _print_trace(events: tuple[AgentEvent, ...]) -> None:
         print(f"{event.sequence:03d}  {event_time}  {event.type.value}{detail_text}")
 
 
+def _print_skill_candidates(candidates: tuple[SkillCandidate, ...]) -> None:
+    """输出 Skill Learning 候选列表。"""
+
+    if not candidates:
+        print("没有 Skill Learning 候选。")
+        return
+    for candidate in candidates:
+        print(
+            f"{candidate.id}  [{candidate.status.value}] "
+            f"{candidate.action.value.upper()} {candidate.proposed_name} "
+            f"· 来源 {len(candidate.source_task_ids)} Task"
+        )
+
+
+async def _maybe_run_skill_learning(
+    skill_learning: SkillLearningService,
+) -> None:
+    """交互后尝试触发一次 Skill Learning（只有累计满 batch 才会调用模型）。"""
+
+    try:
+        outcome = await skill_learning.maybe_run_mining()
+    except Exception as exc:
+        print(f"Skill Learning 失败：{type(exc).__name__}: {exc}")
+        return
+    if not outcome.triggered:
+        return
+    print(
+        f"Skill Learning：扫描 {outcome.scanned_task_count} 个 Completed Task，"
+        f"模式簇 {outcome.cluster_count}，新增候选 {outcome.candidate_count}"
+    )
+    if outcome.candidate_count:
+        print("  运行 /skill-candidates 查看待评审候选")
+    elif outcome.error:
+        print(f"  （部分失败：{outcome.error}）")
+
+
 def _mark_deferred_tools(
     registry: ToolRegistry,
     names: frozenset[str],
@@ -565,6 +612,27 @@ async def _run(args: argparse.Namespace) -> int:
         max_active=skill_settings.skill_max_active,
         catalog_max_tokens=skill_settings.skill_catalog_max_tokens,
     )
+    skill_learning_settings = SkillLearningSettings()
+    skill_candidate_store = SkillCandidateStore(
+        skill_learning_settings.skill_learning_data_dir
+    )
+    await skill_candidate_store.initialize()
+    skill_learning = SkillLearningService(
+        task_store=task_store,
+        trace_store=trace_store,
+        skill_store=skill_store,
+        candidate_store=skill_candidate_store,
+        registry=registry,
+        settings=skill_learning_settings,
+        default_provider=provider.value,
+        default_model=model,
+    )
+    if skill_learning_settings.skill_learning_enabled:
+        print(
+            "Skill Learning：每 "
+            f"{skill_learning_settings.skill_learning_batch_size} 个 Completed "
+            "Task 触发一次 Pattern Mining（候选需人工评审）"
+        )
     _mark_deferred_tools(
         tool_registry,
         frozenset(
@@ -672,6 +740,7 @@ async def _run(args: argparse.Namespace) -> int:
                 model=model,
                 summary_store=summary_store,
             )
+            await _maybe_run_skill_learning(skill_learning)
             return 0 if success else 1
 
         print(_COMMAND_OVERVIEW)
@@ -807,6 +876,53 @@ async def _run(args: argparse.Namespace) -> int:
                     f"{conversation.title} · {conversation.message_count} 条消息"
                 )
                 continue
+            if content == "/skill-candidates":
+                _print_skill_candidates(
+                    await skill_learning.list_candidates()
+                )
+                continue
+            if content == "/skill-candidate" or content.startswith(
+                "/skill-candidate "
+            ):
+                parts = content.split()
+                if len(parts) < 2:
+                    print("用法：/skill-candidate <ID> [accept [scope] | reject]")
+                    continue
+                candidate = await skill_learning.get_candidate(parts[1])
+                if candidate is None:
+                    print(f"找不到候选：{parts[1]}")
+                    continue
+                if len(parts) == 2:
+                    print(skill_learning.render_candidate_details(candidate))
+                    continue
+                action_word = parts[2].lower()
+                if action_word == "accept":
+                    scope = parts[3] if len(parts) > 3 else None
+                    try:
+                        updated, target = await skill_learning.accept(
+                            candidate.id,
+                            scope=scope,
+                        )
+                    except (KeyError, ValueError) as exc:
+                        print(exc)
+                        continue
+                    print(
+                        "已接受候选 "
+                        f"{updated.proposed_name}（{updated.action.value}）。"
+                    )
+                    if target is not None:
+                        print(f"写入：{target}")
+                    continue
+                if action_word == "reject":
+                    try:
+                        await skill_learning.reject(candidate.id)
+                    except (KeyError, ValueError) as exc:
+                        print(exc)
+                        continue
+                    print(f"已拒绝候选 {candidate.proposed_name}。")
+                    continue
+                print(f"未知操作：{action_word}（支持 accept / reject）")
+                continue
             if content == "/clear":
                 history = _initial_history(args.system)
                 conversation = await conversation_store.replace_messages(
@@ -831,6 +947,7 @@ async def _run(args: argparse.Namespace) -> int:
                 model=model,
                 summary_store=summary_store,
             )
+            await _maybe_run_skill_learning(skill_learning)
     finally:
         await mcp_manager.close(tool_registry)
         await registry.close()

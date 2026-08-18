@@ -123,6 +123,74 @@
 - [x] resource 只在需要时用 `skill_resource_read` 读取，不自动加载，避免上下文膨胀
 - [x] 模型不允许写 Skill，Skill 是"预置只读能力包"，由开发者/用户在两层目录维护
 
+### 完成：Skill Learning V1（Completed Task → Skill Candidate）
+
+> 在 Task 与 Skill 之间建立独立学习管线：Completed Tasks → TaskCard →（每 N 个）→
+> Task Pattern Mining → Cluster →（按 cluster）→ Trace Evidence → Procedure Distillation
+> → SkillCandidate → Human Review → Accept → Skill V2。**不重构 Task，不引入 embedding /
+> vector / 自动生成 / 自进化 Agent。**
+
+#### 设计目标
+- [x] Task 保持"当前/最终工作事实"权威源；Trace 保持原始执行证据；SkillCandidate 是学习层候选；正式 Skill 必须经过人工 Gate
+- [x] 只从 `TaskStatus.COMPLETED` 提炼，不从 pending/active/paused/failed/cancelled 自动学习
+- [x] 模型必须允许返回 `{"clusters": []}`，不为了产生结果强行聚类
+- [x] 第一阶段只给模型轻量 `TaskCard`（title/goal/constraints/final steps/run_count），不塞完整对话/Trace
+- [x] 第二阶段（Distillation）才读取 `task.run_ids → TraceStore.load_events`，用确定性 `TraceEvidenceBuilder` 压缩后再交给模型
+
+#### Bad Case
+- [x] 若每个 Task 完成/每个 Run 后都跑模型反思，成本不可控且大量噪声（不每 Run Reflection）
+- [x] 若不加 watermark，重启后会把同一批 Completed Task 反复重扫、不断产生相同 Candidate
+- [x] 若把 revision_history / failed_tools / learned_lessons 塞进 Task，会让 Task 变成历史日志系统，破坏权威状态语义
+- [x] 若把全部 AgentEvent 原样传给模型，token 巨大且让模型在噪声中找规律（Evidence Builder 先压缩）
+- [x] 若 Distillation 不看现有 Skill Catalog，会产生 debug-python / python-debug / debug-python-v2 这类重复 Skill（先判断 CREATE / UPDATE / NONE）
+
+#### 数据来源
+- [x] Task（`FileTaskStore`）→ TaskCard 投影；`Task.run_ids` → `SQLiteTraceStore.load_events` → AgentEvent
+- [x] `TaskCard` 是 Pattern Mining 使用的轻量投影，不是新事实源；Candidate 只保存 source_task_ids / source_run_ids / reason / evidence_summary，不复制完整 Conversation / ToolResult / AgentEvent payload
+
+#### 为什么不每 Run Reflection
+- [x] 单 Run 结果噪声大、重复多；只有多 Task 共同验证的流程才值得沉淀
+- [x] 成本约束：约每 20 个 Completed Task 才 1 次 Pattern Mining call；无 cluster 就停；有 cluster 才追加 1 次 Distillation call
+
+#### Mining Trigger 与 Watermark
+- [x] `SkillLearningSettings`：`skill_learning_enabled=true`、`skill_learning_batch_size=20`、`skill_learning_min_cluster_size=3`、provider/model/temperature/timeout/scope 可配
+- [x] watermark 存 `.oneagent/skill-learning/skill_learning_watermark.json`：`processed_task_ids` + `pending_task_ids` + `last_mining_at`；已处理 Task 永不重复计数，重启后仍在
+- [x] 每累计 batch_size 个新 Completed Task 才触发；进入扫描前先把 scan_ids 移入 processed，防止崩溃重扫
+- [x] 20 是"扫描周期"不是"必须生成 Skill"；无 cluster 直接结束
+
+#### Pattern Mining
+- [x] `app/skill_learning/`：models.py（TaskCard / TaskPatternCluster / PatternMiningResult / SkillCandidate / Status / Action）、config.py、store.py（Candidate + Watermark JSON 持久化）、miner.py（第一阶段，只吃 TaskCard）、evidence.py（Trace 压缩）、distiller.py（第二阶段）、service.py（SkillLearningService 编排）、prompts.py
+- [x] Prompt 明确：不把 rename/read/简单计算/单工具机械动作沉淀；关注多步骤流程、重复失败、用户反复纠正、稳定验证、可避免冗余、降低成本
+- [x] 模型输出严格 JSON schema 校验；cluster 必须 `>= min_cluster_size` 且 task_ids 是输入子集
+
+#### Trace Evidence
+- [x] `TraceEvidenceBuilder` 从 AgentEvent 提取工具序列、失败调用、task_create/task_update 变更、完成证据，压缩到 `skill_learning_max_evidence_chars`
+- [x] Trace 缺失/异常优雅降级到 Task 自身事实，不让整个 mining 崩溃
+
+#### Skill Candidate 与 Existing Skill Detection
+- [x] `SkillCandidate`：id / action(create|update) / proposed_name / description / reason / procedure / pitfalls / verification / source_task_ids / source_run_ids / existing_skill_name / status / created_at / reviewed_at / evidence_summary
+- [x] Distillation 同时提供现有 Skill Catalog（name+description），先判断 create/update/none；update 要求 existing_skill_name，避免重复 Skill 名
+- [x] 同一 source task 集合不重复创建 candidate（`find_duplicate_source`）
+- [x] `allowed-tools` 边界保持不变：Skill 只能收窄当前 Run 工具集，不能扩大权限（仍为 TODO，未生效）
+
+#### Human Gate 与 Accept
+- [x] 不自动 create/patch/delete 正式 Skill；pending Candidate 不影响 Skill Runtime
+- [x] CLI：`/skill-candidates`、`/skill-candidate <ID>`（详情）、`/skill-candidate <ID> accept [scope]`、`/skill-candidate <ID> reject`
+- [x] accept CREATE 时按当前 Skill V2 规范写 `<scope>/<name>/SKILL.md`（scope 显式，默认 project）；同名已存在则拒绝（提示走 UPDATE）
+- [x] accept UPDATE 时生成 replacement proposal 到 `.oneagent/skill-learning/proposals/<id>.md`，不静默覆盖正式 Skill
+
+#### 测试与 Eval
+- [x] 单元测试 `tests/test_skill_learning.py`（12 例）：TaskCard 投影、Trigger 19/20、已处理不重复计数、watermark 重启、无 cluster 无候选、相似任务出 candidate、机械操作不沉淀、Evidence 提取失败工具/task_update、缺失 Trace 降级、Candidate 字段与去重、pending/reject/accept Human Gate
+- [x] Eval：scenario.py 加 `learning` 组 + InitialTask 扩展（description/run_ids/constraints/key_facts）+ InitialTraceRun + SkillLearningExpectation；新增 `tests/eval/learning_harness.py`；8 个场景（learning-01..08：无关无候选 / 相似 CREATE / 机械 rename 无候选 / 失败→成功 pitfalls / 已有 Skill UPDATE / pending 不可见 / accept discover / reject 无 Skill）；离线 `tests/test_skill_learning_eval.py`（8 例）
+- [x] 全量验证：`pytest` 487 通过（487 = 467 + 20 learning）、`ruff`、`compileall`、`git diff --check` 全部通过
+
+#### 尚未支持
+- [ ] UPDATE 只生成 replacement proposal，未做"编辑后再写回正式 Skill"的交互流
+- [ ] 不做 embedding / vector / semantic cluster（V1 完全用一次结构化 LLM 请求完成 Pattern Mining）
+- [ ] 不做自动 Skill promotion / deletion / marketplace / Multi-Agent / Task Graph / Planner DAG
+- [ ] `allowed-tools` 仍未参与工具权限（只解析 + 边界语义）
+- [ ] Candidate 无 CLI 编辑功能（edit-then-accept 是后续项）
+
 ---
 ## 2026-08-16
 

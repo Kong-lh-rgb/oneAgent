@@ -14,7 +14,15 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.agent.result import AgentStopReason
 from app.task import TaskStatus, TaskStepStatus
 
-VALID_GROUPS = ("basic", "tools", "task", "context", "safety", "skill")
+VALID_GROUPS = (
+    "basic",
+    "tools",
+    "task",
+    "context",
+    "safety",
+    "skill",
+    "learning",
+)
 
 
 class InitialMessage(BaseModel):
@@ -46,10 +54,35 @@ class InitialTask(BaseModel):
 
     alias: str | None = None
     title: str
+    description: str | None = None
     goal: str | None = None
     status: TaskStatus = TaskStatus.PENDING
     steps: tuple[InitialStep, ...] = ()
     owner: str | None = None
+    constraints: tuple[str, ...] = ()
+    key_facts: tuple[str, ...] = ()
+    run_ids: tuple[str, ...] = ()
+
+
+class InitialTraceEvent(BaseModel):
+    """预置 Trace 中的一条 AgentEvent（Learning 场景使用）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str
+    tool_name: str | None = None
+    arguments: dict[str, object] = Field(default_factory=dict)
+    success: bool = True
+    error: str | None = None
+
+
+class InitialTraceRun(BaseModel):
+    """预置一条 Agent Run 的完整事件序列。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    events: tuple[InitialTraceEvent, ...] = ()
 
 
 class InitialFile(BaseModel):
@@ -187,12 +220,35 @@ class SkillExpectation(BaseModel):
         return self
 
 
+class SkillLearningExpectation(BaseModel):
+    """Skill Learning 期望：候选数量、动作、名字与最终 Skill。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    batch_size: int = Field(default=20, ge=1)
+    candidate_count: int | None = Field(default=None, ge=0)
+    create_count: int | None = Field(default=None, ge=0)
+    update_count: int | None = Field(default=None, ge=0)
+    expected_names: tuple[str, ...] = ()
+    no_candidates: bool = False
+    created_skill_names: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_expectation(self) -> SkillLearningExpectation:
+        if self.no_candidates and self.candidate_count not in (None, 0):
+            raise ValueError(
+                "no_candidates conflicts with a positive candidate_count"
+            )
+        return self
+
+
 class Expectation(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     tools: ToolExpectation = Field(default_factory=ToolExpectation)
     task: TaskExpectation = Field(default_factory=TaskExpectation)
     skill: SkillExpectation = Field(default_factory=SkillExpectation)
+    learning: SkillLearningExpectation = Field(default_factory=SkillLearningExpectation)
     files: tuple[FileExpectation, ...] = ()
     answer: AnswerExpectation = Field(default_factory=AnswerExpectation)
     requires_compaction: bool = False
@@ -215,6 +271,7 @@ class Scenario(BaseModel):
     initial_tasks: tuple[InitialTask, ...] = ()
     initial_files: tuple[InitialFile, ...] = ()
     initial_skills: tuple[InitialSkill, ...] = ()
+    initial_runs: tuple[InitialTraceRun, ...] = ()
     allowed_tools: tuple[str, ...] | None = None
     max_steps: int = 10
     max_tool_rounds: int | None = None

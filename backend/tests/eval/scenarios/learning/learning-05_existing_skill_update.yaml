@@ -1,0 +1,60 @@
+id: learning-05
+group: learning
+name: 已存在 debug-python Skill + 新类似 Task → UPDATE 而不是 CREATE
+user_input: "learning pipeline"
+initial_skills:
+  - name: debug-python
+    description: 排查 Python 报错或异常的标准流程
+    body: |
+      # Debug Python
+      1. 复现
+      2. 读 traceback
+      3. 修复并验证
+initial_tasks:
+  - title: 排查 Python 虚拟环境报错
+    goal: 确认 virtualenv
+    status: completed
+    run_ids: [r1]
+    steps:
+      - {id: s1, title: 复现错误, status: done, note: 已复现}
+      - {id: s2, title: 确认 virtualenv, status: done, note: 是关键步骤}
+      - {id: s3, title: 修复并验证, status: done, note: 已验证}
+  - title: 排查 Python 依赖报错
+    goal: 恢复运行
+    status: completed
+    run_ids: [r2]
+    steps:
+      - {id: s1, title: 复现错误, status: done, note: 已复现}
+      - {id: s2, title: 确认 virtualenv, status: done, note: 是关键步骤}
+      - {id: s3, title: 修复并验证, status: done, note: 已验证}
+  - title: 排查 Python 路径报错
+    goal: 恢复启动
+    status: completed
+    run_ids: [r3]
+    steps:
+      - {id: s1, title: 复现错误, status: done, note: 已复现}
+      - {id: s2, title: 确认 virtualenv, status: done, note: 是关键步骤}
+      - {id: s3, title: 修复并验证, status: done, note: 已验证}
+  - title: 排查 Python 环境报错
+    goal: 恢复运行
+    status: completed
+    run_ids: [r4]
+    steps:
+      - {id: s1, title: 复现错误, status: done, note: 已复现}
+      - {id: s2, title: 确认 virtualenv, status: done, note: 是关键步骤}
+      - {id: s3, title: 修复并验证, status: done, note: 已验证}
+initial_runs:
+  - run_id: r1
+    events:
+      - {type: tool_started, tool_name: run_pytest, arguments: {}}
+      - {type: tool_completed, tool_name: run_pytest, arguments: {}, success: false, error: venv}
+      - {type: tool_started, tool_name: task_update, arguments: {add_constraints: [使用现有 .venv]}}
+      - {type: tool_completed, tool_name: task_update, arguments: {add_constraints: [使用现有 .venv]}}
+      - {type: agent_completed}
+expect:
+  learning:
+    batch_size: 4
+    candidate_count: 1
+    create_count: 0
+    update_count: 1
+    expected_names: [debug-python]

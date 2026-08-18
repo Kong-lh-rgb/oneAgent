@@ -1,0 +1,90 @@
+id: learning-01
+group: learning
+name: 20 个完全无关 Task → 无 Candidate
+user_input: "learning pipeline"
+initial_tasks:
+  - title: 写一篇周报
+    status: completed
+    steps:
+      - {id: s1, title: 收集信息, status: done, note: 完成}
+  - title: 计算本月开支
+    status: completed
+    steps:
+      - {id: s1, title: 汇总账单, status: done, note: 完成}
+  - title: 整理照片到相册
+    status: completed
+    steps:
+      - {id: s1, title: 按日期分类, status: done, note: 完成}
+  - title: 预定会议室
+    status: completed
+    steps:
+      - {id: s1, title: 查询空闲, status: done, note: 完成}
+  - title: 编写会议纪要
+    status: completed
+    steps:
+      - {id: s1, title: 记录要点, status: done, note: 完成}
+  - title: 翻译产品说明
+    status: completed
+    steps:
+      - {id: s1, title: 分段翻译, status: done, note: 完成}
+  - title: 制作季度报表
+    status: completed
+    steps:
+      - {id: s1, title: 汇总数据, status: done, note: 完成}
+  - title: 给客户回邮件
+    status: completed
+    steps:
+      - {id: s1, title: 起草回复, status: done, note: 完成}
+  - title: 更新项目文档
+    status: completed
+    steps:
+      - {id: s1, title: 补充章节, status: done, note: 完成}
+  - title: 清理临时文件
+    status: completed
+    steps:
+      - {id: s1, title: 扫描目录, status: done, note: 完成}
+  - title: 创建招聘海报
+    status: completed
+    steps:
+      - {id: s1, title: 设计文案, status: done, note: 完成}
+  - title: 统计用户反馈
+    status: completed
+    steps:
+      - {id: s1, title: 分类整理, status: done, note: 完成}
+  - title: 备份数据库
+    status: completed
+    steps:
+      - {id: s1, title: 执行备份, status: done, note: 完成}
+  - title: 检查磁盘空间
+    status: completed
+    steps:
+      - {id: s1, title: 查看用量, status: done, note: 完成}
+  - title: 注册新域名
+    status: completed
+    steps:
+      - {id: s1, title: 查询可用, status: done, note: 完成}
+  - title: 生成产品截图
+    status: completed
+    steps:
+      - {id: s1, title: 运行应用, status: done, note: 完成}
+  - title: 校验数据一致性
+    status: completed
+    steps:
+      - {id: s1, title: 跑校验脚本, status: done, note: 完成}
+  - title: 编写 API 文档
+    status: completed
+    steps:
+      - {id: s1, title: 整理端点, status: done, note: 完成}
+  - title: 设置邮件过滤器
+    status: completed
+    steps:
+      - {id: s1, title: 配置规则, status: done, note: 完成}
+  - title: 导出用户列表
+    status: completed
+    steps:
+      - {id: s1, title: 查询导出, status: done, note: 完成}
+expect:
+  learning:
+    batch_size: 20
+    no_candidates: true
+    candidate_count: 0

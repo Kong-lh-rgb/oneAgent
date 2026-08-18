@@ -43,7 +43,7 @@ Live Eval 存在失败时默认返回退出码 1，可用于 CI 门禁。探索�
 生成的时间戳报告属于本地测评产物，默认不提交 Git。需要建立基线时，应把确认过
 的报告复制为有语义的固定文件名再提交。
 
-## 场景库（45 条 · 6 组：5 组 × 6 条 + skill 组 15 条）
+## 场景库（53 条 · 7 组：5 组 × 6 条 + skill 15 条 + learning 8 条）
 
 | 分组 | 场景 ID | 覆盖点 |
 | --- | --- | --- |
@@ -57,6 +57,10 @@ Live Eval 存在失败时默认返回退出码 1，可用于 CI 门禁。探索�
 | skill | skill-11–12 | 相似场景只激活正确的一个（修 bug → debug-python，评审 → code-review） |
 | skill | skill-13–14 | 遵循 code-review 的 P0/P1/P2 输出格式、遵循 structured-research 模板结构 |
 | skill | skill-15 | 上下文压缩后 Active Skill 指令仍保留（survives_compaction） |
+| learning | learning-01, 03 | 无关任务 / 机械 rename 不产生 Candidate |
+| learning | learning-02, 04 | 相似复杂 Task → CREATE candidate（04 含稳定失败→成功，pitfalls 被沉淀） |
+| learning | learning-05 | 已存在 Skill + 新类似 Task → UPDATE 而不是 CREATE |
+| learning | learning-06–08 | Human Gate：pending 不可见 / accept 后可 discover / reject 不产生 Skill |
 
 场景文件：`tests/eval/scenarios/`（NN_名称.yaml）。
 
@@ -80,6 +84,11 @@ Live Eval 存在失败时默认返回退出码 1，可用于 CI 门禁。探索�
   FakeModelAdapter 捕获的真实 ModelRequest 在激活后每 Step 都含 `oneagent_active_skill`；
 - `initial_skills` 预置目录式 Skill（`<name>/SKILL.md` + 可选 `reference_files`），
   由 Harness 写入临时 skills 目录并装配 `SkillStore` / `SkillContextProvider`；
+- Learning 场景（group=learning）不走普通 Agent Run，由 `tests/eval/learning_harness.py`
+  预置 Completed Task + Trace 事件（`initial_runs`），驱动 `SkillLearningService`；
+  `learning.batch_size` 控制触发，`learning.candidate_count` / `create_count` /
+  `update_count` / `expected_names` 检查候选，`learning.no_candidates` 要求不产生候选，
+  `learning.created_skill_names` 要求 accept 后 SkillStore 可 discover；
 - `stop_reason_any` 默认只允许 `final_answer`，负面场景必须显式声明其他停止原因。
 
 没有声明某一维度期望时，该检查记为 `skipped`，不会进入对应准确率的分母。

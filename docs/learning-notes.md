@@ -1291,3 +1291,89 @@ name 与目录名不一致、YAML 非法都会抛 `SkillParseError`。`metadata:
 - Active Skill 是 Run-scoped 的每 Step 注入块，不是普通 ToolResult，保证跨压缩不遗忘；
 - resource 需要时用 `skill_resource_read` 读取，不自动加载；
 - 模型不允许写 Skill，Skill 是“预置只读能力包”，由开发者/用户在两层目录维护。
+
+## 32. Skill Learning V1：Completed Task → Skill Candidate
+
+### 32.1 定位与领域边界
+
+Skill Learning 在 Task 与 Skill 之间建立一条**独立学习管线**，与 Task 严格解耦：
+
+- Task = 当前任务 / 最终任务事实的权威状态（不塞 revision_history / failed_tools /
+  learned_lessons / skill_candidates）；
+- Trace = Agent 实际执行过程的原始证据（SQLite 事件）；
+- SkillCandidate = 从多个历史 Task 提炼、尚未生效的候选过程知识；
+- Skill = 经用户确认后正式生效的长期 procedural knowledge。
+
+`Task.revision` 继续只作为“当前版本 + 并发更新控制”，不解释成历史存储。
+
+### 32.2 管线与成本约束
+
+```text
+Completed Tasks
+  → TaskCard（轻量投影，无 Trace）
+  → 每累计 N=20 个新 Completed Task（watermark 判断）
+  → Task Pattern Mining（1 次 LLM call）
+      ├─ {"clusters": []} → 停
+      └─ Cluster（>=3 tasks）→ 读 task.run_ids → TraceStore.load_events
+           → EvidenceBuilder 压缩 → Procedure Distillation（1 次 LLM call）
+           → SkillCandidate（pending）→ Human Review → Accept → SKILL.md
+```
+
+关键约束：不每 Run Reflection；20 是扫描周期不是生成条件；只有发现 Cluster 才追加
+Distillation call；Candidate 不自动生效。
+
+### 32.3 Watermark
+
+`.oneagent/skill-learning/skill_learning_watermark.json`：
+
+```json
+{"version": 1, "processed_task_ids": [...], "pending_task_ids": [...], "last_mining_at": ...}
+```
+
+- `pending_task_ids` 累计新 Completed Task；达到 batch_size 才触发；
+- 触发前先把 scan_ids 移入 `processed_task_ids`（原子写），保证同一批任务不因重启或
+  重复扫描被反复学习，也不会不断产生相同 Candidate；
+- Pattern Mining 仍可参考旧 Task 判断相似性，但已处理的不再作为“新 batch”触发。
+
+### 32.4 模块划分
+
+- `models.py`：TaskCard（投影）、TaskPatternCluster、PatternMiningResult、SkillCandidate、
+  SkillCandidateStatus/Action；
+- `config.py`：SkillLearningSettings（batch/min_cluster/provider/model/scope）；
+- `store.py`：SkillCandidateStore（候选逐 `<id>.json`）+ MiningWatermark（JSON 原子写）；
+- `miner.py`：第一阶段，只消费 TaskCard，输出严格 schema 的 cluster 列表；
+- `evidence.py`：TraceEvidenceBuilder——从 AgentEvent 提取工具序列/失败/task_update/
+  完成证据并压缩，Trace 缺失优雅降级；
+- `distiller.py`：第二阶段，结合 cluster + evidence + 现有 Skill Catalog，输出
+  create/update/none 的 SkillCandidate；
+- `service.py`：SkillLearningService 编排（maybe_run_mining / accept / reject /
+  list_candidates / render_candidate_details）；
+- `_call.py` / `prompts.py`：统一模型调用（异常隔离）+ 严格 JSON 解析。
+
+### 32.5 Existing Skill Detection
+
+Distillation 时同时提供现有 Skill Catalog（name+description），模型先判断
+`create` / `update` / `none`。UPDATE 要求 `existing_skill_name`，从源头避免
+debug-python / python-debug / debug-python-v2 这类重复 Skill。
+
+### 32.6 Human Gate
+
+- 创建后是 pending，不影响 Skill Runtime（SkillStore 不可见）；
+- `/skill-candidates` 列候选，`/skill-candidate <ID>` 看详情（Why / Source Tasks /
+  Common Procedure / Repeated Problems / Verification）；
+- `accept`：CREATE 写 `<scope>/<name>/SKILL.md`（scope 显式，默认 project，同名已存在则
+  拒绝）；UPDATE 写 replacement proposal 到 proposals/，不静默覆盖；
+- `reject`：状态置 rejected，不产生正式 Skill。
+
+### 32.7 可追溯性
+
+Candidate 必须保存 source_task_ids / source_run_ids / reason / evidence_summary，
+不允许只保存一份最终 Markdown。原始证据继续由 Task / Trace 作为事实源，不复制完整
+Conversation / ToolResult / AgentEvent payload。
+
+### 32.8 边界（不做）
+
+embedding / vector DB / semantic vector clustering / background continuous Reflection /
+每 Run Skill Reflection / 自动 Skill promotion / 自动 Skill deletion / marketplace /
+Multi-Agent / Task Graph / Planner DAG。Pattern Mining V1 完全用一次结构化 LLM 请求完成。
+本能力准确描述为 Skill Learning V1，不是 autonomous self-modifying agent。
