@@ -381,6 +381,42 @@
 - [x] 全量：`pytest` 509 通过（+3 契约回归）、`ruff`、`compileall`、`git diff --check`
   全部通过
 
+### 完成：Task → Trace Evidence 锚点区间筛选（不再整个 Run）
+
+> 修复 Trace Evidence 获取过粗：Task.run_ids 只是粗粒度索引，task_update 是 Task
+> 工作锚点，锚点之间的 Agent Step 才是真正执行证据。不改 Task 数据结构、不改主架构、
+> 不改 Mining/Distillation Prompt、不做 embedding/RAG。
+
+#### 新模块 `app/skill_learning/trace_selector.py`（`TaskTraceSelector`）
+- [x] 数据流：Task → run_ids → Run Trace → task_update anchors → relevant Agent Step
+  ranges → Events → Evidence Builder（职责边界：selector 只回答"哪些 Event 属于这个
+  Task"，Evidence Builder 继续负责 Event → 文本）
+- [x] Anchor 识别：只认 `TOOL_COMPLETED + task_update + success + arguments.task_id
+  是当前 Task 完整 ID 的合法前缀`；失败 / 更新其他 Task 的 task_update 不作 Anchor
+- [x] 优先 TaskStep 生命周期切精确区间：同 Run 内 in_progress→done 的 step 区间；
+  跨 Run 合并（start Run 从 in_progress 到结束 + 中间 Run 全部 + end Run 到 done）
+- [x] 无 in_progress 锚点 → bounded backward window（模块常量默认 5 个 Agent Step，
+  不无限向前扫描）
+- [x] 无 step_id 的普通 task_update（goal/state/constraints/facts/status）→ anchor
+  附近 bounded window，不丢弃整个 Run
+- [x] Event 合并去重：按 run + sequence 保序，被多区间覆盖的 Event 只保留一次
+- [x] **max_events_per_task 硬上限**：逐个 append 后检查，最终严格 <= 配置值
+  （不再 extend 超限后才 break）
+- [x] 无有效 Anchor / Trace 缺失 → 返回空 → Evidence Builder 走 Task-only fallback
+
+#### service.py 接入
+- [x] `_load_task_events` 改为：异步加载 Task.run_ids 关联的 Run → `TaskTraceSelector`
+  筛选 → 返回锚点区间内事件（硬上限）
+
+#### 测试（tests/test_trace_selector.py 11 例 + service 集成 1 例）
+- [x] same-run 精确区间（只保留 step 2~6）/ 只取当前 Task（Task B anchor 不扩范围）/
+  failed task_update 不作 anchor / missing in_progress 用 backward window /
+  跨 Run span / 前后无关 step 不进入 / 普通 goal 更新用 nearby window /
+  无 anchor→空 fallback / max_events 硬上限 / 多区间覆盖去重 /
+  service._load_task_events 锚点过滤集成
+- [x] 全量：`pytest` 521 通过（+12 筛选测试）、`ruff`、`compileall`、
+  `git diff --check` 全部通过
+
 ---
 ## 2026-08-16
 

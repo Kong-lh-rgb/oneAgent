@@ -34,6 +34,7 @@ from .models import (
     TaskPatternCluster,
 )
 from .store import InflightBatch, SkillCandidateStore
+from .trace_selector import TaskTraceSelector
 
 logger = logging.getLogger("oneagent.skill_learning.service")
 
@@ -115,6 +116,7 @@ class SkillLearningService:
             default_model=default_model,
         )
         self.evidence_builder = TraceEvidenceBuilder(self.settings)
+        self.trace_selector = TaskTraceSelector()
 
     # ------------------------------------------------------------------
     # 主入口
@@ -399,18 +401,26 @@ class SkillLearningService:
         )
 
     async def _load_task_events(self, task: Task) -> tuple:
-        """读取 Task.run_ids 关联的 Trace 事件；缺失 / 异常优雅降级为空。"""
+        """读取 Task.run_ids 关联的 Trace，用 task_update 锚点筛选相关事件。
 
-        events: list = []
+        只返回"完成当前 Task 的实际执行过程"（Anchor 之间的 Agent Step 区间），
+        不是整个 Run，也不是只有 task_update 本身。无有效 Anchor 时返回空，
+        由 Evidence Builder 走 Task-only fallback。
+        """
+
+        run_events: dict[str, tuple] = {}
         for run_id in task.run_ids:
             try:
-                loaded = await self.trace_store.load_events(run_id)
+                run_events[run_id] = await self.trace_store.load_events(run_id)
             except (KeyError, ValueError, OSError):
                 continue
-            events.extend(loaded)
-            if len(events) >= self.settings.skill_learning_max_events_per_task:
-                break
-        return tuple(events)
+        if not run_events:
+            return ()
+        return self.trace_selector.select(
+            task,
+            run_events,
+            max_events=self.settings.skill_learning_max_events_per_task,
+        )
 
     # ------------------------------------------------------------------
     # Candidate 查询

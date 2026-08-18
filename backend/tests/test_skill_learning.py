@@ -1432,3 +1432,82 @@ async def test_create_candidate_still_requires_description(tmp_path: Path) -> No
     assert outcome.candidate_count == 0
     assert outcome.error is not None
     assert "create candidate requires" in outcome.error
+
+
+# ---------------------------------------------------------------------------
+# 9. Trace Evidence 锚点区间筛选（service 集成）
+# ---------------------------------------------------------------------------
+
+
+def _tool_event_step(
+    run_id: str,
+    sequence: int,
+    step: int,
+    name: str,
+    arguments: dict,
+    *,
+    success: bool = True,
+) -> AgentEvent:
+    """带 Agent Step 编号的工具完成事件（TaskTraceSelector 需要 step）。"""
+
+    return AgentEvent(
+        run_id=run_id,
+        conversation_id="conv",
+        sequence=sequence,
+        step=step,
+        type=AgentEventType.TOOL_COMPLETED,
+        tool_call=ToolCall(id=f"c{sequence}", name=name, arguments=arguments),
+        tool_result=ToolResult(
+            tool_call_id=f"c{sequence}",
+            tool_name=name,
+            success=success,
+            duration_ms=0.0,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_service_loads_anchor_bounded_events(tmp_path: Path) -> None:
+    """service._load_task_events 用 task_update 锚点区间，而非整个 Run。"""
+    env, root = await _make_env(tmp_path, batch_size=3)
+    registry, _ = _fake_registry([])
+    service = SkillLearningService(
+        env["task_store"],
+        env["trace_store"],
+        env["skill_store"],
+        env["candidate_store"],
+        registry,
+        settings=_settings(root, batch_size=3),
+        default_provider="fake",
+    )
+    task_id = await _create_completed(
+        env["task_store"],
+        title="修复报错",
+        run_ids=("r1",),
+    )
+    task = await env["task_store"].get(task_id)
+    assert task is not None
+    # step1 无关 / step2 in_progress / step3 失败 / step4 done / step5 无关。
+    await _record_trace(
+        env["trace_store"],
+        (
+            _tool_event_step("r1", 1, 1, "read_file", {}),
+            _tool_event_step(
+                "r1", 2, 2, "task_update",
+                {"task_id": task_id, "step_id": "s1",
+                 "step_status": "in_progress"},
+            ),
+            _tool_event_step(
+                "r1", 3, 3, "run_pytest", {}, success=False
+            ),
+            _tool_event_step(
+                "r1", 4, 4, "task_update",
+                {"task_id": task_id, "step_id": "s1",
+                 "step_status": "done", "step_note": "ok"},
+            ),
+            _tool_event_step("r1", 5, 5, "read_file", {}),
+        ),
+    )
+    events = await service._load_task_events(task)
+    # 只保留 step 2~4（in_progress → done），step1/step5 无关不进入。
+    assert [event.step for event in events] == [2, 3, 4]
