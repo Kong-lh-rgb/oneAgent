@@ -30,12 +30,17 @@ class SkillLearningSettings(BaseSettings):
     skill_learning_min_cluster_size: int = Field(default=3, ge=2)
     # 一次扫描最多处理的 Task 数（保护输入规模）。
     skill_learning_max_tasks_per_scan: int = Field(default=20, ge=1)
+    # Pattern Mining 失败的最大重试次数；达到上限后放弃该 batch（避免无限重试）。
+    skill_learning_max_attempts: int = Field(default=3, ge=1)
     # 供 Pattern Mining / Distillation 使用的模型（缺省走默认 provider/model）。
     skill_learning_provider: str | None = None
     skill_learning_model: str | None = None
     skill_learning_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     skill_learning_max_output_tokens: int = Field(default=2_000, ge=1)
     skill_learning_timeout_seconds: float = Field(default=60.0, gt=0.0)
+    # 关闭 reasoning（thinking）的 extra_body；None=自动（仅对实测支持的
+    # Provider 生效）。
+    skill_learning_disable_thinking: bool | None = None
     # Candidate Accept 时默认落到的 Skill scope（project / user）。
     skill_learning_default_scope: str = "project"
     # 候选与 watermark 数据目录。

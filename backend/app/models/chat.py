@@ -454,14 +454,19 @@ async def _maybe_run_skill_learning(
         return
     if not outcome.triggered:
         return
-    print(
-        f"Skill Learning：扫描 {outcome.scanned_task_count} 个 Completed Task，"
-        f"模式簇 {outcome.cluster_count}，新增候选 {outcome.candidate_count}"
-    )
+    print("Skill Learning:")
+    print(f"  tasks scanned: {outcome.scanned_task_count}")
+    print(f"  clusters: {outcome.cluster_count}")
+    print(f"  candidates: {outcome.candidate_count}")
+    print(f"  model calls: {outcome.pattern_mining_calls + outcome.distillation_calls}")
+    print(f"  input tokens: {outcome.input_tokens}")
+    print(f"  output tokens: {outcome.output_tokens}")
+    print(f"  total tokens: {outcome.total_tokens}")
+    print(f"  latency: {outcome.total_duration_ms / 1000:.1f}s")
+    if outcome.error:
+        print(f"  error: {outcome.error}")
     if outcome.candidate_count:
         print("  运行 /skill-candidates 查看待评审候选")
-    elif outcome.error:
-        print(f"  （部分失败：{outcome.error}）")
 
 
 def _mark_deferred_tools(

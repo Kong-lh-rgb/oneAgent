@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .models import SkillCandidate, SkillCandidateStatus
 
@@ -27,12 +27,36 @@ WATERMARK_VERSION = 1
 MAX_CANDIDATE_FILE_BYTES = 500_000
 
 
+class InflightBatch(BaseModel):
+    """一次正在处理、尚未完成的 Mining batch。
+
+    模型调用失败时保留在这里供下次触发点重试；成功后才移入 processed。
+    持久化保证重启后可恢复，实现 at-least-once processing。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    batch_id: str
+    task_ids: tuple[str, ...]
+    started_at: datetime
+    attempt: int = Field(default=0, ge=0)
+    last_error: str | None = None
+
+    @field_validator("started_at")
+    @classmethod
+    def normalize_datetime(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("inflight started_at must include timezone information")
+        return value.astimezone(UTC)
+
+
 class MiningWatermark(BaseModel):
     """Mining 扫描水位（持久化）。
 
-    - ``processed_task_ids``：已进入过扫描的 Completed Task，永不重复计数；
+    - ``processed_task_ids``：已成功完成扫描的 Completed Task，永不重复计数；
     - ``pending_task_ids``：已累计但尚未凑满 batch 的 Completed Task；
-    - ``last_mining_at``：最近一次实际触发 mining 的时间。
+    - ``inflight``：已触发但尚未成功完成（可能因模型失败待重试）的 batch；
+    - ``last_mining_at``：最近一次实际成功触发 mining 的时间。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -40,6 +64,7 @@ class MiningWatermark(BaseModel):
     version: int = WATERMARK_VERSION
     processed_task_ids: tuple[str, ...] = ()
     pending_task_ids: tuple[str, ...] = ()
+    inflight: InflightBatch | None = None
     last_mining_at: datetime | None = None
     last_error: str | None = None
 
@@ -230,4 +255,9 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     temp.replace(path)
 
 
-__all__ = ["MiningWatermark", "SkillCandidateStore", "WATERMARK_VERSION"]
+__all__ = [
+    "InflightBatch",
+    "MiningWatermark",
+    "SkillCandidateStore",
+    "WATERMARK_VERSION",
+]

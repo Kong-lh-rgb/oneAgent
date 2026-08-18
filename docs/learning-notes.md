@@ -1377,3 +1377,21 @@ embedding / vector DB / semantic vector clustering / background continuous Refle
 每 Run Skill Reflection / 自动 Skill promotion / 自动 Skill deletion / marketplace /
 Multi-Agent / Task Graph / Planner DAG。Pattern Mining V1 完全用一次结构化 LLM 请求完成。
 本能力准确描述为 Skill Learning V1，不是 autonomous self-modifying agent。
+
+### 32.9 真实模型 Live Eval 的经验（deepseek-v4-flash）
+
+- **Pattern Mining 高度可靠**：对无关 / 机械任务正确返回 `{"clusters": []}`（无假阳性），
+  对真实相似任务 Cluster Precision / Recall 均接近 1.00；
+- **Distillation 对 evidence 强度敏感**：只有“失败 + 元数据更新”、缺“修正 + 验证成功”
+  的 Trace，模型会保守返回 `action=none`（理由常是“证据不足 / 现有 Skill 已覆盖”），
+  不会编造流程——这是合理行为，Live 场景应预置完整证据闭环；
+- **Reasoning Provider 的结构化输出缺陷**：deepseek 会把列表字段输出为 `null` 或单个
+  字符串、大 prompt 偶发空 content。Skill Learning 的 `_Distilled` 需归一化 null/单字符串；
+  对 deepseek 关闭 thinking（`extra_body={"thinking":{"type":"disabled"}}`，与
+  ContextSummarizer 一致）；
+- **名不可预知**：Live 中模型给出的 candidate 名与场景期望名常不同，Judge 应把
+  exact-name 作为记录项、以 action/count 作为硬标准；Human Gate 用 accept_all / reject_all
+  而非按名匹配；
+- **成本**：每 20-Task batch 约 1 次 mining + 1 次 distillation，实测约 1,923 tokens /
+  4.8s；Live Eval 用正式 `tests/eval/run_learning_live.py` + `learning_judge.py` 驱动并
+  生成带真实模型输出的报告。

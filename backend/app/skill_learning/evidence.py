@@ -107,7 +107,7 @@ class TraceEvidenceBuilder:
     # ------------------------------------------------------------------
 
     def _task_tool_summary(self, event: AgentEvent) -> str | None:
-        """从 task_create / task_update 事件提取变更摘要。"""
+        """解析 task_create / task_update 的真实 ToolCall 参数并输出具体内容。"""
 
         call = event.tool_call
         result = event.tool_result
@@ -117,27 +117,62 @@ class TraceEvidenceBuilder:
         if not isinstance(arguments, dict):
             return None
         if call.name == "task_create":
-            title = arguments.get("title")
-            goal = arguments.get("goal")
-            steps = arguments.get("steps")
-            return (
-                f"task_create title={title!r} goal={goal!r} "
-                f"steps={_step_count(steps)}"
+            return self._task_create_summary(arguments)
+        if call.name == "task_update":
+            return self._task_update_summary(arguments)
+        return None
+
+    def _task_create_summary(self, arguments: dict[str, Any]) -> str:
+        lines = ["task_create:"]
+        title = arguments.get("title")
+        if isinstance(title, str) and title.strip():
+            lines.append(f"- title: {_clip(title)}")
+        goal = arguments.get("goal")
+        if isinstance(goal, str) and goal.strip():
+            lines.append(f"- goal: {_clip(goal)}")
+        steps = _step_titles(arguments.get("steps"))
+        if steps:
+            lines.append("- steps: " + "; ".join(steps))
+        return "\n".join(lines)
+
+    def _task_update_summary(self, arguments: dict[str, Any]) -> str | None:
+        """按真实 task_update 参数输出轻量、具体的变化块。
+
+        字段：status / goal / state / constraints / facts / steps /
+        step_id + step_status + step_note。不复制完整 ToolResult。
+        """
+
+        lines: list[str] = []
+        status = arguments.get("status")
+        if isinstance(status, str) and status:
+            lines.append(f"status: {status}")
+        goal = arguments.get("goal")
+        if isinstance(goal, str) and goal.strip():
+            lines.append(f"goal: {_clip(goal)}")
+        state = _string_entries(arguments.get("state"))
+        if state:
+            lines.append("state replaced: " + " | ".join(state))
+        constraints = _string_entries(arguments.get("constraints"))
+        if constraints:
+            lines.append("constraints added: " + " | ".join(constraints))
+        facts = _string_entries(arguments.get("facts"))
+        if facts:
+            lines.append("facts added: " + " | ".join(facts))
+        plan_steps = _step_titles(arguments.get("steps"))
+        if plan_steps:
+            lines.append("plan replaced:")
+            lines.extend(f"  - {item}" for item in plan_steps)
+        step_id = arguments.get("step_id")
+        step_status = arguments.get("step_status")
+        if isinstance(step_id, str) and step_id and isinstance(step_status, str):
+            note = arguments.get("step_note")
+            note_text = (
+                f": {_clip(note)}" if isinstance(note, str) and note else ""
             )
-        # task_update
-        changed: list[str] = []
-        for key in ("goal", "status", "add_constraints", "add_key_facts"):
-            if arguments.get(key) is not None:
-                changed.append(key)
-        if arguments.get("replace_steps") is not None:
-            changed.append("replace_steps")
-        if arguments.get("step_id") is not None:
-            changed.append(
-                f"step:{arguments.get('step_id')}->{arguments.get('step_status')}"
-            )
-        if not changed:
+            lines.append(f"step {step_id} -> {step_status}{note_text}")
+        if not lines:
             return None
-        return "task_update " + ",".join(changed)
+        return "task_update:\n" + "\n".join("  " + line for line in lines)
 
     def _task_only(self, task: Task, reason: str) -> str:
         final_steps = _task_steps(task)
@@ -162,10 +197,42 @@ def _task_steps(task: Task) -> list[str]:
     ]
 
 
-def _step_count(value: Any) -> int:
-    if isinstance(value, (list, tuple)):
-        return len(value)
-    return 0
+def _step_titles(value: Any) -> list[str]:
+    """从 steps 参数提取步骤标题（bounded）。"""
+
+    if not isinstance(value, (list, tuple)):
+        return []
+    titles: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        title = item.get("title")
+        if isinstance(title, str) and title.strip():
+            titles.append(_clip(title))
+        if len(titles) >= 20:
+            break
+    return titles
+
+
+def _string_entries(value: Any) -> list[str]:
+    """从 constraints/facts/state 参数提取条目（bounded）。"""
+
+    if not isinstance(value, (list, tuple)):
+        return []
+    entries: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            entries.append(_clip(item))
+        if len(entries) >= 20:
+            break
+    return entries
+
+
+def _clip(text: str, limit: int = 200) -> str:
+    """折叠空白并截断单条文本。"""
+
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit] + "…"
 
 
 def _dedupe_consecutive(sequence: list[str]) -> list[str]:

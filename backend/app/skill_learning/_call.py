@@ -29,6 +29,24 @@ class ModelCallResult:
         return self.error is None and bool(self.raw_output)
 
 
+_DISABLE_THINKING_BODY = {"thinking": {"type": "disabled"}}
+# 实测支持该字段的 reasoning Provider（与 ContextSummarizer 保持一致）。
+_REASONING_DISABLE_PROVIDERS = frozenset({"deepseek"})
+
+
+def _should_disable_thinking(
+    settings: SkillLearningSettings,
+    provider: str | None,
+) -> bool:
+    """决定本次调用是否携带关闭 thinking 的 extra_body。"""
+
+    requested = settings.skill_learning_disable_thinking
+    if requested is not None:
+        return requested
+    normalized = (provider or "").strip().lower()
+    return normalized in _REASONING_DISABLE_PROVIDERS
+
+
 async def call_model(
     registry: ModelAdapterRegistry,
     *,
@@ -62,6 +80,11 @@ async def call_model(
             model=resolved_model,
             temperature=settings.skill_learning_temperature,
             max_output_tokens=settings.skill_learning_max_output_tokens,
+            extra_body=(
+                _DISABLE_THINKING_BODY
+                if _should_disable_thinking(settings, provider)
+                else {}
+            ),
         )
         async with asyncio.timeout(settings.skill_learning_timeout_seconds):
             response = await adapter.complete(request)

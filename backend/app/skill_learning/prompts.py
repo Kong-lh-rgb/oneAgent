@@ -50,6 +50,12 @@ Rules:
   (lowercase, hyphens), plus description/procedure/pitfalls/verification.
 - proposed_name must not collide with the catalog below (no debug-python-v2,
   python-debug duplicates).
+- BEFORE choosing create/update, also consider the pending_candidates list below:
+  these are candidates already proposed and waiting for human review but not yet
+  a real Skill. If this pattern is already covered by a pending candidate
+  (same meaning, even if the proposed name differs slightly), return action
+  "none" so we do not create a duplicate pending candidate. Do not invent a
+  merge; just avoid duplicates.
 - procedure: the ordered stable steps. pitfalls: repeated mistakes to avoid.
   verification: how to confirm the procedure works.
 - Do not invent evidence not present in the provided execution summaries. If the

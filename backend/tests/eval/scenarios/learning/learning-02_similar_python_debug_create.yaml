@@ -3,7 +3,8 @@ group: learning
 name: 相似 Python debug 任务 → CREATE candidate
 user_input: "learning pipeline"
 initial_tasks:
-  - title: 修复 Python ImportError
+  - alias: d1
+    title: 修复 Python ImportError
     goal: 恢复项目启动
     status: completed
     run_ids: [r1]
@@ -11,7 +12,8 @@ initial_tasks:
       - {id: s1, title: 复现错误, status: done, note: 已复现}
       - {id: s2, title: 读 traceback, status: done, note: 定位根因}
       - {id: s3, title: 修复并跑 pytest, status: done, note: 已验证}
-  - title: 修复 Python TypeError
+  - alias: d2
+    title: 修复 Python TypeError
     goal: 恢复启动
     status: completed
     run_ids: [r2]
@@ -19,7 +21,8 @@ initial_tasks:
       - {id: s1, title: 复现错误, status: done, note: 已复现}
       - {id: s2, title: 读 traceback, status: done, note: 定位根因}
       - {id: s3, title: 修复并跑 pytest, status: done, note: 已验证}
-  - title: 修复 Python KeyError
+  - alias: d3
+    title: 修复 Python KeyError
     goal: 恢复正常运行
     status: completed
     run_ids: [r3]
@@ -27,7 +30,8 @@ initial_tasks:
       - {id: s1, title: 复现错误, status: done, note: 已复现}
       - {id: s2, title: 读 traceback, status: done, note: 定位根因}
       - {id: s3, title: 修复并跑 pytest, status: done, note: 已验证}
-  - title: 修复 Python AttributeError
+  - alias: d4
+    title: 修复 Python AttributeError
     goal: 恢复运行
     status: completed
     run_ids: [r4]
@@ -45,6 +49,33 @@ initial_runs:
       - {type: tool_started, tool_name: task_update, arguments: {goal: 恢复启动}}
       - {type: tool_completed, tool_name: task_update, arguments: {goal: 恢复启动}}
       - {type: agent_completed}
+  - run_id: r2
+    events:
+      - {type: tool_started, tool_name: read_file, arguments: {path: app.py}}
+      - {type: tool_completed, tool_name: read_file, arguments: {path: app.py}}
+      - {type: tool_started, tool_name: run_pytest, arguments: {}}
+      - {type: tool_completed, tool_name: run_pytest, arguments: {}, success: false, error: TypeError}
+      - {type: tool_started, tool_name: task_update, arguments: {status: completed}}
+      - {type: tool_completed, tool_name: task_update, arguments: {status: completed}}
+      - {type: agent_completed}
+  - run_id: r3
+    events:
+      - {type: tool_started, tool_name: read_file, arguments: {path: models.py}}
+      - {type: tool_completed, tool_name: read_file, arguments: {path: models.py}}
+      - {type: tool_started, tool_name: run_pytest, arguments: {}}
+      - {type: tool_completed, tool_name: run_pytest, arguments: {}, success: false, error: KeyError}
+      - {type: tool_started, tool_name: task_update, arguments: {status: completed}}
+      - {type: tool_completed, tool_name: task_update, arguments: {status: completed}}
+      - {type: agent_completed}
+  - run_id: r4
+    events:
+      - {type: tool_started, tool_name: read_file, arguments: {path: utils.py}}
+      - {type: tool_completed, tool_name: read_file, arguments: {path: utils.py}}
+      - {type: tool_started, tool_name: run_pytest, arguments: {}}
+      - {type: tool_completed, tool_name: run_pytest, arguments: {}, success: false, error: AttributeError}
+      - {type: tool_started, tool_name: task_update, arguments: {status: completed}}
+      - {type: tool_completed, tool_name: task_update, arguments: {status: completed}}
+      - {type: agent_completed}
 expect:
   learning:
     batch_size: 4
@@ -52,3 +83,4 @@ expect:
     create_count: 1
     update_count: 0
     expected_names: [python-runtime-debug]
+    expected_pattern_task_aliases: [d1, d2, d3, d4]

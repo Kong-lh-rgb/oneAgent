@@ -191,6 +191,74 @@
 - [ ] `allowed-tools` 仍未参与工具权限（只解析 + 边界语义）
 - [ ] Candidate 无 CLI 编辑功能（edit-then-accept 是后续项）
 
+### 修复：Skill Learning V1 Debug + 真实模型 Live Eval
+
+> 用默认真实模型（deepseek / deepseek-v4-flash）做 Live Eval，修复 4 个明确 Bad Case，
+> 并给出真实模型的判断结果、Candidate 质量、Token 与 Latency。**不是只报"测试通过"。**
+
+#### Bad Case 1：TraceEvidenceBuilder 与真实 task_update 参数错位
+- [x] 根因：Evidence 用内部 TaskPatch 字段（add_constraints/add_key_facts/replace_steps）解析
+  Trace，但 Trace 保存的是模型真正发出的 ToolCall（constraints/facts/state/steps/
+  step_id/step_status/step_note/expected_revision），导致证据看不到真实内容
+- [x] 修复：`evidence.py` 按真实 API 字段输出**具体变化**：goal/status/state replaced/
+  constraints added/facts added/plan replaced（步骤标题列表）/step <id> -> <status>: <note>，
+  不复制完整 ToolResult；每字段 bounded
+- [x] 测试：6 例对齐真实参数（constraints/facts/state/steps/step 推进+依据/组合更新），
+  不再用 add_constraints/replace_steps 伪造 Trace
+
+#### Bad Case 2：Mining 模型失败永久吃掉当前 Batch
+- [x] 根因：pending 达到 batch 后先把 Task 移入 processed 再调模型，模型 timeout/错误
+  会让该批永久失去学习机会
+- [x] 修复：watermark 增加 `inflight` batch（batch_id/task_ids/started_at/attempt/last_error）；
+  触发时先落 inflight（不 processed），模型失败保留 inflight 供下次触发点重试
+  （at-least-once + Candidate 去重保证幂等），达到 `skill_learning_max_attempts`（默认 3）
+  才放弃并标记 processed，避免 CLI 无限循环；一次 maybe_run_mining 最多一次模型调用
+- [x] 测试：A 失败不 processed / B 重启 inflight 仍在 / C 第二次成功进入 processed /
+  D 成功后不重复 / E invalid JSON 同样不丢批
+
+#### Bad Case 3：Pending Candidate 重复创建
+- [x] 根因：Distiller 只看 Existing Skill Catalog；不同 batch 的 source_task_ids 天然不同，
+  exact-source 去重失效，Pending 未评审时下批又会生成同义 Candidate
+- [x] 修复：Distiller 输入增加 pending candidates 轻量上下文（id/action/proposed_name/
+  description/existing_skill_name/reason 摘要），prompt 明确"已被 pending 覆盖→none"；
+  Service 层再做确定性 exact-name 防线（不创建第二个同名）；reject 不参与去重（允许未来
+  基于新证据重新建议）
+- [x] 测试：同名 pending 不创建 / 语义覆盖返回 none / reject 不阻止未来 / accepted skill
+  进 catalog 走 UPDATE
+
+#### Bad Case 4：Usage 只统计 Mining
+- [x] 根因：一次 batch = 1 mining + N distillation，但 Outcome 只记 mining 的 usage
+- [x] 修复：`SkillLearningOutcome` 聚合 `pattern_mining_calls` / `distillation_calls` /
+  input/output/total tokens / pattern_mining_distillation_duration_ms / total_duration_ms；
+  CLI 输出：tasks scanned / clusters / candidates / model calls / tokens / latency
+
+#### 真实模型 Live Eval（deepseek / deepseek-v4-flash，3 runs × 9 场景）
+- [x] 新增正式 runner `tests/eval/run_learning_live.py`（非手工脚本）+ `tests/eval/learning_judge.py`
+  （Cluster Precision/Recall、Action Accuracy、False Positive、Duplicate、Pitfall Recall）
+- [x] 报告 `tests/eval/reports/skill_learning_live_20260818.md`：**pass rate 67% (18/27)**；
+  Cluster Precision=1.00、Recall=1.00、Action Accuracy=1.00、False Positive=0%、
+  Duplicate=0%；45 calls / 51,918 tokens / 128.8s；平均每 20-Task batch 约 1,923 tokens、
+  4.8s
+- [x] 真实模型实际表现：Pattern Mining 高度可靠（无关/机械任务正确空 clusters）；
+  对证据薄弱的 batch 正确返回 `action=none`（learning-05 明确"现有 debug-python 已覆盖、
+  证据不足"，不编造 UPDATE）；Pending 防重 3/3；Human Gate 正确
+- [x] 真实模型发现的 Bug：deepseek-v4-flash 会把列表字段输出为 null/单字符串 → `_Distilled`
+  归一化；大 prompt 偶发空 content → 对 deepseek 禁用 thinking（与摘要器一致）
+- [x] 失败样本保留并分析：learning-04/05 大部分 FAIL 根因是 **Live 场景 Trace 证据强度不足**
+  （缺"失败→修正→验证成功"闭环），模型保守 none，非管线 Bug
+
+#### 为什么不做历史低频 Mining（intentional design）
+- [x] **processed Task 不进入后续 batch 是刻意设计**：Skill Learning 只学习当前 batch 内
+  高频模式，保持 bounded learning cost（Task 总数 20 / 2000 / 200000 每次都只看固定规模）
+- [x] 低频长期模式不属于当前 Skill Learning V1 目标；不做 history window / embedding /
+  全历史语义检索 / batch overlap（除非真实 Live 数据证明 batch boundary 是主要 Bad Case）
+
+#### 验证
+- [x] 全量：`pytest` 501 通过（501 = 467 + 34 skill_learning）、`ruff`、`compileall`、
+  `git diff --check` 全部通过
+- [x] 三种结论明确分开：A) 确定性单元测试 501 passed；B) 离线 Fake Eval learning-01..09
+  通过；C) 真实模型 Live Eval 见报告（18/27 pass + 完整模型输出与失败分析）
+
 ---
 ## 2026-08-16
 

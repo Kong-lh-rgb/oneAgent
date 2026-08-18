@@ -9,8 +9,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,8 +31,9 @@ from .models import (
     SkillCandidateAction,
     SkillCandidateStatus,
     TaskCard,
+    TaskPatternCluster,
 )
-from .store import SkillCandidateStore
+from .store import InflightBatch, SkillCandidateStore
 
 logger = logging.getLogger("oneagent.skill_learning.service")
 
@@ -38,7 +41,7 @@ _MAX_COMPLETED_TASKS = 1_000_000
 
 
 class SkillLearningOutcome(BaseModel):
-    """一次 maybe_run_mining 的结构化结果。"""
+    """一次 maybe_run_mining 的结构化结果（含完整 Usage 聚合）。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -47,8 +50,17 @@ class SkillLearningOutcome(BaseModel):
     pending_count: int = 0
     scanned_task_count: int = 0
     cluster_count: int = 0
+    clusters: tuple[TaskPatternCluster, ...] = ()
     candidate_count: int = 0
     usage: ModelUsage = Field(default_factory=ModelUsage)
+    pattern_mining_calls: int = 0
+    distillation_calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    pattern_mining_duration_ms: float = 0.0
+    distillation_duration_ms: float = 0.0
+    total_duration_ms: float = 0.0
     error: str | None = None
 
 
@@ -101,8 +113,9 @@ class SkillLearningService:
     ) -> SkillLearningOutcome:
         """按 watermark 决定是否触发一次 Pattern Mining。
 
-        每累计 batch_size 个新 Completed Task 才触发一次；已处理的 Task
-        永不重复计数（watermark 持久化，重启后仍有效）。
+        每累计 batch_size 个新 Completed Task 才触发一次；模型失败时保留
+        inflight batch 供下次触发点重试（at-least-once），成功后移入
+        processed 永不重复。一次调用最多尝试一次模型调用。
         """
 
         if not self.settings.skill_learning_enabled:
@@ -115,36 +128,47 @@ class SkillLearningService:
         watermark = await self.candidate_store.load_watermark()
         processed = set(watermark.processed_task_ids)
         pending = list(watermark.pending_task_ids)
+        inflight = watermark.inflight
 
-        # 1) 新完成的 Task 进入 pending（去重）。
-        known = processed | set(pending)
-        new_ids = [task.id for task in completed if task.id not in known]
-        for task_id in new_ids:
-            if task_id not in pending:
-                pending.append(task_id)
-        await self.candidate_store.save_watermark(
-            watermark.model_copy(update={"pending_task_ids": tuple(pending)})
-        )
-        if len(pending) < self.settings.skill_learning_batch_size:
-            return SkillLearningOutcome(
-                pending_count=len(pending),
-                skipped_reason="batch_not_ready",
+        # 1) 无遗留 inflight 时，累积新 Completed Task 到 pending。
+        if inflight is None:
+            known = processed | set(pending)
+            new_ids = [task.id for task in completed if task.id not in known]
+            for task_id in new_ids:
+                if task_id not in pending:
+                    pending.append(task_id)
+            await self.candidate_store.save_watermark(
+                watermark.model_copy(update={"pending_task_ids": tuple(pending)})
             )
-
-        # 2) 触发扫描：先推进 watermark，防止重复扫描 / 崩溃重扫。
-        scan_ids = tuple(pending[: self.settings.skill_learning_max_tasks_per_scan])
-        scan_set = set(scan_ids)
-        new_processed = tuple(sorted(processed | scan_set))
-        new_pending = tuple(task_id for task_id in pending if task_id not in scan_set)
-        await self.candidate_store.save_watermark(
-            watermark.model_copy(
-                update={
-                    "processed_task_ids": new_processed,
-                    "pending_task_ids": new_pending,
-                    "last_mining_at": datetime.now(UTC),
-                }
+            if len(pending) < self.settings.skill_learning_batch_size:
+                return SkillLearningOutcome(
+                    pending_count=len(pending),
+                    skipped_reason="batch_not_ready",
+                )
+            scan_ids = tuple(
+                pending[: self.settings.skill_learning_max_tasks_per_scan]
             )
-        )
+            scan_set = set(scan_ids)
+            new_pending = tuple(
+                task_id for task_id in pending if task_id not in scan_set
+            )
+            inflight = InflightBatch(
+                batch_id=uuid4().hex,
+                task_ids=scan_ids,
+                started_at=datetime.now(UTC),
+            )
+            await self.candidate_store.save_watermark(
+                watermark.model_copy(
+                    update={
+                        "pending_task_ids": new_pending,
+                        "inflight": inflight,
+                        "last_error": None,
+                    }
+                )
+            )
+        else:
+            scan_ids = inflight.task_ids
+            new_pending = tuple(pending)
 
         cards = tuple(
             _to_card(by_id[task_id])
@@ -152,35 +176,136 @@ class SkillLearningService:
             if task_id in by_id
         )
         if not cards:
+            # 任务文件可能已删除：无法读取，直接结束该 batch。
+            new_processed = tuple(sorted(processed | set(scan_ids)))
+            await self.candidate_store.save_watermark(
+                watermark.model_copy(
+                    update={
+                        "processed_task_ids": new_processed,
+                        "pending_task_ids": new_pending,
+                        "inflight": None,
+                        "last_mining_at": datetime.now(UTC),
+                    }
+                )
+            )
             return SkillLearningOutcome(
                 triggered=True,
                 pending_count=len(new_pending),
+                scanned_task_count=0,
                 error="no readable completed tasks to scan",
             )
 
-        # 3) Pattern Mining（只消费 TaskCard）。
+        # 2) Pattern Mining（一次模型调用）。
         mining: PatternMiningOutcome = await self.miner.mine(cards)
+        usage = mining.usage
+        pattern_duration = mining.duration_ms
+
         if mining.error:
-            logger.warning("pattern mining failed: %s", mining.error)
+            # 模型失败：不 processed，保留 inflight 供下次触发点重试。
+            new_attempt = inflight.attempt + 1
+            if new_attempt >= self.settings.skill_learning_max_attempts:
+                # 已用尽尝试额度：放弃该 batch（标记 processed），避免无限重试。
+                new_processed = tuple(sorted(processed | set(scan_ids)))
+                await self.candidate_store.save_watermark(
+                    watermark.model_copy(
+                        update={
+                            "processed_task_ids": new_processed,
+                            "pending_task_ids": new_pending,
+                            "inflight": None,
+                            "last_error": mining.error,
+                            "last_mining_at": datetime.now(UTC),
+                        }
+                    )
+                )
+                return SkillLearningOutcome(
+                    triggered=True,
+                    pending_count=len(new_pending),
+                    scanned_task_count=len(cards),
+                    usage=usage,
+                    pattern_mining_calls=1,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    total_tokens=usage.total_tokens,
+                    pattern_mining_duration_ms=pattern_duration,
+                    total_duration_ms=pattern_duration,
+                    error=(
+                        "pattern mining failed after "
+                        f"{self.settings.skill_learning_max_attempts} attempts: "
+                        f"{mining.error}"
+                    ),
+                )
+            await self.candidate_store.save_watermark(
+                watermark.model_copy(
+                    update={
+                        "inflight": inflight.model_copy(
+                            update={
+                                "attempt": new_attempt,
+                                "last_error": mining.error,
+                            }
+                        ),
+                        "last_error": mining.error,
+                    }
+                )
+            )
+            logger.warning(
+                "pattern mining failed (attempt %s/%s): %s",
+                new_attempt,
+                self.settings.skill_learning_max_attempts,
+                mining.error,
+            )
             return SkillLearningOutcome(
                 triggered=True,
                 pending_count=len(new_pending),
                 scanned_task_count=len(cards),
-                usage=mining.usage,
+                usage=usage,
+                pattern_mining_calls=1,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                total_tokens=usage.total_tokens,
+                pattern_mining_duration_ms=pattern_duration,
+                total_duration_ms=pattern_duration,
                 error=mining.error,
             )
+
+        # 3) 成功：先推进 watermark（无论有无 cluster）。
+        new_processed = tuple(sorted(processed | set(scan_ids)))
+        await self.candidate_store.save_watermark(
+            watermark.model_copy(
+                update={
+                    "processed_task_ids": new_processed,
+                    "pending_task_ids": new_pending,
+                    "inflight": None,
+                    "last_error": None,
+                    "last_mining_at": datetime.now(UTC),
+                }
+            )
+        )
         if not mining.clusters:
             return SkillLearningOutcome(
                 triggered=True,
                 pending_count=len(new_pending),
                 scanned_task_count=len(cards),
                 cluster_count=0,
-                usage=mining.usage,
+                clusters=(),
+                usage=usage,
+                pattern_mining_calls=1,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                total_tokens=usage.total_tokens,
+                pattern_mining_duration_ms=pattern_duration,
+                total_duration_ms=pattern_duration,
             )
 
         # 4) 每个 Cluster：Evidence → Distillation → Candidate（pending）。
         created: list[SkillCandidate] = []
         errors: list[str] = []
+        distill_usage = ModelUsage()
+        distill_duration = 0.0
+        distill_calls = 0
+        pending_candidates = await self.list_candidates(
+            status=SkillCandidateStatus.PENDING
+        )
+        catalog = await self.skill_store.catalog()
         for cluster in mining.clusters:
             if await self.candidate_store.find_duplicate_source(cluster.task_ids):
                 continue
@@ -193,27 +318,54 @@ class SkillLearningService:
                 run_ids_map[task_id] = task.run_ids
                 events = await self._load_task_events(task)
                 evidence_map[task_id] = self.evidence_builder.build(task, events)
+            logger.debug(
+                "cluster %s evidence chars: %s",
+                cluster.pattern_name,
+                {k: len(v) for k, v in evidence_map.items()},
+            )
             distill: DistillationOutcome = await self.distiller.distill(
                 cluster,
                 evidence=evidence_map,
                 run_ids=run_ids_map,
-                catalog=await self.skill_store.catalog(),
+                catalog=catalog,
+                pending_candidates=pending_candidates,
             )
+            distill_calls += 1
+            distill_usage = _add_usage(distill_usage, distill.usage)
+            distill_duration += distill.duration_ms
             if distill.error:
                 errors.append(f"{cluster.pattern_name}: {distill.error}")
                 continue
             if distill.candidate is None:
                 continue
+            # 防线：pending 已有同名 Candidate → 不重复创建。
+            if _pending_name_exists(
+                pending_candidates,
+                distill.candidate.proposed_name,
+            ):
+                continue
             await self.candidate_store.create(distill.candidate)
             created.append(distill.candidate)
+            pending_candidates = pending_candidates + (distill.candidate,)
 
+        total_usage = _add_usage(usage, distill_usage)
+        total_duration = pattern_duration + distill_duration
         return SkillLearningOutcome(
             triggered=True,
             pending_count=len(new_pending),
             scanned_task_count=len(cards),
             cluster_count=len(mining.clusters),
+            clusters=mining.clusters,
             candidate_count=len(created),
-            usage=mining.usage,
+            usage=total_usage,
+            pattern_mining_calls=1,
+            distillation_calls=distill_calls,
+            input_tokens=total_usage.input_tokens,
+            output_tokens=total_usage.output_tokens,
+            total_tokens=total_usage.total_tokens,
+            pattern_mining_duration_ms=pattern_duration,
+            distillation_duration_ms=distill_duration,
+            total_duration_ms=total_duration,
             error="; ".join(errors) or None,
         )
 
@@ -363,6 +515,31 @@ class SkillLearningService:
 # ---------------------------------------------------------------------------
 # 辅助
 # ---------------------------------------------------------------------------
+
+
+def _add_usage(total: ModelUsage, current: ModelUsage) -> ModelUsage:
+    """聚合两次模型调用的 token 用量（保留 total 的扩展字段）。"""
+
+    return total.model_copy(
+        update={
+            "input_tokens": total.input_tokens + current.input_tokens,
+            "output_tokens": total.output_tokens + current.output_tokens,
+            "total_tokens": total.total_tokens + current.total_tokens,
+        }
+    )
+
+
+def _pending_name_exists(
+    candidates: Sequence[SkillCandidate],
+    proposed_name: str,
+) -> bool:
+    """Service 层确定性 exact-name 防重：pending 已有同名 Candidate 则拒绝。"""
+
+    if not proposed_name:
+        return False
+    return any(
+        candidate.proposed_name == proposed_name for candidate in candidates
+    )
 
 
 def _to_card(task: Task) -> TaskCard:

@@ -24,10 +24,11 @@ from .models import (
     TaskPatternCluster,
 )
 from .service import SkillLearningOutcome, SkillLearningService
-from .store import MiningWatermark, SkillCandidateStore
+from .store import InflightBatch, MiningWatermark, SkillCandidateStore
 
 __all__ = [
     "DistillationOutcome",
+    "InflightBatch",
     "MiningWatermark",
     "PatternMiningOutcome",
     "PatternMiningResult",

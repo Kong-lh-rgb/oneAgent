@@ -110,6 +110,26 @@ class InitialSkill(BaseModel):
         return validate_skill_name(value)
 
 
+class InitialCandidate(BaseModel):
+    """预置到评测环境的一个 Pending SkillCandidate（Learning 场景）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    proposed_name: str
+    description: str = ""
+    action: str = "create"
+    existing_skill_name: str | None = None
+    source_task_ids: tuple[str, ...] = ()
+    reason: str = "预置待评审候选"
+
+    @field_validator("proposed_name")
+    @classmethod
+    def valid_proposed_name(cls, value: str) -> str:
+        from app.skills import validate_skill_name
+
+        return validate_skill_name(value)
+
+
 class ApprovalPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -232,6 +252,10 @@ class SkillLearningExpectation(BaseModel):
     expected_names: tuple[str, ...] = ()
     no_candidates: bool = False
     created_skill_names: tuple[str, ...] = ()
+    # 预期属于同一模式簇的 Task alias（用于 Live Eval 计算 Cluster Precision/Recall）。
+    expected_pattern_task_aliases: tuple[str, ...] = ()
+    # 期望被提炼进 pitfalls 的关键词（用于 Pitfall Recall 估算）。
+    expected_pitfall_keywords: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def validate_expectation(self) -> SkillLearningExpectation:
@@ -272,6 +296,7 @@ class Scenario(BaseModel):
     initial_files: tuple[InitialFile, ...] = ()
     initial_skills: tuple[InitialSkill, ...] = ()
     initial_runs: tuple[InitialTraceRun, ...] = ()
+    initial_pending_candidates: tuple[InitialCandidate, ...] = ()
     allowed_tools: tuple[str, ...] | None = None
     max_steps: int = 10
     max_tool_rounds: int | None = None

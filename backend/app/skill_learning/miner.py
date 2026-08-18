@@ -29,6 +29,7 @@ class PatternMiningOutcome(BaseModel):
     model: str | None = None
     duration_ms: float = 0.0
     usage: ModelUsage = Field(default_factory=ModelUsage)
+    raw_output: str | None = None
     error: str | None = None
 
 

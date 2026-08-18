@@ -698,3 +698,457 @@ async def test_accept_creates_skill_and_reject_does_not(
     assert "步骤A" in skill.content
     catalog = await env["skill_store"].catalog()
     assert any(item.name == "accepted-skill" for item in catalog)
+
+
+# ---------------------------------------------------------------------------
+# 7. P0：Evidence 对齐真实 task_update 参数（具体内容，不只是"发生了 change"）
+# ---------------------------------------------------------------------------
+
+
+def _task_update_events(run_id: str, arguments: dict) -> tuple[AgentEvent, ...]:
+    return (
+        _tool_started(run_id, 1, "task_update", arguments),
+        _tool_completed(run_id, 2, "task_update", arguments),
+    )
+
+
+async def _build_evidence(tmp_path: Path, arguments: dict) -> str:
+    env, _ = await _make_env(tmp_path)
+    task_id = await _create_completed(
+        env["task_store"],
+        title="修复报错",
+        run_ids=("r1",),
+    )
+    task = await env["task_store"].get(task_id)
+    assert task is not None
+    events = _task_update_events("r1", arguments)
+    builder = TraceEvidenceBuilder(_settings(tmp_path))
+    return builder.build(task, events)
+
+
+@pytest.mark.asyncio
+async def test_evidence_sees_constraints_content(tmp_path: Path) -> None:
+    text = await _build_evidence(
+        tmp_path,
+        {"task_id": "x", "constraints": ["不要重装全部依赖", "使用现有 .venv"]},
+    )
+    assert "constraints added: 不要重装全部依赖" in text
+    assert "使用现有 .venv" in text
+
+
+@pytest.mark.asyncio
+async def test_evidence_sees_facts_content(tmp_path: Path) -> None:
+    text = await _build_evidence(
+        tmp_path,
+        {"task_id": "x", "facts": ["项目实际使用 .venv", "CI 依赖缓存"]},
+    )
+    assert "facts added: 项目实际使用 .venv" in text
+    assert "CI 依赖缓存" in text
+
+
+@pytest.mark.asyncio
+async def test_evidence_sees_state_content(tmp_path: Path) -> None:
+    text = await _build_evidence(
+        tmp_path,
+        {"task_id": "x", "state": ["已定位 import path", "等待运行 pytest"]},
+    )
+    assert "state replaced: 已定位 import path" in text
+    assert "等待运行 pytest" in text
+
+
+@pytest.mark.asyncio
+async def test_evidence_sees_replacement_steps(tmp_path: Path) -> None:
+    text = await _build_evidence(
+        tmp_path,
+        {
+            "task_id": "x",
+            "steps": [
+                {"title": "检查 virtualenv"},
+                {"title": "读取 traceback"},
+                {"title": "定位 import path"},
+                {"title": "运行 pytest"},
+            ],
+        },
+    )
+    assert "plan replaced:" in text
+    assert "- 检查 virtualenv" in text
+    assert "- 读取 traceback" in text
+    assert "- 运行 pytest" in text
+
+
+@pytest.mark.asyncio
+async def test_evidence_sees_step_progress_and_note(tmp_path: Path) -> None:
+    text = await _build_evidence(
+        tmp_path,
+        {
+            "task_id": "x",
+            "step_id": "s2",
+            "step_status": "done",
+            "step_note": "已确认 .venv 存在，pytest 通过",
+        },
+    )
+    assert "step s2 -> done: 已确认 .venv 存在，pytest 通过" in text
+
+
+@pytest.mark.asyncio
+async def test_evidence_combined_update_keeps_key_fields(tmp_path: Path) -> None:
+    text = await _build_evidence(
+        tmp_path,
+        {
+            "task_id": "x",
+            "goal": "恢复 CI 全绿",
+            "constraints": ["不要跳过 virtualenv 确认"],
+            "facts": ["项目使用 .venv"],
+            "steps": [{"title": "复现"}, {"title": "修复"}],
+            "step_id": "s1",
+            "step_status": "done",
+            "step_note": "已复现",
+        },
+    )
+    # steps 与 step_id 在真实 API 中互斥，但组合更新至少保留 goal/constraints/facts。
+    assert "goal: 恢复 CI 全绿" in text
+    assert "constraints added: 不要跳过 virtualenv 确认" in text
+    assert "facts added: 项目使用 .venv" in text
+
+
+# ---------------------------------------------------------------------------
+# 8. P1：Mining 失败不丢 Batch（inflight 状态机）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mining_failure_keeps_batch_inflight(tmp_path: Path) -> None:
+    env, root = await _make_env(tmp_path, batch_size=20)
+    registry, _ = _fake_registry([TimeoutError("model timeout")])
+    service = SkillLearningService(
+        env["task_store"],
+        env["trace_store"],
+        env["skill_store"],
+        env["candidate_store"],
+        registry,
+        settings=_settings(root, batch_size=20),
+        default_provider="fake",
+    )
+    for index in range(20):
+        await _create_completed(env["task_store"], title=f"任务{index}")
+
+    outcome = await service.maybe_run_mining()
+    assert outcome.triggered is True
+    assert outcome.error is not None
+
+    watermark = await env["candidate_store"].load_watermark()
+    assert watermark.inflight is not None
+    assert len(watermark.inflight.task_ids) == 20
+    # 任务没有进入最终 processed。
+    assert not set(watermark.inflight.task_ids) & set(watermark.processed_task_ids)
+
+
+@pytest.mark.asyncio
+async def test_inflight_survives_restart_and_retry_succeeds(tmp_path: Path) -> None:
+    env, root = await _make_env(tmp_path, batch_size=5)
+    registry_fail, _ = _fake_registry([TimeoutError("timeout")])
+    service = SkillLearningService(
+        env["task_store"],
+        env["trace_store"],
+        env["skill_store"],
+        env["candidate_store"],
+        registry_fail,
+        settings=_settings(root, batch_size=5),
+        default_provider="fake",
+    )
+    for index in range(5):
+        await _create_completed(env["task_store"], title=f"任务{index}")
+    await service.maybe_run_mining()
+    watermark = await env["candidate_store"].load_watermark()
+    assert watermark.inflight is not None
+    assert watermark.inflight.attempt == 1
+
+    # 重启：新实例直接读到遗留 inflight。
+    reloaded = await env["candidate_store"].load_watermark()
+    assert reloaded.inflight is not None
+
+    # 第二次模型成功 → 进入 processed。
+    registry_ok, _ = _fake_registry([_model_response('{"clusters": []}')])
+    service2 = SkillLearningService(
+        env["task_store"],
+        env["trace_store"],
+        env["skill_store"],
+        env["candidate_store"],
+        registry_ok,
+        settings=_settings(root, batch_size=5),
+        default_provider="fake",
+    )
+    outcome = await service2.maybe_run_mining()
+    assert outcome.triggered is True
+    assert outcome.error is None
+    watermark2 = await env["candidate_store"].load_watermark()
+    assert watermark2.inflight is None
+    assert len(watermark2.processed_task_ids) == 5
+    # D. 成功后不再重复扫描。
+    outcome_again = await service2.maybe_run_mining()
+    assert outcome_again.triggered is False
+
+
+@pytest.mark.asyncio
+async def test_invalid_json_mining_keeps_batch(tmp_path: Path) -> None:
+    env, root = await _make_env(tmp_path, batch_size=5)
+    registry, _ = _fake_registry([_model_response("not a json payload")])
+    service = SkillLearningService(
+        env["task_store"],
+        env["trace_store"],
+        env["skill_store"],
+        env["candidate_store"],
+        registry,
+        settings=_settings(root, batch_size=5),
+        default_provider="fake",
+    )
+    for index in range(5):
+        await _create_completed(env["task_store"], title=f"任务{index}")
+    outcome = await service.maybe_run_mining()
+    assert outcome.triggered is True
+    assert outcome.error is not None
+    watermark = await env["candidate_store"].load_watermark()
+    assert watermark.inflight is not None
+    assert not set(watermark.inflight.task_ids) & set(watermark.processed_task_ids)
+
+
+@pytest.mark.asyncio
+async def test_mining_gives_up_after_max_attempts(tmp_path: Path) -> None:
+    env, root = await _make_env(tmp_path, batch_size=5)
+    registry, _ = _fake_registry([TimeoutError("t1")])
+    settings = _settings(root, batch_size=5)
+    settings = SkillLearningSettings(
+        _env_file=None,
+        skill_learning_batch_size=5,
+        skill_learning_min_cluster_size=3,
+        skill_learning_max_attempts=2,
+        skill_learning_data_dir=root / "env" / "data",
+    )
+    service = SkillLearningService(
+        env["task_store"],
+        env["trace_store"],
+        env["skill_store"],
+        env["candidate_store"],
+        registry,
+        settings=settings,
+        default_provider="fake",
+    )
+    for index in range(5):
+        await _create_completed(env["task_store"], title=f"任务{index}")
+    first = await service.maybe_run_mining()
+    assert first.error is not None
+    watermark = await env["candidate_store"].load_watermark()
+    assert watermark.inflight is not None and watermark.inflight.attempt == 1
+
+    # 第二次（attempt 2）仍失败 → 达到上限，放弃并标记 processed。
+    second = await service.maybe_run_mining()
+    assert second.error is not None
+    watermark2 = await env["candidate_store"].load_watermark()
+    assert watermark2.inflight is None
+    assert len(watermark2.processed_task_ids) == 5
+
+
+# ---------------------------------------------------------------------------
+# 9. P1：Pending Candidate 防重复
+# ---------------------------------------------------------------------------
+
+
+def _mining_cluster_json(task_ids: list[str]) -> str:
+    return json.dumps(
+        {
+            "clusters": [
+                {
+                    "id": "python-debug",
+                    "task_ids": task_ids,
+                    "pattern_name": "Python runtime debugging",
+                    "description": "修复 Python 运行时错误",
+                    "similarity_reason": "均为 Python 报错排查",
+                    "reusable_value": "多步骤流程可复用",
+                }
+            ]
+        },
+        ensure_ascii=False,
+    )
+
+
+_DISTILL_CREATE_JSON = json.dumps(
+    {
+        "action": "create",
+        "proposed_name": "python-runtime-debug",
+        "description": "排查 Python 运行时错误",
+        "reason": "多个相似任务证明流程稳定",
+        "procedure": ["复现", "读 traceback", "修复", "验证"],
+        "pitfalls": ["不要跳过复现"],
+        "verification": ["pytest 通过"],
+    },
+    ensure_ascii=False,
+)
+_DISTILL_NONE_JSON = json.dumps(
+    {"action": "none", "reason": "被 pending candidate 覆盖"},
+    ensure_ascii=False,
+)
+_DISTILL_UPDATE_JSON = json.dumps(
+    {
+        "action": "update",
+        "proposed_name": None,
+        "description": "补充 virtualenv 确认",
+        "reason": "新证据证明应先确认 virtualenv",
+        "procedure": ["复现", "确认 virtualenv", "修复", "验证"],
+        "pitfalls": [],
+        "verification": ["pytest 通过"],
+        "existing_skill_name": "debug-python",
+    },
+    ensure_ascii=False,
+)
+
+
+async def _run_batch(
+    env,
+    root,
+    *,
+    task_count: int = 3,
+    batch_size: int = 3,
+    distill_response: str | None = None,
+):
+    """创建一批类似 Python Debug 的 Completed Task，用真实 task_ids 跑一次 mining。"""
+
+    task_ids: list[str] = []
+    for index in range(task_count):
+        task_id = await _create_completed(
+            env["task_store"],
+            title=f"Python 报错{index}",
+            steps=("复现", "读 traceback", "修复"),
+            run_ids=(f"r{index}",),
+        )
+        task_ids.append(task_id)
+    responses: list = [_model_response(_mining_cluster_json(task_ids))]
+    if distill_response is not None:
+        responses.append(_model_response(distill_response))
+    registry, _ = _fake_registry(responses)
+    service = SkillLearningService(
+        env["task_store"],
+        env["trace_store"],
+        env["skill_store"],
+        env["candidate_store"],
+        registry,
+        settings=_settings(root, batch_size=batch_size),
+        default_provider="fake",
+    )
+    outcome = await service.maybe_run_mining()
+    return service, outcome, task_ids
+
+
+async def service_candidates(env) -> tuple:
+    return await env["candidate_store"].list()
+
+
+@pytest.mark.asyncio
+async def test_pending_candidate_blocks_exact_name_duplicate(tmp_path: Path) -> None:
+    env, root = await _make_env(tmp_path)
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    pending = SkillCandidate(
+        id=uuid4().hex,
+        action=SkillCandidateAction.CREATE,
+        proposed_name="python-runtime-debug",
+        description="已待评审",
+        reason="原因",
+        procedure=("复现",),
+        source_task_ids=("old-a", "old-b", "old-c"),
+        created_at=datetime.now(UTC),
+    )
+    await env["candidate_store"].create(pending)
+
+    # 新 batch 的 Distillation 又建议 python-runtime-debug（同名）→ 不创建第二个。
+    _, outcome, _ = await _run_batch(
+        env,
+        root,
+        distill_response=_DISTILL_CREATE_JSON,
+    )
+    assert outcome.candidate_count == 0
+    assert len(await service_candidates(env)) == 1
+
+
+@pytest.mark.asyncio
+async def test_pending_candidate_semantic_cover_returns_none(tmp_path: Path) -> None:
+    env, root = await _make_env(tmp_path)
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    pending = SkillCandidate(
+        id=uuid4().hex,
+        action=SkillCandidateAction.CREATE,
+        proposed_name="debug-python-runtime",
+        description="待评审",
+        reason="原因",
+        procedure=("复现",),
+        source_task_ids=("x", "y", "z"),
+        created_at=datetime.now(UTC),
+    )
+    await env["candidate_store"].create(pending)
+
+    # Distiller 收到 pending_candidates 后判断被覆盖 → action=none。
+    _, outcome, _ = await _run_batch(
+        env,
+        root,
+        distill_response=_DISTILL_NONE_JSON,
+    )
+    assert outcome.candidate_count == 0
+    assert len(await service_candidates(env)) == 1
+
+
+@pytest.mark.asyncio
+async def test_rejected_candidate_does_not_block_future(tmp_path: Path) -> None:
+    env, root = await _make_env(tmp_path)
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    pending = SkillCandidate(
+        id=uuid4().hex,
+        action=SkillCandidateAction.CREATE,
+        proposed_name="python-runtime-debug",
+        description="待评审",
+        reason="原因",
+        procedure=("复现",),
+        source_task_ids=("x", "y", "z"),
+        created_at=datetime.now(UTC),
+    )
+    await env["candidate_store"].create(pending)
+    await env["candidate_store"].update(
+        pending.model_copy(
+            update={
+                "status": SkillCandidateStatus.REJECTED,
+                "reviewed_at": datetime.now(UTC),
+            }
+        )
+    )
+    # reject 不参与 pending 去重 → 允许基于新证据重新建议。
+    _, outcome, _ = await _run_batch(
+        env,
+        root,
+        distill_response=_DISTILL_CREATE_JSON,
+    )
+    assert outcome.candidate_count == 1
+
+
+@pytest.mark.asyncio
+async def test_accepted_skill_in_catalog_drives_update(tmp_path: Path) -> None:
+    env, root = await _make_env(tmp_path)
+    skill_root = env["skill_store"].project_dir / "debug-python"
+    skill_root.mkdir(parents=True)
+    (skill_root / "SKILL.md").write_text(
+        "---\nname: debug-python\ndescription: 排查 Python 报错\n---\n\n"
+        "# Debug\n\n1. 复现",
+        encoding="utf-8",
+    )
+    _, outcome, _ = await _run_batch(
+        env,
+        root,
+        distill_response=_DISTILL_UPDATE_JSON,
+    )
+    assert outcome.candidate_count == 1
+    candidates = await service_candidates(env)
+    assert candidates[0].action is SkillCandidateAction.UPDATE
+    assert candidates[0].existing_skill_name == "debug-python"
+    assert candidates[0].proposed_name == "debug-python"

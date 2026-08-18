@@ -10,13 +10,17 @@ Learning 场景不是普通 Agent Run，而是：
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import uuid4
 
 from app.agent.events import AgentEvent, AgentEventType
 from app.models.registry import ModelAdapterRegistry
 from app.models.types import ToolCall, ToolResult
 from app.skill_learning import (
     SkillCandidate,
+    SkillCandidateAction,
+    SkillCandidateStatus,
     SkillCandidateStore,
     SkillLearningService,
     SkillLearningSettings,
@@ -161,6 +165,23 @@ async def prepare_learning_environment(
             encoding="utf-8",
         )
 
+    for candidate_spec in scenario.initial_pending_candidates:
+        action = SkillCandidateAction(candidate_spec.action)
+        await candidate_store.create(
+            SkillCandidate(
+                id=uuid4().hex,
+                action=action,
+                proposed_name=candidate_spec.proposed_name,
+                description=candidate_spec.description,
+                reason=candidate_spec.reason,
+                procedure=("占位步骤",),
+                source_task_ids=candidate_spec.source_task_ids,
+                existing_skill_name=candidate_spec.existing_skill_name,
+                status=SkillCandidateStatus.PENDING,
+                created_at=datetime.now(UTC),
+            )
+        )
+
     return LearningEvalEnvironment(
         root=root,
         task_store=task_store,
@@ -182,8 +203,14 @@ async def run_learning_scenario(
     environment: LearningEvalEnvironment | None = None,
     accept_names: tuple[str, ...] = (),
     reject_names: tuple[str, ...] = (),
+    accept_all: bool = False,
+    reject_all: bool = False,
 ) -> LearningEvalOutcome:
-    """预置环境并驱动 Skill Learning，可选执行 Human Gate。"""
+    """预置环境并驱动 Skill Learning，可选执行 Human Gate。
+
+    ``accept_all`` / ``reject_all`` 作用于本次产出的全部 Pending Candidate
+    （Live Eval 中模型命名的 candidate 名不可预知，无法用固定名字匹配）。
+    """
 
     env = environment or await prepare_learning_environment(scenario, root=root)
     learning = scenario.expect.learning
@@ -210,8 +237,24 @@ async def run_learning_scenario(
         mining = None
         error = f"{type(exc).__name__}: {exc}"
 
+    from app.skill_learning import SkillCandidateStatus
+
     candidates = await service.list_candidates()
     created: list[str] = []
+    for candidate in list(candidates):
+        if candidate.status is not SkillCandidateStatus.PENDING:
+            continue
+        if accept_all:
+            try:
+                await service.accept(candidate.id)
+                created.append(candidate.proposed_name)
+            except (KeyError, ValueError) as exc:
+                error = error or f"{type(exc).__name__}: {exc}"
+        if reject_all:
+            try:
+                await service.reject(candidate.id)
+            except (KeyError, ValueError) as exc:
+                error = error or f"{type(exc).__name__}: {exc}"
     for name in accept_names:
         matched = [c for c in candidates if c.proposed_name == name]
         if not matched:

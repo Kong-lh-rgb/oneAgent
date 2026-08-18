@@ -1,9 +1,9 @@
-id: learning-07
+id: learning-09
 group: learning
-name: Candidate accept → SkillStore 能 discover
+name: 已存在 Pending Candidate → 新 batch 不重复创建
 user_input: "learning pipeline"
 initial_tasks:
-  - alias: p1
+  - alias: q1
     title: 修复 Python ImportError
     goal: 恢复启动
     status: completed
@@ -12,7 +12,7 @@ initial_tasks:
       - {id: s1, title: 复现, status: done, note: 完成}
       - {id: s2, title: 读 traceback, status: done, note: 完成}
       - {id: s3, title: 修复, status: done, note: 完成}
-  - alias: p2
+  - alias: q2
     title: 修复 Python TypeError
     goal: 恢复启动
     status: completed
@@ -21,11 +21,10 @@ initial_tasks:
       - {id: s1, title: 复现, status: done, note: 完成}
       - {id: s2, title: 读 traceback, status: done, note: 完成}
       - {id: s3, title: 修复, status: done, note: 完成}
-  - alias: p3
+  - alias: q3
     title: 修复 Python KeyError
     goal: 恢复启动
     status: completed
-    run_ids: [r3]
     run_ids: [r3]
     steps:
       - {id: s1, title: 复现, status: done, note: 完成}
@@ -59,9 +58,14 @@ initial_runs:
       - {type: tool_started, tool_name: task_update, arguments: {status: completed}}
       - {type: tool_completed, tool_name: task_update, arguments: {status: completed}}
       - {type: agent_completed}
+initial_pending_candidates:
+  - proposed_name: python-runtime-debug
+    description: 已待评审的 Python 调试候选
+    action: create
+    source_task_ids: [seed-a, seed-b, seed-c]
 expect:
   learning:
     batch_size: 3
     candidate_count: 1
-    created_skill_names: [python-runtime-debug]
-    expected_pattern_task_aliases: [p1, p2, p3]
+    expected_names: [python-runtime-debug]
+    expected_pattern_task_aliases: [q1, q2, q3]

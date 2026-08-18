@@ -56,6 +56,17 @@ class _Distilled(BaseModel):
             raise ValueError(f"invalid action: {value}")
         return normalized
 
+    @field_validator("procedure", "pitfalls", "verification", mode="before")
+    @classmethod
+    def normalize_list_field(cls, value: object) -> object:
+        """真实模型常把列表字段输出为 null 或单个字符串；统一归一化为列表。"""
+
+        if value is None:
+            return ()
+        if isinstance(value, str):
+            return (value,)
+        return value
+
 
 class DistillationOutcome(BaseModel):
     """一次蒸馏的结果；candidate 为空表示 action=none 或失败。"""
@@ -68,6 +79,7 @@ class DistillationOutcome(BaseModel):
     model: str | None = None
     duration_ms: float = 0.0
     usage: ModelUsage = Field(default_factory=ModelUsage)
+    raw_output: str | None = None
     error: str | None = None
 
 
@@ -94,8 +106,13 @@ class ProcedureDistiller:
         evidence: dict[str, str],
         run_ids: dict[str, tuple[str, ...]],
         catalog: Sequence[SkillMetadata] = (),
+        pending_candidates: Sequence[SkillCandidate] = (),
     ) -> DistillationOutcome:
-        """对单个 Cluster 做蒸馏；action=none 返回空 candidate。"""
+        """对单个 Cluster 做蒸馏；action=none 返回空 candidate。
+
+        ``pending_candidates`` 用于判断新 pattern 是否已被一个待评审 Candidate
+        覆盖，避免重复创建同义 Candidate。
+        """
 
         user_payload: dict[str, Any] = {
             "cluster": cluster.model_dump(mode="json"),
@@ -103,6 +120,17 @@ class ProcedureDistiller:
             "catalog": [
                 {"name": item.name, "description": item.description}
                 for item in catalog
+            ],
+            "pending_candidates": [
+                {
+                    "id": item.id,
+                    "action": item.action.value,
+                    "proposed_name": item.proposed_name,
+                    "description": item.description,
+                    "existing_skill_name": item.existing_skill_name,
+                    "reason": item.reason[:300],
+                }
+                for item in pending_candidates
             ],
         }
         user_content = json.dumps(
@@ -124,6 +152,7 @@ class ProcedureDistiller:
                 model=result.model,
                 duration_ms=result.duration_ms,
                 usage=result.usage,
+                raw_output=result.raw_output,
                 error=result.error,
             )
         payload = parse_strict_json(result.raw_output or "")
@@ -133,6 +162,7 @@ class ProcedureDistiller:
                 model=result.model,
                 duration_ms=result.duration_ms,
                 usage=result.usage,
+                raw_output=result.raw_output,
                 error="distillation returned non-JSON output",
             )
         try:
@@ -143,6 +173,7 @@ class ProcedureDistiller:
                 model=result.model,
                 duration_ms=result.duration_ms,
                 usage=result.usage,
+                raw_output=result.raw_output,
                 error=f"invalid distillation schema: {type(exc).__name__}: {exc}",
             )
         if distilled.action == "none":
@@ -152,6 +183,7 @@ class ProcedureDistiller:
                 model=result.model,
                 duration_ms=result.duration_ms,
                 usage=result.usage,
+                raw_output=result.raw_output,
             )
         try:
             candidate = self._to_candidate(cluster, distilled, evidence, run_ids)
@@ -162,6 +194,7 @@ class ProcedureDistiller:
                 model=result.model,
                 duration_ms=result.duration_ms,
                 usage=result.usage,
+                raw_output=result.raw_output,
                 error=f"invalid candidate: {type(exc).__name__}: {exc}",
             )
         return DistillationOutcome(
@@ -171,6 +204,7 @@ class ProcedureDistiller:
             model=result.model,
             duration_ms=result.duration_ms,
             usage=result.usage,
+            raw_output=result.raw_output,
         )
 
     def _to_candidate(

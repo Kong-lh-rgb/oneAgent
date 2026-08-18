@@ -11,7 +11,8 @@ initial_skills:
       2. 读 traceback
       3. 修复并验证
 initial_tasks:
-  - title: 排查 Python 虚拟环境报错
+  - alias: v1
+    title: 排查 Python 虚拟环境报错
     goal: 确认 virtualenv
     status: completed
     run_ids: [r1]
@@ -19,7 +20,8 @@ initial_tasks:
       - {id: s1, title: 复现错误, status: done, note: 已复现}
       - {id: s2, title: 确认 virtualenv, status: done, note: 是关键步骤}
       - {id: s3, title: 修复并验证, status: done, note: 已验证}
-  - title: 排查 Python 依赖报错
+  - alias: v2
+    title: 排查 Python 依赖报错
     goal: 恢复运行
     status: completed
     run_ids: [r2]
@@ -27,7 +29,8 @@ initial_tasks:
       - {id: s1, title: 复现错误, status: done, note: 已复现}
       - {id: s2, title: 确认 virtualenv, status: done, note: 是关键步骤}
       - {id: s3, title: 修复并验证, status: done, note: 已验证}
-  - title: 排查 Python 路径报错
+  - alias: v3
+    title: 排查 Python 路径报错
     goal: 恢复启动
     status: completed
     run_ids: [r3]
@@ -35,7 +38,8 @@ initial_tasks:
       - {id: s1, title: 复现错误, status: done, note: 已复现}
       - {id: s2, title: 确认 virtualenv, status: done, note: 是关键步骤}
       - {id: s3, title: 修复并验证, status: done, note: 已验证}
-  - title: 排查 Python 环境报错
+  - alias: v4
+    title: 排查 Python 环境报错
     goal: 恢复运行
     status: completed
     run_ids: [r4]
@@ -48,8 +52,29 @@ initial_runs:
     events:
       - {type: tool_started, tool_name: run_pytest, arguments: {}}
       - {type: tool_completed, tool_name: run_pytest, arguments: {}, success: false, error: venv}
-      - {type: tool_started, tool_name: task_update, arguments: {add_constraints: [使用现有 .venv]}}
-      - {type: tool_completed, tool_name: task_update, arguments: {add_constraints: [使用现有 .venv]}}
+      - {type: tool_started, tool_name: task_update, arguments: {constraints: [使用现有 .venv]}}
+      - {type: tool_completed, tool_name: task_update, arguments: {constraints: [使用现有 .venv]}}
+      - {type: agent_completed}
+  - run_id: r2
+    events:
+      - {type: tool_started, tool_name: run_pytest, arguments: {}}
+      - {type: tool_completed, tool_name: run_pytest, arguments: {}, success: false, error: venv missing}
+      - {type: tool_started, tool_name: task_update, arguments: {goal: 确认 virtualenv}}
+      - {type: tool_completed, tool_name: task_update, arguments: {goal: 确认 virtualenv}}
+      - {type: agent_completed}
+  - run_id: r3
+    events:
+      - {type: tool_started, tool_name: run_pytest, arguments: {}}
+      - {type: tool_completed, tool_name: run_pytest, arguments: {}, success: false, error: path not found}
+      - {type: tool_started, tool_name: task_update, arguments: {facts: [项目实际使用 .venv]}}
+      - {type: tool_completed, tool_name: task_update, arguments: {facts: [项目实际使用 .venv]}}
+      - {type: agent_completed}
+  - run_id: r4
+    events:
+      - {type: tool_started, tool_name: run_pytest, arguments: {}}
+      - {type: tool_completed, tool_name: run_pytest, arguments: {}, success: false, error: environment mismatch}
+      - {type: tool_started, tool_name: task_update, arguments: {constraints: [不要重装全部依赖]}}
+      - {type: tool_completed, tool_name: task_update, arguments: {constraints: [不要重装全部依赖]}}
       - {type: agent_completed}
 expect:
   learning:
@@ -58,3 +83,4 @@ expect:
     create_count: 0
     update_count: 1
     expected_names: [debug-python]
+    expected_pattern_task_aliases: [v1, v2, v3, v4]
