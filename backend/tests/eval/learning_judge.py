@@ -43,6 +43,23 @@ class ScenarioVerdict:
     candidate_names: tuple[str, ...] = ()
     pitfall_recall: float | None = None
     pitfall_found: tuple[str, ...] = ()
+    # Deterministic Trace / Evidence / 阈值检查（learning-10+ 使用）。
+    trace_steps_matched: bool = True
+    evidence_missing: tuple[str, ...] = ()
+    evidence_forbidden: tuple[str, ...] = ()
+    cluster_threshold_passed: bool = True
+    pitfall_threshold_passed: bool = True
+
+
+def _pitfall_concept(keyword: str | tuple[str, ...]) -> tuple[str, ...]:
+    """把期望 pitfall 关键词规范成 alias 组。
+
+    单个字符串（旧格式）等价于 [该字符串]；list/tuple 视为同一 concept 的
+    同义 alias 组。
+    """
+    if isinstance(keyword, str):
+        return (keyword,)
+    return tuple(keyword)
 
 
 def judge_scenario(scenario, outcome) -> ScenarioVerdict:
@@ -198,20 +215,104 @@ def judge_scenario(scenario, outcome) -> ScenarioVerdict:
                 f"actual={len(candidates)})"
             )
 
-    # 11) Pitfall Recall
+    # 11) Pitfall Recall（支持中英文同义组：组内命中任一 alias 即算该 concept 命中）
     pitfall_recall: float | None = None
     pitfall_found: tuple[str, ...] = ()
-    if expect.expected_pitfall_keywords and candidates:
+    pitfall_concepts = [
+        _pitfall_concept(keyword) for keyword in expect.expected_pitfall_keywords
+    ]
+    if pitfall_concepts and candidates:
         all_pitfalls = " ".join(
             " ".join(candidate.pitfalls) for candidate in candidates
         )
-        found = [
-            keyword
-            for keyword in expect.expected_pitfall_keywords
-            if keyword.lower() in all_pitfalls.lower()
-        ]
-        pitfall_found = tuple(found)
-        pitfall_recall = len(found) / len(expect.expected_pitfall_keywords)
+        all_pitfalls_lower = all_pitfalls.lower()
+        hit_concepts: list[tuple[str, ...]] = []
+        for concept in pitfall_concepts:
+            if any(alias.lower() in all_pitfalls_lower for alias in concept):
+                hit_concepts.append(concept)
+        pitfall_found = tuple(
+            concept[0] for concept in hit_concepts
+        )
+        pitfall_recall = len(hit_concepts) / len(pitfall_concepts)
+
+    # 12) Deterministic Trace Steps（exact match，learning-10+）
+    trace_steps_matched = True
+    if expect.expected_trace_steps:
+        for alias, expected_runs in expect.expected_trace_steps.items():
+            actual_runs = outcome.trace_steps_by_alias.get(alias, {})
+            for run_id, expected_steps in expected_runs.items():
+                actual_steps = tuple(actual_runs.get(run_id, ()))
+                if actual_steps != tuple(expected_steps):
+                    trace_steps_matched = False
+                    passed = False
+                    reasons.append(
+                        f"trace steps mismatch for {alias}/{run_id}: "
+                        f"expected {list(expected_steps)}, got {list(actual_steps)}"
+                    )
+
+    # 13) Evidence 关键词（learning-10+）
+    evidence_missing: list[str] = []
+    evidence_forbidden: list[str] = []
+    for alias, keywords in expect.evidence_contains.items():
+        text = outcome.evidence_by_alias.get(alias, "")
+        for keyword in keywords:
+            if keyword.lower() not in text.lower():
+                evidence_missing.append(f"{alias}:{keyword}")
+    for alias, keywords in expect.evidence_not_contains.items():
+        text = outcome.evidence_by_alias.get(alias, "")
+        for keyword in keywords:
+            if keyword.lower() in text.lower():
+                evidence_forbidden.append(f"{alias}:{keyword}")
+    if evidence_missing:
+        passed = False
+        reasons.append(f"evidence missing keywords: {sorted(evidence_missing)}")
+    if evidence_forbidden:
+        passed = False
+        reasons.append(
+            f"evidence contains forbidden keywords: {sorted(evidence_forbidden)}"
+        )
+
+    # 14) Cluster Precision / Recall 阈值（positive 场景，learning-10+）
+    cluster_threshold_passed = True
+    if positive and (
+        expect.min_cluster_precision is not None
+        or expect.min_cluster_recall is not None
+    ):
+        meets_threshold = any(
+            cluster.precision is not None
+            and cluster.recall is not None
+            and (
+                expect.min_cluster_precision is None
+                or cluster.precision >= expect.min_cluster_precision
+            )
+            and (
+                expect.min_cluster_recall is None
+                or cluster.recall >= expect.min_cluster_recall
+            )
+            for cluster in cluster_evals
+        )
+        if not meets_threshold:
+            cluster_threshold_passed = False
+            passed = False
+            reasons.append(
+                "no cluster meets precision/recall threshold "
+                f"(min_precision={expect.min_cluster_precision}, "
+                f"min_recall={expect.min_cluster_recall})"
+            )
+
+    # 15) Pitfall Recall 阈值（learning-10+）
+    pitfall_threshold_passed = True
+    if (
+        expect.min_pitfall_recall is not None
+        and pitfall_recall is not None
+        and pitfall_recall < expect.min_pitfall_recall
+    ):
+        pitfall_threshold_passed = False
+        passed = False
+        reasons.append(
+            f"pitfall recall {pitfall_recall:.2f} below threshold "
+            f"{expect.min_pitfall_recall}"
+        )
 
     return ScenarioVerdict(
         scenario_id=scenario.id,
@@ -231,6 +332,11 @@ def judge_scenario(scenario, outcome) -> ScenarioVerdict:
         candidate_names=tuple(c.proposed_name for c in candidates),
         pitfall_recall=pitfall_recall,
         pitfall_found=pitfall_found,
+        trace_steps_matched=trace_steps_matched,
+        evidence_missing=tuple(evidence_missing),
+        evidence_forbidden=tuple(evidence_forbidden),
+        cluster_threshold_passed=cluster_threshold_passed,
+        pitfall_threshold_passed=pitfall_threshold_passed,
     )
 
 

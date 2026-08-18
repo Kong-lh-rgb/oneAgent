@@ -1,0 +1,1248 @@
+id: learning-10
+group: learning
+name: 真实 20-Task 批次：Python 环境错配高频模式 + 噪声 + 跨 Run Trace → UPDATE debug-python
+user_input: skill learning realistic batch
+initial_skills:
+- name: debug-python
+  description: 排查 Python 报错、异常和测试失败的通用流程
+  body: |
+    # Debug Python
+
+    ## Procedure
+    1. 复现错误。
+    2. 阅读 traceback，定位失败位置。
+    3. 做最小代码修复。
+    4. 重新运行失败测试。
+
+    ## Pitfalls
+    - 不要在没有 traceback 的情况下猜测根因。
+
+    ## Verification
+    - 原失败测试通过。
+initial_tasks:
+- alias: py1
+  title: CI pytest 本地正常但线上 ModuleNotFoundError
+  description: 本地 pytest 通过，CI 使用错误 Python 环境导致 requests 无法导入
+  goal: 确认 CI 实际解释器与项目 virtualenv 一致并恢复测试
+  status: completed
+  run_ids:
+  - py1-r1
+  - py1-r2
+  steps:
+  - id: s1
+    title: 复现并读取 traceback
+    status: done
+  - id: s2
+    title: 确认实际 Python 解释器与 virtualenv
+    status: done
+  - id: s3
+    title: 在项目环境修复依赖
+    status: done
+  - id: s4
+    title: 定向与全量 pytest 验证
+    status: done
+- alias: py2
+  title: pip 显示已安装依赖但 pytest 仍 ImportError
+  description: pip list 能看到 httpx，但 pytest 使用另一套 site-packages
+  goal: 找到 pip 与 pytest 使用不同解释器的原因并恢复测试
+  status: completed
+  run_ids:
+  - py2-r1
+  steps:
+  - id: s1
+    title: 复现并读取 traceback
+    status: done
+  - id: s2
+    title: 确认实际 Python 解释器与 virtualenv
+    status: done
+  - id: s3
+    title: 在项目环境修复依赖
+    status: done
+  - id: s4
+    title: 定向与全量 pytest 验证
+    status: done
+- alias: py3
+  title: VS Code 终端选错 Python 导致测试收集失败
+  description: IDE 显示项目 .venv，但终端实际运行 /usr/local/bin/python
+  goal: 切换到项目解释器并恢复 pytest collection
+  status: completed
+  run_ids:
+  - py3-r1
+  steps:
+  - id: s1
+    title: 复现并读取 traceback
+    status: done
+  - id: s2
+    title: 确认实际 Python 解释器与 virtualenv
+    status: done
+  - id: s3
+    title: 在项目环境修复依赖
+    status: done
+  - id: s4
+    title: 定向与全量 pytest 验证
+    status: done
+- alias: py4
+  title: tox job 使用系统 Python 而不是项目 .venv
+  description: tox 启动成功但测试导入内部包失败，根因是解释器错配
+  goal: 修正 tox 环境并保证测试运行在正确解释器
+  status: completed
+  run_ids:
+  - py4-r1
+  - py4-r2
+  steps:
+  - id: s1
+    title: 复现并读取 traceback
+    status: done
+  - id: s2
+    title: 确认实际 Python 解释器与 virtualenv
+    status: done
+  - id: s3
+    title: 在项目环境修复依赖
+    status: done
+  - id: s4
+    title: 定向与全量 pytest 验证
+    status: done
+- alias: py5
+  title: 依赖装进全局 site-packages 导致项目环境持续失败
+  description: 临时全局 pip install 看似成功，但项目 .venv 仍缺依赖
+  goal: 停止全局安装并只修复项目虚拟环境
+  status: completed
+  run_ids:
+  - py5-r1
+  - py5-r2
+  steps:
+  - id: s1
+    title: 复现并读取 traceback
+    status: done
+  - id: s2
+    title: 确认实际 Python 解释器与 virtualenv
+    status: done
+  - id: s3
+    title: 在项目环境修复依赖
+    status: done
+  - id: s4
+    title: 定向与全量 pytest 验证
+    status: done
+- alias: py6
+  title: 重建环境后 CLI 正常但 pytest runner 仍缓存旧解释器
+  description: shell 中 python 已正确，测试 runner 仍使用旧 interpreter path
+  goal: 清理 runner 的旧解释器状态并恢复一致的项目环境
+  status: completed
+  run_ids:
+  - py6-r1
+  steps:
+  - id: s1
+    title: 复现并读取 traceback
+    status: done
+  - id: s2
+    title: 确认实际 Python 解释器与 virtualenv
+    status: done
+  - id: s3
+    title: 在项目环境修复依赖
+    status: done
+  - id: s4
+    title: 定向与全量 pytest 验证
+    status: done
+- alias: n1
+  title: 批量缩放商品缩略图
+  goal: 把 20 张 PNG 统一缩放为 512x512
+  status: completed
+  run_ids:
+  - n1-r1
+  steps:
+  - id: s1
+    title: 批量缩放图片
+    status: done
+- alias: n2
+  title: 汇总周会纪要
+  goal: 提取决策项与 owner
+  status: completed
+  run_ids:
+  - n2-r1
+  steps:
+  - id: s1
+    title: 整理会议记录
+    status: done
+  - id: s2
+    title: 输出行动项
+    status: done
+- alias: n3
+  title: 给慢 SQL 添加复合索引
+  goal: 降低订单查询延迟
+  status: completed
+  run_ids:
+  - n3-r1
+  steps:
+  - id: s1
+    title: 查看执行计划
+    status: done
+  - id: s2
+    title: 添加索引并对比延迟
+    status: done
+- alias: n4
+  title: 调整 Nginx 静态资源缓存头
+  goal: 为 hashed assets 设置长期缓存
+  status: completed
+  run_ids:
+  - n4-r1
+  steps:
+  - id: s1
+    title: 修改缓存配置
+    status: done
+  - id: s2
+    title: curl 验证响应头
+    status: done
+- alias: n5
+  title: CSV 时间戳统一转 UTC
+  goal: 把多时区导出数据规范化
+  status: completed
+  run_ids:
+  - n5-r1
+  steps:
+  - id: s1
+    title: 转换时间字段
+    status: done
+  - id: s2
+    title: 抽样校验
+    status: done
+- alias: n6
+  title: 修复移动端 CSS 横向溢出
+  goal: 320px 屏幕不出现横向滚动条
+  status: completed
+  run_ids:
+  - n6-r1
+  steps:
+  - id: s1
+    title: 定位宽度来源
+    status: done
+  - id: s2
+    title: 修改样式并截图验证
+    status: done
+- alias: n7
+  title: 解决 Git rebase 冲突
+  goal: 把 feature 分支干净地 rebase 到 main
+  status: completed
+  run_ids:
+  - n7-r1
+  steps:
+  - id: s1
+    title: 处理冲突
+    status: done
+  - id: s2
+    title: 验证历史
+    status: done
+- alias: n8
+  title: Docker healthcheck 路径错误
+  goal: 修复容器健康检查
+  status: completed
+  run_ids:
+  - n8-r1
+  steps:
+  - id: s1
+    title: 修改 healthcheck URL
+    status: done
+  - id: s2
+    title: 验证容器 healthy
+    status: done
+- alias: n9
+  title: Redis eviction 导致缓存命中率下降
+  goal: 调整缓存策略恢复命中率
+  status: completed
+  run_ids:
+  - n9-r1
+  steps:
+  - id: s1
+    title: 查看内存与 eviction 指标
+    status: done
+  - id: s2
+    title: 调整缓存策略
+    status: done
+- alias: n10
+  title: 为 REST API 补充分页文档
+  goal: 说明 cursor 与 next_token 的使用方式
+  status: completed
+  run_ids:
+  - n10-r1
+  steps:
+  - id: s1
+    title: 更新 API 文档
+    status: done
+- alias: n11
+  title: 修复 cron 任务时区偏移
+  goal: 每天芝加哥时间 8 点执行
+  status: completed
+  run_ids:
+  - n11-r1
+  steps:
+  - id: s1
+    title: 修正时区配置
+    status: done
+  - id: s2
+    title: 验证下一次触发时间
+    status: done
+- alias: n12
+  title: 修复 Python 分页算法 off-by-one
+  goal: 修复纯逻辑边界错误
+  status: completed
+  run_ids:
+  - n12-r1
+  steps:
+  - id: s1
+    title: 复现边界用例
+    status: done
+  - id: s2
+    title: 修复分页公式
+    status: done
+  - id: s3
+    title: 单元测试验证
+    status: done
+- alias: n13
+  title: pnpm workspace 找不到内部 Node 包
+  goal: 修复 pnpm workspace 依赖解析
+  status: completed
+  run_ids:
+  - n13-r1
+  steps:
+  - id: s1
+    title: 检查 Node 与 pnpm 版本
+    status: done
+  - id: s2
+    title: 修复 workspace 配置
+    status: done
+  - id: s3
+    title: pnpm test 验证
+    status: done
+- alias: n14
+  title: Ruby Bundler 使用错误 gemset
+  goal: 修复 Ruby gemset 并恢复测试
+  status: completed
+  run_ids:
+  - n14-r1
+  steps:
+  - id: s1
+    title: 确认 Ruby 与 gemset
+    status: done
+  - id: s2
+    title: 在正确环境 bundle install
+    status: done
+  - id: s3
+    title: rspec 验证
+    status: done
+initial_runs:
+- run_id: py1-r1
+  events:
+  - type: tool_started
+    step: 1
+    tool_name: read_file
+    arguments:
+      path: README.md
+  - type: tool_completed
+    step: 1
+    tool_name: read_file
+    arguments:
+      path: README.md
+    success: true
+  - type: tool_started
+    step: 2
+    tool_name: task_update
+    arguments:
+      task_id: $task:py1
+      step_id: s2
+      step_status: in_progress
+  - type: tool_completed
+    step: 2
+    tool_name: task_update
+    arguments:
+      task_id: $task:py1
+      step_id: s2
+      step_status: in_progress
+    success: true
+  - type: tool_started
+    step: 3
+    tool_name: run_pytest
+    arguments:
+      target: tests/test_api.py
+  - type: tool_completed
+    step: 3
+    tool_name: run_pytest
+    arguments:
+      target: tests/test_api.py
+    success: false
+    error: 'ModuleNotFoundError: No module named ''requests'''
+  - type: tool_started
+    step: 4
+    tool_name: run_shell
+    arguments:
+      command: python -c 'import sys; print(sys.executable, sys.prefix)'
+  - type: tool_completed
+    step: 4
+    tool_name: run_shell
+    arguments:
+      command: python -c 'import sys; print(sys.executable, sys.prefix)'
+    success: true
+  - type: tool_started
+    step: 5
+    tool_name: task_update
+    arguments:
+      task_id: $task:py1
+      step_id: s2
+      step_status: in_progress
+      facts:
+      - CI pytest 实际使用 /usr/bin/python，而项目期望 .venv/bin/python
+  - type: tool_completed
+    step: 5
+    tool_name: task_update
+    arguments:
+      task_id: $task:py1
+      step_id: s2
+      step_status: in_progress
+      facts:
+      - CI pytest 实际使用 /usr/bin/python，而项目期望 .venv/bin/python
+    success: true
+  - type: tool_started
+    step: 6
+    tool_name: task_update
+    arguments:
+      task_id: $task:py1
+      goal: 直接全局安装依赖
+  - type: tool_completed
+    step: 6
+    tool_name: task_update
+    arguments:
+      task_id: $task:py1
+      goal: 直接全局安装依赖
+    success: false
+    error: revision conflict
+- run_id: py1-r2
+  events:
+  - type: tool_started
+    step: 1
+    tool_name: task_update
+    arguments:
+      task_id: $task:py1
+      step_id: s2
+      step_status: in_progress
+  - type: tool_completed
+    step: 1
+    tool_name: task_update
+    arguments:
+      task_id: $task:py1
+      step_id: s2
+      step_status: in_progress
+    success: true
+  - type: tool_started
+    step: 2
+    tool_name: run_shell
+    arguments:
+      command: .venv/bin/python -m pip install -r requirements.txt
+  - type: tool_completed
+    step: 2
+    tool_name: run_shell
+    arguments:
+      command: .venv/bin/python -m pip install -r requirements.txt
+    success: true
+  - type: tool_started
+    step: 3
+    tool_name: task_update
+    arguments:
+      task_id: $task:py1
+      step_id: s2
+      step_status: in_progress
+      facts:
+      - 切换到项目 .venv 后 requests import 恢复
+  - type: tool_completed
+    step: 3
+    tool_name: task_update
+    arguments:
+      task_id: $task:py1
+      step_id: s2
+      step_status: in_progress
+      facts:
+      - 切换到项目 .venv 后 requests import 恢复
+    success: true
+  - type: tool_started
+    step: 4
+    tool_name: run_pytest
+    arguments:
+      target: tests/test_api.py && full-suite
+  - type: tool_completed
+    step: 4
+    tool_name: run_pytest
+    arguments:
+      target: tests/test_api.py && full-suite
+    success: true
+  - type: tool_started
+    step: 5
+    tool_name: task_update
+    arguments:
+      task_id: $task:py1
+      step_id: s2
+      step_status: done
+      step_note: 确认解释器后只在项目 virtualenv 修依赖；定向与全量 pytest 均通过
+  - type: tool_completed
+    step: 5
+    tool_name: task_update
+    arguments:
+      task_id: $task:py1
+      step_id: s2
+      step_status: done
+      step_note: 确认解释器后只在项目 virtualenv 修依赖；定向与全量 pytest 均通过
+    success: true
+  - type: tool_started
+    step: 6
+    tool_name: write_file
+    arguments:
+      path: notes.txt
+  - type: tool_completed
+    step: 6
+    tool_name: write_file
+    arguments:
+      path: notes.txt
+    success: true
+- run_id: py2-r1
+  events:
+  - type: tool_started
+    step: 1
+    tool_name: list_files
+    arguments:
+      path: docs
+  - type: tool_completed
+    step: 1
+    tool_name: list_files
+    arguments:
+      path: docs
+    success: true
+  - type: tool_started
+    step: 2
+    tool_name: task_update
+    arguments:
+      task_id: $task:py2
+      step_id: s2
+      step_status: in_progress
+  - type: tool_completed
+    step: 2
+    tool_name: task_update
+    arguments:
+      task_id: $task:py2
+      step_id: s2
+      step_status: in_progress
+    success: true
+  - type: tool_started
+    step: 3
+    tool_name: run_pytest
+    arguments:
+      target: tests/test_client.py
+  - type: tool_completed
+    step: 3
+    tool_name: run_pytest
+    arguments:
+      target: tests/test_client.py
+    success: false
+    error: 'ImportError: httpx exists in system site-packages but not pytest interpreter'
+  - type: tool_started
+    step: 4
+    tool_name: run_shell
+    arguments:
+      command: python -m pip --version && python -c 'import sys; print(sys.executable)'
+  - type: tool_completed
+    step: 4
+    tool_name: run_shell
+    arguments:
+      command: python -m pip --version && python -c 'import sys; print(sys.executable)'
+    success: true
+  - type: tool_started
+    step: 5
+    tool_name: task_update
+    arguments:
+      task_id: $task:py2
+      step_id: s2
+      step_status: in_progress
+      facts:
+      - pip 与 pytest 指向不同 Python；依赖被安装到了系统 site-packages
+  - type: tool_completed
+    step: 5
+    tool_name: task_update
+    arguments:
+      task_id: $task:py2
+      step_id: s2
+      step_status: in_progress
+      facts:
+      - pip 与 pytest 指向不同 Python；依赖被安装到了系统 site-packages
+    success: true
+  - type: tool_started
+    step: 6
+    tool_name: run_shell
+    arguments:
+      command: .venv/bin/python -m pip install httpx
+  - type: tool_completed
+    step: 6
+    tool_name: run_shell
+    arguments:
+      command: .venv/bin/python -m pip install httpx
+    success: true
+  - type: tool_started
+    step: 7
+    tool_name: run_pytest
+    arguments:
+      target: tests/test_client.py && full-suite
+  - type: tool_completed
+    step: 7
+    tool_name: run_pytest
+    arguments:
+      target: tests/test_client.py && full-suite
+    success: true
+  - type: tool_started
+    step: 8
+    tool_name: task_update
+    arguments:
+      task_id: $task:py2
+      step_id: s2
+      step_status: done
+      step_note: 必须用项目解释器对应的 pip；修复后定向与全量 pytest 通过
+  - type: tool_completed
+    step: 8
+    tool_name: task_update
+    arguments:
+      task_id: $task:py2
+      step_id: s2
+      step_status: done
+      step_note: 必须用项目解释器对应的 pip；修复后定向与全量 pytest 通过
+    success: true
+  - type: tool_started
+    step: 9
+    tool_name: read_file
+    arguments:
+      path: CHANGELOG.md
+  - type: tool_completed
+    step: 9
+    tool_name: read_file
+    arguments:
+      path: CHANGELOG.md
+    success: true
+- run_id: py3-r1
+  events:
+  - type: tool_started
+    step: 1
+    tool_name: read_file
+    arguments:
+      path: README.md
+  - type: tool_completed
+    step: 1
+    tool_name: read_file
+    arguments:
+      path: README.md
+    success: true
+  - type: tool_started
+    step: 2
+    tool_name: list_files
+    arguments:
+      path: docs
+  - type: tool_completed
+    step: 2
+    tool_name: list_files
+    arguments:
+      path: docs
+    success: true
+  - type: tool_started
+    step: 3
+    tool_name: run_pytest
+    arguments:
+      target: collect-only
+  - type: tool_completed
+    step: 3
+    tool_name: run_pytest
+    arguments:
+      target: collect-only
+    success: false
+    error: 'ImportError: pytest uses /usr/local/bin/python instead of project .venv'
+  - type: tool_started
+    step: 4
+    tool_name: run_shell
+    arguments:
+      command: which python && python -c 'import sys; print(sys.executable)'
+  - type: tool_completed
+    step: 4
+    tool_name: run_shell
+    arguments:
+      command: which python && python -c 'import sys; print(sys.executable)'
+    success: true
+  - type: tool_started
+    step: 5
+    tool_name: run_shell
+    arguments:
+      command: source .venv/bin/activate
+  - type: tool_completed
+    step: 5
+    tool_name: run_shell
+    arguments:
+      command: source .venv/bin/activate
+    success: true
+  - type: tool_started
+    step: 6
+    tool_name: run_pytest
+    arguments:
+      target: collect-only && full-suite
+  - type: tool_completed
+    step: 6
+    tool_name: run_pytest
+    arguments:
+      target: collect-only && full-suite
+    success: true
+  - type: tool_started
+    step: 7
+    tool_name: task_update
+    arguments:
+      task_id: $task:py3
+      step_id: s2
+      step_status: done
+      step_note: 没有提前标记 in_progress；确认终端解释器后激活项目 virtualenv，pytest 恢复
+  - type: tool_completed
+    step: 7
+    tool_name: task_update
+    arguments:
+      task_id: $task:py3
+      step_id: s2
+      step_status: done
+      step_note: 没有提前标记 in_progress；确认终端解释器后激活项目 virtualenv，pytest 恢复
+    success: true
+  - type: tool_started
+    step: 8
+    tool_name: write_file
+    arguments:
+      path: unrelated.txt
+  - type: tool_completed
+    step: 8
+    tool_name: write_file
+    arguments:
+      path: unrelated.txt
+    success: true
+- run_id: py4-r1
+  events:
+  - type: tool_started
+    step: 1
+    tool_name: read_file
+    arguments:
+      path: release-notes.md
+  - type: tool_completed
+    step: 1
+    tool_name: read_file
+    arguments:
+      path: release-notes.md
+    success: true
+  - type: tool_started
+    step: 2
+    tool_name: task_update
+    arguments:
+      task_id: $task:py4
+      step_id: s2
+      step_status: in_progress
+  - type: tool_completed
+    step: 2
+    tool_name: task_update
+    arguments:
+      task_id: $task:py4
+      step_id: s2
+      step_status: in_progress
+    success: true
+  - type: tool_started
+    step: 3
+    tool_name: run_pytest
+    arguments:
+      target: tox
+  - type: tool_completed
+    step: 3
+    tool_name: run_pytest
+    arguments:
+      target: tox
+    success: false
+    error: 'ModuleNotFoundError: internal package missing under /usr/bin/python'
+  - type: tool_started
+    step: 4
+    tool_name: run_shell
+    arguments:
+      command: tox -e py --showconfig && python -c 'import sys; print(sys.executable)'
+  - type: tool_completed
+    step: 4
+    tool_name: run_shell
+    arguments:
+      command: tox -e py --showconfig && python -c 'import sys; print(sys.executable)'
+    success: true
+  - type: tool_started
+    step: 5
+    tool_name: task_update
+    arguments:
+      task_id: $task:py4
+      step_id: s2
+      step_status: in_progress
+      facts:
+      - tox 测试环境继承了系统 Python，而不是项目 .venv
+  - type: tool_completed
+    step: 5
+    tool_name: task_update
+    arguments:
+      task_id: $task:py4
+      step_id: s2
+      step_status: in_progress
+      facts:
+      - tox 测试环境继承了系统 Python，而不是项目 .venv
+    success: true
+- run_id: py4-r2
+  events:
+  - type: tool_started
+    step: 1
+    tool_name: task_update
+    arguments:
+      task_id: $task:py4
+      step_id: s2
+      step_status: in_progress
+  - type: tool_completed
+    step: 1
+    tool_name: task_update
+    arguments:
+      task_id: $task:py4
+      step_id: s2
+      step_status: in_progress
+    success: true
+  - type: tool_started
+    step: 2
+    tool_name: read_file
+    arguments:
+      path: tox.ini
+  - type: tool_completed
+    step: 2
+    tool_name: read_file
+    arguments:
+      path: tox.ini
+    success: true
+  - type: tool_started
+    step: 3
+    tool_name: run_shell
+    arguments:
+      command: tox -r -e py
+  - type: tool_completed
+    step: 3
+    tool_name: run_shell
+    arguments:
+      command: tox -r -e py
+    success: true
+  - type: tool_started
+    step: 4
+    tool_name: run_pytest
+    arguments:
+      target: tox && full-suite
+  - type: tool_completed
+    step: 4
+    tool_name: run_pytest
+    arguments:
+      target: tox && full-suite
+    success: true
+  - type: tool_started
+    step: 5
+    tool_name: task_update
+    arguments:
+      task_id: $task:py4
+      step_id: s2
+      step_status: done
+      step_note: 保留最早诊断上下文；重建测试环境后使用正确解释器并通过验证
+  - type: tool_completed
+    step: 5
+    tool_name: task_update
+    arguments:
+      task_id: $task:py4
+      step_id: s2
+      step_status: done
+      step_note: 保留最早诊断上下文；重建测试环境后使用正确解释器并通过验证
+    success: true
+  - type: tool_started
+    step: 6
+    tool_name: write_file
+    arguments:
+      path: unrelated.md
+  - type: tool_completed
+    step: 6
+    tool_name: write_file
+    arguments:
+      path: unrelated.md
+    success: true
+- run_id: py5-r1
+  events:
+  - type: tool_started
+    step: 1
+    tool_name: task_update
+    arguments:
+      task_id: $task:py5
+      step_id: s2
+      step_status: in_progress
+  - type: tool_completed
+    step: 1
+    tool_name: task_update
+    arguments:
+      task_id: $task:py5
+      step_id: s2
+      step_status: in_progress
+    success: true
+  - type: tool_started
+    step: 2
+    tool_name: run_pytest
+    arguments:
+      target: tests/test_worker.py
+  - type: tool_completed
+    step: 2
+    tool_name: run_pytest
+    arguments:
+      target: tests/test_worker.py
+    success: false
+    error: 'ImportError: package only exists in global site-packages'
+  - type: tool_started
+    step: 3
+    tool_name: run_shell
+    arguments:
+      command: python -m site && .venv/bin/python -m site
+  - type: tool_completed
+    step: 3
+    tool_name: run_shell
+    arguments:
+      command: python -m site && .venv/bin/python -m site
+    success: true
+  - type: tool_started
+    step: 4
+    tool_name: task_update
+    arguments:
+      task_id: $task:py5
+      step_id: s2
+      step_status: blocked
+      step_note: 发现依赖只在全局 site-packages；不要继续使用全局 pip，必须回到项目 virtualenv
+  - type: tool_completed
+    step: 4
+    tool_name: task_update
+    arguments:
+      task_id: $task:py5
+      step_id: s2
+      step_status: blocked
+      step_note: 发现依赖只在全局 site-packages；不要继续使用全局 pip，必须回到项目 virtualenv
+    success: true
+  - type: tool_started
+    step: 5
+    tool_name: read_file
+    arguments:
+      path: unrelated.md
+  - type: tool_completed
+    step: 5
+    tool_name: read_file
+    arguments:
+      path: unrelated.md
+    success: true
+- run_id: py5-r2
+  events:
+  - type: tool_started
+    step: 1
+    tool_name: list_files
+    arguments:
+      path: docs
+  - type: tool_completed
+    step: 1
+    tool_name: list_files
+    arguments:
+      path: docs
+    success: true
+  - type: tool_started
+    step: 2
+    tool_name: task_update
+    arguments:
+      task_id: $task:py5
+      step_id: s2
+      step_status: in_progress
+  - type: tool_completed
+    step: 2
+    tool_name: task_update
+    arguments:
+      task_id: $task:py5
+      step_id: s2
+      step_status: in_progress
+    success: true
+  - type: tool_started
+    step: 3
+    tool_name: run_shell
+    arguments:
+      command: .venv/bin/python -m pip install -r requirements.txt
+  - type: tool_completed
+    step: 3
+    tool_name: run_shell
+    arguments:
+      command: .venv/bin/python -m pip install -r requirements.txt
+    success: true
+  - type: tool_started
+    step: 4
+    tool_name: run_pytest
+    arguments:
+      target: tests/test_worker.py && full-suite
+  - type: tool_completed
+    step: 4
+    tool_name: run_pytest
+    arguments:
+      target: tests/test_worker.py && full-suite
+    success: true
+  - type: tool_started
+    step: 5
+    tool_name: task_update
+    arguments:
+      task_id: $task:py5
+      step_id: s2
+      step_status: done
+      step_note: 只在项目 .venv 安装依赖后测试恢复；全局 pip 是错误路径
+  - type: tool_completed
+    step: 5
+    tool_name: task_update
+    arguments:
+      task_id: $task:py5
+      step_id: s2
+      step_status: done
+      step_note: 只在项目 .venv 安装依赖后测试恢复；全局 pip 是错误路径
+    success: true
+  - type: tool_started
+    step: 6
+    tool_name: write_file
+    arguments:
+      path: unrelated.txt
+  - type: tool_completed
+    step: 6
+    tool_name: write_file
+    arguments:
+      path: unrelated.txt
+    success: true
+- run_id: py6-r1
+  events:
+  - type: tool_started
+    step: 1
+    tool_name: read_file
+    arguments:
+      path: .pytest-runner.json
+  - type: tool_completed
+    step: 1
+    tool_name: read_file
+    arguments:
+      path: .pytest-runner.json
+    success: true
+  - type: tool_started
+    step: 2
+    tool_name: task_update
+    arguments:
+      task_id: $task:py6
+      state:
+      - runner cache 仍指向旧解释器路径
+  - type: tool_completed
+    step: 2
+    tool_name: task_update
+    arguments:
+      task_id: $task:py6
+      state:
+      - runner cache 仍指向旧解释器路径
+    success: true
+  - type: tool_started
+    step: 3
+    tool_name: task_update
+    arguments:
+      task_id: $task:py6
+      step_id: s2
+      step_status: in_progress
+  - type: tool_completed
+    step: 3
+    tool_name: task_update
+    arguments:
+      task_id: $task:py6
+      step_id: s2
+      step_status: in_progress
+    success: true
+  - type: tool_started
+    step: 4
+    tool_name: run_shell
+    arguments:
+      command: which python && pytest --version
+  - type: tool_completed
+    step: 4
+    tool_name: run_shell
+    arguments:
+      command: which python && pytest --version
+    success: true
+  - type: tool_started
+    step: 5
+    tool_name: run_pytest
+    arguments:
+      target: tests/test_cli.py
+  - type: tool_completed
+    step: 5
+    tool_name: run_pytest
+    arguments:
+      target: tests/test_cli.py
+    success: false
+    error: runner still launches stale interpreter /opt/old-venv/bin/python
+  - type: tool_started
+    step: 6
+    tool_name: run_shell
+    arguments:
+      command: clear runner cache and bind .venv/bin/python
+  - type: tool_completed
+    step: 6
+    tool_name: run_shell
+    arguments:
+      command: clear runner cache and bind .venv/bin/python
+    success: true
+  - type: tool_started
+    step: 7
+    tool_name: run_pytest
+    arguments:
+      target: tests/test_cli.py && full-suite
+  - type: tool_completed
+    step: 7
+    tool_name: run_pytest
+    arguments:
+      target: tests/test_cli.py && full-suite
+    success: true
+  - type: tool_started
+    step: 8
+    tool_name: task_update
+    arguments:
+      task_id: $task:py6
+      step_id: s2
+      step_status: done
+      step_note: 清理旧解释器缓存后绑定项目 .venv；定向与全量 pytest 通过
+  - type: tool_completed
+    step: 8
+    tool_name: task_update
+    arguments:
+      task_id: $task:py6
+      step_id: s2
+      step_status: done
+      step_note: 清理旧解释器缓存后绑定项目 .venv；定向与全量 pytest 通过
+    success: true
+  - type: tool_started
+    step: 9
+    tool_name: write_file
+    arguments:
+      path: unrelated.md
+  - type: tool_completed
+    step: 9
+    tool_name: write_file
+    arguments:
+      path: unrelated.md
+    success: true
+expect:
+  learning:
+    batch_size: 20
+    candidate_count: 1
+    create_count: 0
+    update_count: 1
+    expected_action: update
+    expected_names:
+    - debug-python
+    expected_pattern_task_aliases:
+    - py1
+    - py2
+    - py3
+    - py4
+    - py5
+    - py6
+    min_cluster_precision: 0.8
+    min_cluster_recall: 0.8
+    expected_pitfall_keywords:
+    - - 全局
+      - global
+    - - 解释器
+      - interpreter
+    min_pitfall_recall: 0.5
+    expected_trace_steps:
+      py1:
+        py1-r1:
+        - 2
+        - 3
+        - 4
+        - 5
+        - 6
+        py1-r2:
+        - 1
+        - 2
+        - 3
+        - 4
+        - 5
+      py2:
+        py2-r1:
+        - 2
+        - 3
+        - 4
+        - 5
+        - 6
+        - 7
+        - 8
+      py3:
+        py3-r1:
+        - 3
+        - 4
+        - 5
+        - 6
+        - 7
+      py4:
+        py4-r1:
+        - 2
+        - 3
+        - 4
+        - 5
+        py4-r2:
+        - 1
+        - 2
+        - 3
+        - 4
+        - 5
+      py5:
+        py5-r1:
+        - 1
+        - 2
+        - 3
+        - 4
+        py5-r2:
+        - 2
+        - 3
+        - 4
+        - 5
+      py6:
+        py6-r1:
+        - 1
+        - 2
+        - 3
+        - 4
+        - 5
+        - 6
+        - 7
+        - 8
+    evidence_contains:
+      py1:
+      - ModuleNotFoundError
+      - virtualenv
+      - revision conflict
+      py2:
+      - site-packages
+      - 项目解释器
+      py3:
+      - usr/local/bin/python
+      - virtualenv
+      py4:
+      - 系统 Python
+      - 正确解释器
+      py5:
+      - 全局 site-packages
+      - 全局 pip
+      py6:
+      - 旧解释器
+      - runner
+    evidence_not_contains:
+      py1:
+      - 直接全局安装依赖
+      py2:
+      - CHANGELOG.md
+      py3:
+      - unrelated.txt
+      py4:
+      - unrelated.md
+      py5:
+      - unrelated.txt
+      py6:
+      - unrelated.md

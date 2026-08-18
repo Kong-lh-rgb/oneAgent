@@ -74,6 +74,7 @@ class InitialTraceEvent(BaseModel):
     arguments: dict[str, object] = Field(default_factory=dict)
     success: bool = True
     error: str | None = None
+    step: int | None = Field(default=None, ge=1)
 
 
 class InitialTraceRun(BaseModel):
@@ -262,7 +263,27 @@ class SkillLearningExpectation(BaseModel):
     # 与 Pattern Detection Recall；非空即 positive 场景）。
     expected_pattern_task_aliases: tuple[str, ...] = ()
     # 期望被提炼进 pitfalls 的关键词（用于 Pitfall Recall 估算）。
-    expected_pitfall_keywords: tuple[str, ...] = ()
+    # 支持同义组：每个元素可以是单字符串（等价于 [该字符串]）或一个 alias 列表
+    # （命中组内任意一个即算该 pitfall concept 命中）。
+    # 例：[[全局, global], [解释器, interpreter]]
+    expected_pitfall_keywords: tuple[str | tuple[str, ...], ...] = ()
+    # 确定性 Trace 诊断期望（Learning-10+ 使用；旧场景不设则跳过）：
+    #   expected_trace_steps: {alias: {run_id: [agent step, ...]}}（精确匹配）
+    #   evidence_contains:    {alias: [关键词, ...]}（必须全部出现）
+    #   evidence_not_contains:{alias: [禁词, ...]}（任一出现即 FAIL）
+    expected_trace_steps: dict[str, dict[str, tuple[int, ...]]] = Field(
+        default_factory=dict
+    )
+    evidence_contains: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    evidence_not_contains: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    # 质量阈值（旧场景不设则跳过）：
+    #   min_cluster_precision / min_cluster_recall：positive 场景至少一个 cluster
+    #     同时达到两个阈值，否则 FAIL；
+    #   min_pitfall_recall：有 expected_pitfall_keywords 时 pitfall recall 低于
+    #     阈值则 FAIL。
+    min_cluster_precision: float | None = Field(default=None, ge=0, le=1)
+    min_cluster_recall: float | None = Field(default=None, ge=0, le=1)
+    min_pitfall_recall: float | None = Field(default=None, ge=0, le=1)
 
     @field_validator("expected_action")
     @classmethod

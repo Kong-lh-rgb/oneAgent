@@ -109,6 +109,18 @@ def _run_record(scenario, run_index: int, outcome, verdict: ScenarioVerdict) -> 
             "cluster_count": len(clusters),
             "clusters": clusters,
         },
+        "trace_diagnostics": {
+            alias: {
+                "steps_by_run": {
+                    run_id: list(steps)
+                    for run_id, steps in outcome.trace_steps_by_alias.get(
+                        alias, {}
+                    ).items()
+                },
+                "evidence": outcome.evidence_by_alias.get(alias, ""),
+            }
+            for alias in scenario.expect.learning.expected_pattern_task_aliases
+        },
         "distillations": [
             {
                 "cluster_name": d.cluster_name,
@@ -352,6 +364,29 @@ def _render_run(record: dict) -> list[str]:
         lines.append("```json")
         lines.append(json.dumps(pm["clusters"], ensure_ascii=False, indent=2))
         lines.append("```")
+    lines.append("")
+    lines.append("Trace Diagnostics:")
+    trace_diagnostics = record.get("trace_diagnostics", {})
+    if not trace_diagnostics:
+        lines.append("（无）")
+    else:
+        for alias, data in trace_diagnostics.items():
+            lines.append(f"- **{alias}**")
+            lines.append(
+                f"  - selected steps by run: {data['steps_by_run']}"
+            )
+            evidence = data["evidence"]
+            if evidence:
+                lines.append("  - Evidence:")
+                evidence_lines = evidence.splitlines()
+                for line in evidence_lines[:30]:
+                    lines.append(f"    {line}")
+                if len(evidence_lines) > 30:
+                    lines.append(
+                        f"    …（{len(evidence_lines)} 行，受 max_evidence_chars 限制）"
+                    )
+            else:
+                lines.append("  - Evidence: （无）")
     lines.append("")
     lines.append("Actual Distillation:")
     if not record["distillations"]:

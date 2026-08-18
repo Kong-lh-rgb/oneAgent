@@ -189,3 +189,36 @@ Abstention=0.22(2/9)，FP=0%，Duplicate=0%；48 calls / 55,231 tokens / 132.1s�
   （模型要求可观察执行细节而非 plan 声明）、create vs update 的边界。
 - 结论：**正文让 NONE/CREATE 判断有据；UPDATE 稳定性是后续要解决的真正难点**
   （模型行为层面，非管线 Bug）。
+
+---
+
+## 6. 阶段四（learning-10 收口：钉死语义 + 修 Eval 误判）
+
+> 2026-08-18。learning-10 上一轮 3/3 FAIL（模型 3 次全 create 专项名
+> fix-python-interpreter-mismatch），且 run2 pitfall recall 被 Eval 跨语言误判成 0.00。
+> 本次只改两处，不改主架构。
+
+| 指标 | 阶段四（本轮） | 阶段三（learning-10） |
+|---|---|---|
+| 场景 / runs | 1 / 3 | 1 / 3 |
+| pass rate | 100% (3/3) | 0% (0/3) |
+| Action Accuracy (UPDATE) | 1.00 (3/3) | 0.00 (0/3) |
+| Cluster Precision / Recall | 1.00 / 1.00 | 1.00 / 1.00 |
+| Trace deterministic checks | 全过（steps exact + evidence 关键词/禁词） | 全过 |
+| Pitfall Recall | 1.00 (3/3) | run1/3=1.00、run2=0.00（Eval 误判） |
+| 总 calls / tokens / 时长 | 9 / 20,179 / 30.3s | 9 / 19,599 / 32.4s |
+
+**两个修复**：
+1. `_DISTILLATION_PROMPT`：CREATE/UPDATE/NONE 判定从"body 无覆盖→create"改为
+   **task family 语义**（同 family → NONE 或 UPDATE；不同 family 且独立复用价值 → CREATE）。
+   模型三次 reason 都明确引用 "same task family as existing 'debug-python' ... therefore
+   update"，说明 Prompt 语义修改直接生效（非测试特判、未加 hard-coded 名字）。
+2. Eval pitfall 关键词改为**中英同义组**（`[[全局, global], [解释器, interpreter]]`）：
+   concept-based recall，组内命中任一 alias 即算命中。修复了"模型输出英文 pitfalls、
+   Eval 用中文关键词 substring"导致的跨语言误判。
+
+**结论**：UPDATE vs CREATE 的稳定边界**可以**通过把"同 family 扩展现有 Skill"写进
+Distillation 语义来修正（上一轮历史结论"UPDATE 稳定性是模型行为难点"在本场景被推翻
+——它同时是 Prompt 语义问题）。新 Bad Case：无；仅候选文本风格波动（run1/3 procedure
+带编号前缀，run2 无；verification 条数 1~4 不等）。
+

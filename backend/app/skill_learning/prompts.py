@@ -58,13 +58,30 @@ Rules:
   merge; just avoid duplicates.
 - The "related_skills" field below contains the FULL body of up to 3 existing
   skills that were pre-selected as plausibly related (name + description alone
-  cannot prove coverage). Read their bodies carefully before choosing action:
-  - If a related skill's body ALREADY fully covers this procedure (the same
-    stable steps / pitfalls / verification), return action "none".
-  - If the procedure belongs to the SAME existing skill but multiple completed
-    tasks provide stable NEW steps / pitfalls / verification that are NOT in its
-    body, return action "update" with that existing_skill_name set.
-  - If no related skill's body covers the procedure, return action "create".
+  cannot prove coverage). Read their bodies carefully before choosing action.
+  The decisive question is whether this new procedure belongs to the SAME task
+  family / capability domain as an existing skill, or is an INDEPENDENT task
+  family:
+  - SAME task family as an existing skill:
+      - If the existing skill body ALREADY fully covers this procedure (the
+        same stable steps / pitfalls / verification), return action "none".
+      - If the existing skill body does NOT fully cover it, but multiple
+        completed tasks provide stable NEW steps / pitfalls / verification that
+        naturally extend that skill, return action "update" with that
+        existing_skill_name set. Do NOT switch to "create" merely because the
+        specific steps are missing from the existing body — same family means
+        extend the existing skill.
+  - DIFFERENT task family from every existing skill:
+      - If it has independent, stable reusable value, return action "create".
+      - Otherwise return action "none".
+  Examples:
+      - A "debug Python errors" skill + interpreter / virtualenv mismatch
+        troubleshooting (same family: both are Python runtime troubleshooting)
+        -> "update".
+      - A "debug Python errors" skill + PostgreSQL slow query optimization
+        (different family: database tuning) -> "create".
+      - A "debug Python errors" skill + publishing a Python package to PyPI
+        (different family: different goal and process) -> "create".
   If no related_skills were provided, decide based on name + description alone.
 - procedure: the ordered stable steps. pitfalls: repeated mistakes to avoid.
   verification: how to confirm the procedure works.

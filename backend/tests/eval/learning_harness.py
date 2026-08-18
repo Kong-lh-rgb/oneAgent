@@ -25,6 +25,8 @@ from app.skill_learning import (
     SkillLearningService,
     SkillLearningSettings,
 )
+from app.skill_learning.evidence import TraceEvidenceBuilder
+from app.skill_learning.trace_selector import TaskTraceSelector
 from app.skills import SkillStore
 from app.task import FileTaskStore, TaskStatus, TaskStep
 from app.trace.store import SQLiteTraceStore
@@ -55,13 +57,65 @@ class LearningEvalOutcome:
     candidates: tuple[SkillCandidate, ...] = ()
     created_skills: tuple[str, ...] = ()
     error: str | None = None
+    # 确定性 Trace 诊断（用生产 TaskTraceSelector + TraceEvidenceBuilder 计算）：
+    #   trace_steps_by_alias: {alias: {run_id: tuple[int, ...]}}
+    #                         （选中的 Agent Step，去重保序）
+    #   evidence_by_alias:    {alias: evidence 文本}
+    trace_steps_by_alias: dict[str, dict[str, tuple[int, ...]]] = field(
+        default_factory=dict
+    )
+    evidence_by_alias: dict[str, str] = field(default_factory=dict)
 
 
-def _trace_event(run_id: str, sequence: int, spec) -> AgentEvent:
-    """把 InitialTraceEvent 转为 AgentEvent。"""
+def _task_step_note(step) -> str | None:
+    """场景 steps 常省略 note，但生产 TaskStep 要求 done/blocked 必须有 note。
 
+    Eval 预置时对缺失 note 的终态步骤补默认值（不改生产 schema；旧场景自带
+    note 不受影响）。
+    """
+
+    if step.note:
+        return step.note
+    from app.task import TaskStepStatus
+
+    if step.status is TaskStepStatus.DONE:
+        return "已完成"
+    if step.status is TaskStepStatus.BLOCKED:
+        return "等待外部条件"
+    return None
+
+
+def _resolve_task_aliases(value: object, aliases: dict[str, str]) -> object:
+    """递归把 Trace arguments 中"整个字符串就是 $task:<alias>"的值替换为真实 Task ID。
+
+    只替换完整匹配；alias 不存在时明确报错，不静默保留。
+    """
+
+    if isinstance(value, str) and value.startswith("$task:"):
+        alias = value[len("$task:"):]
+        if alias not in aliases:
+            raise ValueError(f"unknown task alias in trace arguments: {alias!r}")
+        return aliases[alias]
+    if isinstance(value, dict):
+        return {
+            key: _resolve_task_aliases(item, aliases)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_resolve_task_aliases(item, aliases) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_resolve_task_aliases(item, aliases) for item in value)
+    return value
+
+
+def _trace_event(run_id: str, sequence: int, spec, aliases) -> AgentEvent:
+    """把 InitialTraceEvent 转为 AgentEvent（透传 step，解析 $task:<alias>）。"""
+
+    arguments = (
+        _resolve_task_aliases(spec.arguments, aliases) if aliases else spec.arguments
+    )
     tool_call = (
-        ToolCall(id=f"c{sequence}", name=spec.tool_name, arguments=spec.arguments)
+        ToolCall(id=f"c{sequence}", name=spec.tool_name, arguments=arguments)
         if spec.tool_name
         else None
     )
@@ -70,6 +124,7 @@ def _trace_event(run_id: str, sequence: int, spec) -> AgentEvent:
             run_id=run_id,
             conversation_id="learning",
             sequence=sequence,
+            step=spec.step,
             type=AgentEventType.TOOL_STARTED,
             tool_call=tool_call,
         )
@@ -78,6 +133,7 @@ def _trace_event(run_id: str, sequence: int, spec) -> AgentEvent:
             run_id=run_id,
             conversation_id="learning",
             sequence=sequence,
+            step=spec.step,
             type=AgentEventType.TOOL_COMPLETED,
             tool_call=tool_call,
             tool_result=ToolResult(
@@ -134,7 +190,7 @@ async def prepare_learning_environment(
                     id=step.id,
                     title=step.title,
                     status=step.status,
-                    note=step.note,
+                    note=_task_step_note(step),
                 )
                 for step in task_spec.steps
             ),
@@ -150,7 +206,7 @@ async def prepare_learning_environment(
     for run_spec in scenario.initial_runs:
         for index, event_spec in enumerate(run_spec.events):
             await trace_store.record_event(
-                _trace_event(run_spec.run_id, index, event_spec)
+                _trace_event(run_spec.run_id, index, event_spec, aliases)
             )
 
     for skill_spec in scenario.initial_skills:
@@ -279,6 +335,9 @@ async def run_learning_scenario(
             error = error or f"{type(exc).__name__}: {exc}"
 
     candidates = await service.list_candidates()
+    trace_steps_by_alias, evidence_by_alias = await _build_trace_diagnostics(
+        scenario, env, settings
+    )
     return LearningEvalOutcome(
         scenario=scenario,
         environment=env,
@@ -286,7 +345,60 @@ async def run_learning_scenario(
         candidates=candidates,
         created_skills=tuple(created),
         error=error,
+        trace_steps_by_alias=trace_steps_by_alias,
+        evidence_by_alias=evidence_by_alias,
     )
+
+
+async def _build_trace_diagnostics(
+    scenario: Scenario,
+    env: LearningEvalEnvironment,
+    settings: SkillLearningSettings,
+) -> tuple[dict[str, dict[str, tuple[int, ...]]], dict[str, str]]:
+    """用生产 TaskTraceSelector + TraceEvidenceBuilder 计算确定性 Trace 诊断。
+
+    只统计带 alias 的 Task：选中 Agent Step 按 run 去重保序，并生成该 Task 的
+    Evidence 文本（受 max_evidence_chars 限制）。不复制一套 Selector 算法。
+    """
+
+    selector = TaskTraceSelector()
+    builder = TraceEvidenceBuilder(settings)
+    trace_steps_by_alias: dict[str, dict[str, tuple[int, ...]]] = {}
+    evidence_by_alias: dict[str, str] = {}
+    for spec in scenario.initial_tasks:
+        if not spec.alias:
+            continue
+        task_id = env.task_aliases.get(spec.alias)
+        if task_id is None:
+            continue
+        task = await env.task_store.get(task_id)
+        if task is None:
+            continue
+        run_events: dict[str, tuple] = {}
+        for run_id in task.run_ids:
+            try:
+                run_events[run_id] = await env.trace_store.load_events(run_id)
+            except (KeyError, ValueError, OSError):
+                continue
+        if not run_events:
+            continue
+        selected = selector.select(
+            task,
+            run_events,
+            max_events=settings.skill_learning_max_events_per_task,
+        )
+        steps_by_run: dict[str, list[int]] = {}
+        for event in selected:
+            if event.step is None:
+                continue
+            steps = steps_by_run.setdefault(event.run_id, [])
+            if event.step not in steps:
+                steps.append(event.step)
+        trace_steps_by_alias[spec.alias] = {
+            run_id: tuple(steps) for run_id, steps in steps_by_run.items()
+        }
+        evidence_by_alias[spec.alias] = builder.build(task, selected)
+    return trace_steps_by_alias, evidence_by_alias
 
 
 __all__ = [

@@ -481,6 +481,102 @@
 - [x] 全量：`pytest` 531 通过（+3 P1 回归）、`ruff`、`compileall`、
   `git diff --check` 全部通过；未改 Task schema / Mining / Distillation Prompt
 
+### 完成：真实 20-Task Skill Learning Eval（learning-10）增强
+
+> 让现有 Learning Eval 真正覆盖完整链路：
+> Completed TaskCard → Pattern Mining → Task.run_ids → task_update Anchor →
+> Agent Step Range → TraceEvidenceBuilder → Existing Skill 对比 → UPDATE Candidate。
+> 不改生产 Skill Learning 主架构、不改 Mining/Distillation Prompt。
+
+#### Eval 基建（最小改动）
+- [x] `scenario.py`：`InitialTraceEvent.step`；`SkillLearningExpectation` 新增
+  `expected_trace_steps` / `evidence_contains` / `evidence_not_contains` /
+  `min_cluster_precision` / `min_cluster_recall` / `min_pitfall_recall`（旧 YAML 兼容）
+- [x] `learning_harness.py`：`_trace_event` 透传 step；`$task:<alias>` 递归解析成真实
+  Task ID（unknown alias 明确报错）；`LearningEvalOutcome` 加 `trace_steps_by_alias` /
+  `evidence_by_alias`（用生产 `TaskTraceSelector` + `TraceEvidenceBuilder` 计算，
+  不复制算法）；预置 done/blocked step 缺 note 时补默认
+- [x] `learning_judge.py`：expected_trace_steps exact match / evidence 关键词与禁词 /
+  cluster precision+recall 阈值 / pitfall recall 阈值（字段非空才生效，不改变旧场景）
+- [x] `run_learning_live.py`：报告新增 Trace Diagnostics（只展示 expected_pattern 的
+  Task，selected steps by run + Evidence）
+- [x] 新增场景 `learning-10_realistic_20task_update.yaml`：20 Completed Tasks
+  （6 个同模式 Python 环境/解释器错配 + 14 个噪声，含 Node/Ruby 环境近似干扰），
+  跨 Run、重复 in_progress、missing in_progress、blocked resume、普通 task_update、
+  failed task_update、span 前后无关 step
+
+#### 真实模型（deepseek-v4-flash，learning-10 × 3，报告 skill_learning_live_learning10_20260818.md）
+- [x] **确定性证据链路 100% 正确**：cluster precision/recall=1.00/1.00（覆盖 py1~py6）；
+  py1~py6 的 selected steps 与 YAML expected_trace_steps exact match；Evidence 含全部
+  关键词、无禁词；failed task_update 不进 Task 变更
+- [x] **模型 3 次都返回 CREATE（fix-python-interpreter-mismatch），非期望 UPDATE**：
+  reason="debug-python 正文只覆盖通用 traceback，缺 interpreter/virtualenv 专项诊断，
+  故新建技能"——再次确认模型面对相关 Skill 倾向 create 专项（UPDATE vs CREATE 边界
+  是真实模型行为，非管线/Eval Bug）
+- [x] run2 额外 pitfall recall 0.00（模型那次 pitfalls 不含 全局/解释器，随机波动）
+- [x] 成本：9 calls / 19,599 tokens / 32.4s；avg 6,533 tokens per 20-Task batch、10.8s
+
+#### 测试（+9）
+- [x] step 进入 AgentEvent / $task: 解析成功与 unknown 失败 / trace steps exact judge /
+  evidence 关键词与禁词 judge / cluster 阈值 judge / pitfall 阈值 judge /
+  learning-10 完整 run judge / 旧 learning YAML 仍能加载
+- [x] 全量：`pytest` 540 通过（+9）、`ruff`、`compileall`、`git diff --check` 全部通过
+
+### 完成：钉死 CREATE/UPDATE/NONE 语义 + 修 Eval pitfall 跨语言误判（learning-10 收口）
+
+> 只修 learning-10 暴露的两个问题，不改主架构：
+> ① `_DISTILLATION_PROMPT` 的 related_skills 判定段 —— 上一版最后一句
+> "If no related skill's body covers the procedure, return action create" 让模型在
+> "已有 debug-python 但正文未覆盖 interpreter/virtualenv 专项" 时倾向 create 专项 Skill
+> （learning-10 上一轮 3/3 FAIL，模型 reason 明确说"正文没覆盖故新建技能"）。
+> ② Learning Eval 的 pitfall 关键词判断是纯 substring，中英文跨语言时误判
+> （上一轮 run2 模型 pitfalls 是英文 "global pip"/"interpreter"，关键词是中文
+> "全局"/"解释器" → recall 被错算成 0.00）。
+
+#### 修复 1：钉死 Distillation 的 CREATE / UPDATE / NONE 语义（task family）
+- [x] `app/skill_learning/prompts.py` `_DISTILLATION_PROMPT`：把"无 body 覆盖 → create"改为
+  **先判 task family / capability domain**：
+  - 同一 family：body 已完整覆盖 → NONE；正文未覆盖但多次 completed task 提供稳定新
+    步骤/pitfalls/verification → UPDATE（**不要因为正文缺具体步骤就改 CREATE**）
+  - 不同 family：有独立稳定复用价值 → CREATE，否则 NONE
+- [x] 附三个示例：debug-python + interpreter/virtualenv mismatch → update；
+  + PostgreSQL slow query → create；+ 发布到 PyPI → create
+- [x] 未加 hard-coded skill name、不改模型输出 schema、不改生产数据结构；
+  保留"pending_candidates 已覆盖 → NONE 去重"、"不造重复名（debug-python-v2）"规则
+
+#### 修复 2：Eval pitfall 关键词支持中英同义组（concept-based recall）
+- [x] `tests/eval/scenario.py`：`expected_pitfall_keywords` 类型改为
+  `tuple[str | tuple[str, ...], ...]`（旧单字符串格式等价于 [该字符串]，向后兼容）
+- [x] `tests/eval/learning_judge.py`：pitfall 计算改为 concept-based —— 每组命中任意
+  一个 alias 即算该 concept 命中，recall = 命中 concept 数 / concept 总数；
+  新增 `_pitfall_concept` 归一化 helper
+- [x] `learning-10` YAML：`expected_pitfall_keywords: [全局, 解释器]` →
+  `[[全局, global], [解释器, interpreter]]`；`expected_action=update`、min thresholds 不变
+
+#### 测试（+5，共 545）
+- [x] `_pitfall_concept` 归一化（单字符串 / list / tuple）
+- [x] pitfall 全英文 synonym 命中（learning-10 新期望下 recall=1.00）
+- [x] 部分命中（0.5 == min_pitfall_recall 恰好过）/ 全 miss（0.0 → 阈值 FAIL）
+- [x] 旧单字符串格式兼容（中文 substring 仍命中）
+- [x] 全量 `pytest` 545 通过、`ruff`、`compileall`、`git diff --check` 全部通过
+
+#### 真实模型 Live Eval（deepseek-v4-flash，learning-10 × 3，报告 skill_learning_live_20260818.md）
+- [x] **3/3 PASS（上一轮 0/3）**：三次 action 全部 `update`、`existing_skill_name=debug-python`
+  （上一轮三次全部 create 专项名）
+- [x] 模型 reason 三次都明确引用修复后的 task family 语义（"same task family as
+  existing 'debug-python' ... naturally extend the existing skill, therefore update"）——
+  Prompt 语义修改直接生效，非测试特判
+- [x] cluster precision/recall 三次均 1.00 / 1.00；pattern detection recall 3/3
+- [x] trace deterministic checks 仍全过：py1~py6 selected steps 与 YAML
+  `expected_trace_steps` exact match、Evidence 含全部关键词无禁词
+- [x] pitfall recall 三次均 1.00（上一轮 run2 被跨语言误判成 0.00 —— alias group 修复生效）
+- [x] 成本：9 calls / 20,179 tokens / 30.3s；avg 6,726 tokens per 20-Task batch、10.1s
+
+#### 是否出现新 Bad Case
+- [x] 无功能性新 Bad Case。仅质量观察：run1/run3 的 procedure 项带 "1. 2. …" 编号前缀
+  （run2 干净无编号）；run1/run3 verification 4 条、run2 1 条 —— 属于候选文本风格波动，
+  不影响 Eval 与生产（生产会走 Human Gate 评审）
+
 ---
 ## 2026-08-16
 
