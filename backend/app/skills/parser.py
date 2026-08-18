@@ -61,6 +61,12 @@ def parse_skill_document(text: str, *, expected_name: str) -> ParsedSkill:
     if not isinstance(data, dict):
         raise SkillParseError("front matter must be a mapping")
 
+    unknown = sorted(set(data) - _ALLOWED_TOP_LEVEL_FIELDS)
+    if unknown:
+        raise SkillParseError(
+            f"unknown front matter field(s): {', '.join(unknown)}"
+        )
+
     name = data.get("name")
     if not isinstance(name, str):
         raise SkillParseError("missing or non-string 'name'")
@@ -124,7 +130,13 @@ def _optional_str(
 
 
 def _allowed_tools(data: dict[str, Any]) -> tuple[str, ...]:
-    raw = data.get("allowed-tools", data.get("allowed_tools"))
+    hyphen_key = data.get("allowed-tools")
+    underscore_key = data.get("allowed_tools")
+    if hyphen_key is not None and underscore_key is not None:
+        raise SkillParseError(
+            "'allowed-tools' and 'allowed_tools' cannot both be present"
+        )
+    raw = hyphen_key if hyphen_key is not None else underscore_key
     if raw is None:
         return ()
     if not isinstance(raw, list) or not all(

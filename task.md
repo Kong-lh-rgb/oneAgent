@@ -7,6 +7,65 @@
 ---
 ## 2026-08-18
 
+### 修复：Skill V2 运行时/上下文/Eval Bad Case（主链路不变）
+
+> 不重构架构、不引入向量/LLM Router/Marketplace/自动生成。保持
+> Discovery → Catalog → skill_read → Run-scoped Activation → Active Context → Resource Read
+> 主链路不变，只修明确的 5 个 Bad Case + 1 个边界确认。
+
+#### Bad Case 1：skill_read 正文重复与 Budget Bypass
+- [x] **根因**：skill_read 直接返回完整 Skill content；Runtime 又 load 一次并在后续每 Step
+  注入 oneagent_active_skill → 激活后第一轮请求同一正文出现两份；且超大正文先以 ToolResult
+  进入上下文，Runtime 才发现超预算（budget 无法阻止泄漏）
+- [x] **修复**：skill_read 改为"请求激活"轻量工具，成功结果只返回
+  `found/name/description/scope/resources`，不再返回 `content`；完整正文唯一权威注入源是
+  Runtime 成功激活后的 `oneagent_active_skill` system message
+- [x] 新增测试：skill_read 不返回 instructions；激活后第二次 ModelRequest 正文只出现一次；
+  超预算 Skill 激活失败后任何 ModelRequest 均无该正文
+
+#### Bad Case 2：Catalog 无独立 Token Budget
+- [x] **根因**：Active 有 `skill_context_max_tokens`/`skill_max_active`，但 Catalog 每 Step
+  全量注入所有 name+description，Skill 增多时固定 Prompt 膨胀
+- [x] **修复**：`SkillSettings` 新增 `skill_catalog_max_tokens=2048`；SkillContextProvider
+  渲染 Catalog 时按稳定排序逐项加入，达到预算即停，末尾提示"还有 N 个未展示"；结果确定性、
+  不依赖模型；Trace 的 `skill_catalog_tokens` 继续反映实际注入量
+- [x] 新增测试：小 Catalog 全量保留、大 Catalog 不超过 budget、输出稳定、`catalog_tokens <= limit`
+
+#### Bad Case 3：skill_resource_read 可绕过激活读取任意 Catalog Skill 资源
+- [x] **根因**：工具只按 name 从 SkillStore.load()，未检查该 Skill 是否属于当前 Run 的
+  active_skills，模型可绕过 skill_read → activation
+- [x] **修复**：Runtime 在 ToolExecutionContext.metadata 携带 Run-scoped `active_skill_names`；
+  `SkillResourceReadTool.execute_with_context` 校验请求 name 必须在其中，否则拒绝；不把
+  Run 状态塞进全局 SkillStore（无并发污染）；路径安全与 64KB 限制保持
+- [x] 新增测试：inactive skill → 拒绝；active skill → 正常读取
+
+#### Bad Case 4：Front Matter 未知字段未拒绝
+- [x] **根因**：`_ALLOWED_TOP_LEVEL_FIELDS` 已存在但未真正执行
+- [x] **修复**：parse_skill_document 检查全部 top-level key，未知字段抛 SkillParseError；
+  `allowed-tools` 与 `allowed_tools` 同时存在视为冲突报错；`metadata:` 内部仍自由 mapping
+- [x] 新增测试：未知字段拒绝、双键冲突拒绝
+
+#### Bad Case 5：survives_compaction 只验证 run state
+- [x] **根因**：原断言只看 MODEL_STARTED.active_skill_names（Run state），不能证明实际
+  ModelRequest 仍注入 oneagent_active_skill
+- [x] **修复**：AgentEvent 新增 `active_skill_message_names`（实际注入消息名，独立于 run
+  state）；assertions._check_skill 的 survives_compaction 改为校验压缩后该字段非空且含声明
+  Skill；新增离线测试直接检查 FakeModelAdapter 捕获的真实 ModelRequest 在激活后每 Step 都含
+  `oneagent_active_skill` 且正文含目标 Skill 名
+- [x] skill-15 场景补 `requires_compaction: true` 并放宽窗口（live 更稳）
+
+#### 边界确认：allowed-tools 只收窄、不扩大
+- [x] 本次只明确语义并标记 TODO（`SkillMetadata.allowed_tools`）：未来只允许收窄当前 Run
+  工具集合，不能把 approval 提升为 allowed、不能解禁 forbidden；在 Permission/ToolExecutor
+  支持该不变量前保持"只解析、不生效"，不做半套权限模型
+
+#### 测试结果
+- [x] `pytest` 467 通过（修复前 460 + 新增 7）、`ruff`、`compileall`、`git diff --check` 全绿
+- [x] 修改文件：`app/skills/tools.py`、`context.py`、`config.py`、`parser.py`、`models.py`、
+  `app/agent/runtime.py`、`events.py`、`app/models/chat.py`、`tests/eval/harness.py`、
+  `assertions.py`、`tests/test_skills.py`、`tests/test_skills_eval.py`、
+  `tests/eval/scenarios/skill/skill-15_*.yaml`
+
 ### 完成：Skill Runtime V2（Agent Skills compatible + Progressive Disclosure）
 
 > 规格 19 部分全部落地。V1 是"Front Matter Markdown + skill_list/skill_read"的扁平实现，

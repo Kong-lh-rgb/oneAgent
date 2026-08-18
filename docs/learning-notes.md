@@ -1182,8 +1182,9 @@ skills/<name>/
   `SKILL_DESCRIPTION_MAX_LENGTH=1024`。
 
 Front Matter 只允许固定字段：name、description、license、compatibility、metadata、
-allowed-tools/allowed_tools；description 缺失/空/超长、body 为空、name 与目录名不一致、
-YAML 非法都会抛 `SkillParseError`。
+allowed-tools/allowed_tools；**未知 top-level 字段会被拒绝**（抛 `SkillParseError`），
+`allowed-tools` 与 `allowed_tools` 同时出现视为冲突；description 缺失/空/超长、body 为空、
+name 与目录名不一致、YAML 非法都会抛 `SkillParseError`。`metadata:` 内部保持自由 mapping。
 
 ### 31.3 双层发现与加载分离（Discovery / Store）
 
@@ -1205,13 +1206,15 @@ YAML 非法都会抛 `SkillParseError`。
 
 `SkillContextProvider`（`app/skills/context.py`）：
 
-- **Catalog（每 Step 注入）**：`oneagent_skill_catalog` system 消息，只含
-  `[name] description`，每 Step 重建（发现只做一次，消息每 Step 生成），不进持久历史。
-  模型因此始终能发现可用 Skill 并按需 `skill_read` 激活。
+- **Catalog（每 Step 注入，独立 Token Budget）**：`oneagent_skill_catalog` system 消息，
+  只含 `[name] description`，每 Step 重建（发现只做一次，消息每 Step 生成），不进持久历史。
+  受 `skill_catalog_max_tokens=2048` 预算约束：按稳定排序逐项加入，达到预算即停止，并在
+  末尾提示“还有 N 个未展示”，结果确定性、不依赖模型；
 - **Active 指令（每 Step 注入）**：`oneagent_active_skill` system 消息，渲染
   `Skill.render_instructions()`（指令正文 + Resources 清单，提示用 `skill_resource_read`
   按需读取）。去重、按激活顺序。独立于普通 ToolResult，因此不会被 ToolReducer /
-  ConversationReducer / Compaction 遗忘。
+  ConversationReducer / Compaction 遗忘；它是 Skill 指令正文的**唯一权威注入源**——
+  `skill_read` 不再返回正文，避免正文重复与超预算泄漏；
 - **预算**：`skill_context_max_tokens=4096`、`skill_max_active=4`；
   `would_exceed_budget(current, candidate)` 按激活顺序确定性判断——超过数量上限或激活后
   总指令 token 超预算则拒绝该候选。
@@ -1221,8 +1224,8 @@ YAML 非法都会抛 `SkillParseError`。
 激活只发生在 `AgentRuntime._run_once` 内部：
 
 ```text
-模型调用 skill_read（工具已暴露）
-  → ToolResult 成功
+模型调用 skill_read（轻量请求激活，工具已暴露）
+  → ToolResult 成功（只含 found/name/description/scope/resources，无正文）
   → _skill_read_activated_name() 解析 output（JSON str → dict，检查 found/name）
   → store.load(name)（不存在 → SKILL_ACTIVATION_FAILED）
   → would_exceed_budget（超预算 → SKILL_ACTIVATION_FAILED）
@@ -1239,7 +1242,10 @@ YAML 非法都会抛 `SkillParseError`。
 - `safe_skill_dir` / `safe_skill_file` / `safe_skill_resource`：**先检查原始路径
   `is_symlink()`，再 `resolve()`** 并用 `relative_to` 确认仍在 Skill 根内（先 resolve 再查
   symlink 会让指向根内目录的链接逃过检查）；拒绝 `..`、绝对路径、符号链接、目录；
-- `skill_resource_read` 单文件 ≤64KB；
+- `skill_resource_read` 单文件 ≤64KB，且**只能读取当前 Run 已激活 Skill 的资源**：Runtime
+  在 `ToolExecutionContext.metadata` 携带 Run-scoped `active_skill_names`，工具
+  `execute_with_context` 校验请求 name 必须在其中，否则拒绝（不把 Run 状态塞进全局
+  SkillStore，避免并发污染）；
 - 模型只能读、不能写 Skill（不提供写工具）；resource 不自动加载。
 
 ### 31.7 Runtime 数据流与装配
@@ -1250,7 +1256,8 @@ YAML 非法都会抛 `SkillParseError`。
   `catalog_metadata=()`；ephemeral 构造段先注入 catalog（首次发现缓存）再注入 active；
 - tool 循环里对 `skill_read` 成功结果做激活检测（见 31.5）；
 - MODEL_STARTED 事件增加 `available_skill_count` / `skill_catalog_tokens` /
-  `active_skill_names` / `active_skill_tokens` 观测字段；
+  `active_skill_names` / `active_skill_tokens` / `active_skill_message_names`（实际注入
+  的 Active Skill 消息名，独立于 run state）观测字段；
 - 事件 `SKILL_ACTIVATED` / `SKILL_ACTIVATION_FAILED` 由 Trace 事件驱动自动持久化，无需
   额外改动；
 - CLI（`app/models/chat.py`）装配 `SkillStore` + `SkillContextProvider(SkillSettings())`，
@@ -1258,19 +1265,22 @@ YAML 非法都会抛 `SkillParseError`。
 
 ### 31.8 工具面
 
-- `skill_read`（常驻）：按名加载 skill，返回 found/name/description/scope/content/resources；
-- `skill_resource_read`（常驻）：按 name + path 安全读取资源；
+- `skill_read`（常驻）：**轻量激活请求**，按名返回 found/name/description/scope/resources，
+  不返回完整正文；正文只经 `oneagent_active_skill` 注入；
+- `skill_resource_read`（常驻）：按 name + path 安全读取**当前 Run 已激活** Skill 的资源；
 - 不再有 `skill_list` —— Catalog 注入替代了发现职责。
 
 ### 31.9 Token 影响
 
-- 示例 3 个 Skill：Catalog 每 Step 约 214 tokens；激活后每个 Active 指令约 60～190 tokens
-  每 Step；skill 工具 schema 约 289 tokens；
+- 示例 3 个 Skill：Catalog 每 Step 约 214 tokens（受 `skill_catalog_max_tokens=2048`
+  约束，Skill 数量多时确定性截断）；激活后每个 Active 指令约 60～190 tokens 每 Step；
+  skill 工具 schema 约 289 tokens；
 - 未激活前只付 Catalog 的小额常驻成本；激活只在模型明确需要时发生。
 
 ### 31.10 边界（尚未支持）
 
-- `allowed-tools` 已解析进 metadata，但尚未用于激活后的工具权限收窄；
+- `allowed-tools` 已解析进 metadata，但尚未参与工具权限（TODO）；**语义明确：未来只能
+  收窄当前 Run 的工具集合，不能把 approval 提升为 allowed、不能解禁 forbidden**；
 - `metadata:` 自由扩展字段暂无 schema 约束；
 - 无 Skill 编写/管理命令，用户级目录不自动创建；
 - 无向量 / LLM 路由 / 自动生成 / Marketplace（规格边界内）。

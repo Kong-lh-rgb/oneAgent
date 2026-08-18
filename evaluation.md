@@ -75,7 +75,9 @@ Live Eval 存在失败时默认返回退出码 1，可用于 CI 门禁。探索�
 - `skill.activated` / `skill.not_activated` 检查 SKILL_ACTIVATED 事件中的激活集合，
   `skill.activation_failed` 检查 SKILL_ACTIVATION_FAILED 事件（如 budget 拒绝 / not found）；
 - `skill.survives_compaction: true` 要求存在一次实际压缩，且压缩后的 MODEL_STARTED
-  仍带有非空 `active_skill_names`（Active Skill 指令不被压缩遗忘）；
+  仍带有非空 `active_skill_message_names`（实际注入的 Active Skill 消息名，独立于
+  `active_skill_names` run state），并包含声明要激活的 Skill；离线测试还会直接检查
+  FakeModelAdapter 捕获的真实 ModelRequest 在激活后每 Step 都含 `oneagent_active_skill`；
 - `initial_skills` 预置目录式 Skill（`<name>/SKILL.md` + 可选 `reference_files`），
   由 Harness 写入临时 skills 目录并装配 `SkillStore` / `SkillContextProvider`；
 - `stop_reason_any` 默认只允许 `final_answer`，负面场景必须显式声明其他停止原因。

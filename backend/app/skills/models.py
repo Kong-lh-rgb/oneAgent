@@ -75,6 +75,9 @@ class SkillMetadata(BaseModel):
     license: str | None = None
     compatibility: str | None = None
     metadata: dict[str, object] | None = None
+    # TODO(skill-allowed-tools): 尚未参与工具权限。未来只允许收窄当前 Run 的
+    # 工具集合（不能把 approval 提升成 allowed，也不能解禁 forbidden）；
+    # 在 Permission/ToolExecutor 支持该不变量前，保持"只解析、不生效"。
     allowed_tools: tuple[str, ...] = ()
 
     def render_catalog_entry(self) -> str:

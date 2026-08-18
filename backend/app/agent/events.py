@@ -127,6 +127,7 @@ class AgentEvent(BaseModel):
     skill_catalog_tokens: int | None = Field(default=None, ge=0)
     active_skill_names: tuple[str, ...] = ()
     active_skill_tokens: int | None = Field(default=None, ge=0)
+    active_skill_message_names: tuple[str, ...] = ()
 
     @field_validator("run_id")
     @classmethod

@@ -26,6 +26,8 @@ _CATALOG_HEADER = (
     "instructions.\n"
 )
 
+_DEFAULT_CATALOG_MAX_TOKENS = 2_048
+
 
 class SkillContextProvider:
     """把 Skill Catalog 与 Active Skill 指令渲染成模型上下文消息。"""
@@ -35,21 +37,40 @@ class SkillContextProvider:
         *,
         max_tokens: int,
         max_active: int,
+        catalog_max_tokens: int = _DEFAULT_CATALOG_MAX_TOKENS,
     ) -> None:
         self.max_tokens = max_tokens
         self.max_active = max_active
+        self.catalog_max_tokens = catalog_max_tokens
         self._estimator = default_token_estimator()
 
     # ------------------------------------------------------------------
-    # Catalog（metadata only）
+    # Catalog（metadata only，独立 Token Budget）
     # ------------------------------------------------------------------
 
     def render_catalog(self, metadata: Sequence[SkillMetadata]) -> str:
+        """确定性渲染 Catalog，逐项加入直到达到 catalog_max_tokens 预算。
+
+        按稳定排序逐项加入，超预算即停止，并在末尾提示还有未展示的 Skill。
+        结果只依赖传入顺序与预算，不依赖任何模型参与。
+        """
+
         if not metadata:
             return _CATALOG_HEADER + "(No skills available.)\n"
-        lines = [_CATALOG_HEADER]
+        lines = [_CATALOG_HEADER.rstrip()]
+        shown = 0
         for item in metadata:
-            lines.append(f"[{item.name}] {item.description}")
+            candidate = lines + [f"[{item.name}] {item.description}"]
+            if (
+                self._estimator.estimate_text("\n".join(candidate))
+                > self.catalog_max_tokens
+            ):
+                break
+            lines = candidate
+            shown += 1
+        hidden = len(metadata) - shown
+        if hidden > 0:
+            lines.append(f"... {hidden} additional skills are not shown.")
         return "\n".join(lines).rstrip() + "\n"
 
     def catalog_message(

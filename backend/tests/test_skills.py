@@ -47,6 +47,7 @@ from app.skills import (
     validate_skill_name,
 )
 from app.skills.parser import SkillParseError
+from app.tools.hooks import ToolExecutionContext
 from app.tools.registry import ToolRegistry
 
 
@@ -285,6 +286,23 @@ def test_parse_skill_document_rejects_bad_allowed_tools(allowed: object) -> None
         parse_skill_document(
             "---\nname: demo\ndescription: 描述\n"
             f"allowed-tools: {allowed}\n---\n\n正文",
+            expected_name="demo",
+        )
+
+
+def test_parse_skill_document_rejects_unknown_top_level_field() -> None:
+    with pytest.raises(SkillParseError, match="unknown front matter field"):
+        parse_skill_document(
+            "---\nname: demo\ndescription: 描述\nlicenceeeee: MIT\n---\n\n正文",
+            expected_name="demo",
+        )
+
+
+def test_parse_skill_document_rejects_conflicting_allowed_tools_keys() -> None:
+    with pytest.raises(SkillParseError, match="cannot both be present"):
+        parse_skill_document(
+            "---\nname: demo\ndescription: 描述\n"
+            "allowed-tools: [read_file]\nallowed_tools: [read_file]\n---\n\n正文",
             expected_name="demo",
         )
 
@@ -529,6 +547,52 @@ def test_catalog_message_handles_empty_catalog() -> None:
     assert "No skills available" in (message.content or "")
 
 
+def test_catalog_budget_keeps_small_catalog() -> None:
+    provider = SkillContextProvider(
+        max_tokens=4096,
+        max_active=4,
+        catalog_max_tokens=2048,
+    )
+    metadata = tuple(_metadata(f"skill-{index}") for index in range(5))
+    text = provider.render_catalog(metadata)
+    for item in metadata:
+        assert f"[{item.name}]" in text
+    assert "not shown" not in text
+    assert provider.catalog_tokens(metadata) <= provider.catalog_max_tokens
+
+
+def test_catalog_budget_truncates_large_catalog() -> None:
+    provider = SkillContextProvider(
+        max_tokens=4096,
+        max_active=4,
+        catalog_max_tokens=200,
+    )
+    metadata = tuple(
+        _metadata(f"skill-{index}", description="很长的描述" * 30)
+        for index in range(50)
+    )
+    text = provider.render_catalog(metadata)
+    assert provider.catalog_tokens(metadata) <= provider.catalog_max_tokens
+    assert "not shown" in text
+    assert text.startswith("# Available Skills")
+    # 确定性：相同输入两次渲染一致（不依赖模型）。
+    assert provider.render_catalog(metadata) == text
+
+
+def test_catalog_budget_tokens_within_limit() -> None:
+    provider = SkillContextProvider(
+        max_tokens=4096,
+        max_active=4,
+        catalog_max_tokens=64,
+    )
+    metadata = tuple(
+        _metadata(f"skill-{index}", description="x" * 200) for index in range(20)
+    )
+    message = provider.catalog_message(metadata)
+    assert message is not None
+    assert provider.catalog_tokens(metadata) <= provider.catalog_max_tokens
+
+
 def test_active_messages_dedupes_and_preserves_order() -> None:
     provider = SkillContextProvider(max_tokens=4096, max_active=4)
     messages = provider.active_messages((_skill("a"), _skill("b"), _skill("a")))
@@ -584,7 +648,10 @@ async def test_skill_read_returns_skill_and_missing(tmp_path: Path) -> None:
     assert found["found"] is True
     assert found["name"] == "demo"
     assert found["scope"] == "project"
-    assert "步骤" in found["content"]
+    # 轻量激活请求：不返回完整正文，避免正文重复 / 超预算泄漏。
+    assert "content" not in found
+    assert "resources" in found
+    assert found["resources"] == {"references": (), "scripts": (), "assets": ()}
 
     missing = await registry.get(SKILL_READ_TOOL_NAME).execute(
         {"name": "nope"}
@@ -631,6 +698,53 @@ async def test_skill_resource_read_rejects_escape_path(
     )
     assert result["found"] is False
     assert "escape" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_skill_resource_read_requires_active_skill(
+    tmp_path: Path,
+) -> None:
+    """未激活的 Skill 资源必须被拒绝，激活后可以正常读取。"""
+
+    registry, _ = await _tool_registry_with_store(tmp_path)
+    skill_dir = _write_skill_dir(
+        tmp_path / "project",
+        "research",
+        description="研究",
+    )
+    (skill_dir / "references").mkdir()
+    (skill_dir / "references" / "tpl.md").write_text("模板内容", encoding="utf-8")
+    tool = registry.get("skill_resource_read")
+
+    inactive_context = ToolExecutionContext(
+        tool_call=ToolCall(
+            id="c1",
+            name="skill_resource_read",
+            arguments={"name": "research", "path": "references/tpl.md"},
+        ),
+        metadata={"active_skill_names": ()},
+    )
+    rejected = await tool.execute_with_context(
+        {"name": "research", "path": "references/tpl.md"},
+        inactive_context,
+    )
+    assert rejected["found"] is False
+    assert "not active" in rejected["error"]
+
+    active_context = ToolExecutionContext(
+        tool_call=ToolCall(
+            id="c1",
+            name="skill_resource_read",
+            arguments={"name": "research", "path": "references/tpl.md"},
+        ),
+        metadata={"active_skill_names": ("research",)},
+    )
+    ok = await tool.execute_with_context(
+        {"name": "research", "path": "references/tpl.md"},
+        active_context,
+    )
+    assert ok["found"] is True
+    assert ok["content"] == "模板内容"
 
 
 # ---------------------------------------------------------------------------
@@ -700,9 +814,20 @@ async def test_runtime_activates_skill_and_injects_instructions(
     assert started[-1].available_skill_count == 1
     assert started[-1].skill_catalog_tokens and started[-1].skill_catalog_tokens > 0
     assert started[-1].active_skill_tokens and started[-1].active_skill_tokens > 0
+    # 实际注入消息名（观测字段，独立于 run state）。
+    assert started[-1].active_skill_message_names == ("demo",)
 
-    # 第二轮请求应包含 Active Skill 指令与 Catalog 消息。
+    # skill_read ToolResult 不携带正文 → 正文不会在 ToolResult 中重复出现。
     second_request = adapter.requests[1]
+    tool_result_messages = [
+        m for m in second_request.messages if m.role is MessageRole.TOOL
+    ]
+    assert tool_result_messages
+    assert all(
+        "按演示流程操作" not in (m.content or "") for m in tool_result_messages
+    )
+
+    # 第二轮请求应包含 Active Skill 指令与 Catalog 消息；正文只出现一次。
     injected = [
         m
         for m in second_request.messages
@@ -711,6 +836,11 @@ async def test_runtime_activates_skill_and_injects_instructions(
     assert any(m.name == ACTIVE_SKILL_MESSAGE_NAME for m in injected)
     assert any("Skill: demo" in (m.content or "") for m in injected)
     assert any(m.name == SKILL_CATALOG_MESSAGE_NAME for m in injected)
+    occurrences = sum(
+        (m.content or "").count("按演示流程操作")
+        for m in second_request.messages
+    )
+    assert occurrences == 1
 
 
 @pytest.mark.asyncio
@@ -734,7 +864,7 @@ async def test_runtime_emits_activation_failed_when_budget_exceeded(
         name=SKILL_READ_TOOL_NAME,
         arguments={"name": "big"},
     )
-    model_registry, _ = _fake_registry(
+    model_registry, adapter = _fake_registry(
         [
             _model_response(tool_calls=(tc,)),
             _model_response(content="done"),
@@ -760,6 +890,12 @@ async def test_runtime_emits_activation_failed_when_budget_exceeded(
     assert not any(
         e.type is AgentEventType.SKILL_ACTIVATED for e in events.events
     )
+
+    # 超预算 Skill 的完整正文不得通过 skill_read ToolResult 泄漏进模型上下文。
+    for request in adapter.requests:
+        assert all(
+            "x" * 40 not in (m.content or "") for m in request.messages
+        )
 
 
 def test_runtime_rejects_provider_without_store() -> None:

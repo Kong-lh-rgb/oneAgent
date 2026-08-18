@@ -23,6 +23,8 @@ class SkillSettings(BaseSettings):
     skill_context_max_tokens: int = Field(default=4_096, gt=0)
     # 同一 Run 最多同时激活的 Skill 数量。
     skill_max_active: int = Field(default=4, gt=0)
+    # Skill Catalog（name + description）每 Step 注入的独立 Token 预算。
+    skill_catalog_max_tokens: int = Field(default=2_048, gt=0)
 
 
 __all__ = ["SkillSettings"]

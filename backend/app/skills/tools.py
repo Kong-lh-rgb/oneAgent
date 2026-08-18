@@ -27,7 +27,11 @@ _MAX_RESOURCE_BYTES = 64_000
 
 
 class SkillReadTool(BaseTool):
-    """激活并读取一个 Skill 的完整指令。"""
+    """请求激活一个 Skill（轻量：不返回完整正文）。
+
+    完整指令只会在 Runtime 成功激活后，通过 ``oneagent_active_skill`` 系统
+    消息在每个 Agent Step 注入；此处只返回 metadata 与资源清单。
+    """
 
     def __init__(self, store: SkillStore) -> None:
         self._store = store
@@ -37,9 +41,9 @@ class SkillReadTool(BaseTool):
         return ToolDefinition(
             name="skill_read",
             description=(
-                "激活并读取一个 Skill 的完整操作流程。只有 Available Skills "
-                "目录中出现当前任务匹配的 Skill 时才调用；激活后其指令会在本 "
-                "Run 内持续生效。"
+                "请求激活一个 Skill。只有当 Available Skills 目录中出现当前"
+                "任务匹配的 Skill 时才调用；激活后其完整指令会在本 Run 内"
+                "持续注入（不再返回指令正文）。"
             ),
             parameters={
                 "type": "object",
@@ -69,13 +73,16 @@ class SkillReadTool(BaseTool):
             "name": skill.metadata.name,
             "description": skill.metadata.description,
             "scope": skill.metadata.scope.value,
-            "content": skill.content,
             "resources": skill.resources.as_dict(),
         }
 
 
 class SkillResourceReadTool(BaseTool):
-    """安全读取 Skill 目录内的资源（references/scripts/assets）。"""
+    """安全读取当前 Run 已激活 Skill 目录内的资源。
+
+    只允许读取本 Run 已激活（active_skills）的 Skill 资源；未激活的 Skill
+    会被拒绝。路径安全规则与文件大小限制继续生效。
+    """
 
     def __init__(self, store: SkillStore) -> None:
         self._store = store
@@ -85,9 +92,10 @@ class SkillResourceReadTool(BaseTool):
         return ToolDefinition(
             name="skill_resource_read",
             description=(
-                "读取当前激活 Skill 目录内的一个资源文件（Skill 激活时返回的 "
-                "references/scripts/assets 清单中的相对路径）。路径必须位于该 "
-                "Skill 目录内，禁止 ../ 或绝对路径。"
+                "读取当前已激活 Skill 目录内的一个资源文件（Active Skill 指令"
+                "列出的 references/scripts/assets 相对路径）。只能读取本 Run "
+                "已通过 skill_read 激活的 Skill；路径必须位于该 Skill 目录内，"
+                "禁止 ../ 或绝对路径。"
             ),
             parameters={
                 "type": "object",
@@ -108,6 +116,32 @@ class SkillResourceReadTool(BaseTool):
         )
 
     async def execute(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """无 Run 上下文的直接调用（兼容直接 execute 场景）。"""
+
+        return await self._read_resource(arguments)
+
+    async def execute_with_context(
+        self,
+        arguments: dict[str, Any],
+        context: Any,
+    ) -> dict[str, Any]:
+        """Run-scoped 调用：只允许读取当前 Run 已激活 Skill 的资源。"""
+
+        name = arguments.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("'name' must be a non-empty string")
+        active_names = context.metadata.get("active_skill_names", ())
+        if name not in active_names:
+            return {
+                "found": False,
+                "name": name,
+                "error": (
+                    "skill is not active in the current run; call skill_read first"
+                ),
+            }
+        return await self._read_resource(arguments)
+
+    async def _read_resource(self, arguments: dict[str, Any]) -> dict[str, Any]:
         name = arguments.get("name")
         resource_path = arguments.get("path")
         if not isinstance(name, str) or not name.strip():

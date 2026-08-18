@@ -380,12 +380,16 @@ class AgentRuntime:
                     )
                     if catalog_message is not None:
                         ephemeral_messages.append(catalog_message)
+                injected_active_skill_names: tuple[str, ...] = ()
                 if self._skill_context_provider is not None and active_skills:
-                    ephemeral_messages.extend(
+                    active_messages = (
                         self._skill_context_provider.active_messages(
                             tuple(active_skills.values())
                         )
                     )
+                    if active_messages:
+                        injected_active_skill_names = tuple(active_skills)
+                        ephemeral_messages.extend(active_messages)
                 if recovery_checkpoint is not None:
                     ephemeral_messages.append(
                         render_checkpoint_context(recovery_checkpoint)
@@ -520,6 +524,7 @@ class AgentRuntime:
                     if self._skill_context_provider is not None
                     else None
                 ),
+                active_skill_message_names=injected_active_skill_names,
             )
             if context_decision.exceeds_input_budget:
                 return await stop_with_error(
@@ -609,6 +614,7 @@ class AgentRuntime:
                     user_input=user_input,
                     step=step,
                     tool_call=tool_call,
+                    metadata={"active_skill_names": tuple(active_skills)},
                 )
                 if (
                     self._tool_registry.is_deferred(tool_call.name)

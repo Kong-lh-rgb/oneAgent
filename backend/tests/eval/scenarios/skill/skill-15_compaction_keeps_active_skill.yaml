@@ -20,12 +20,17 @@ initial_history:
     content: "再补充一批报错记录。"
   - role: assistant
     content: "再补充：AttributeError 场景根因是 None 对象访问属性，处理方式是判空；TypeError 场景根因是类型不匹配，处理方式是显式转换。我已经把全部报错记录按时间顺序整理好，包含每一条的症状描述、定位方法、修复代码与验证结果，方便在接下来的排查中保持完整上下文并继续沿用相同的处理流程。"
+  - role: user
+    content: "把前面的报错记录再汇总一遍。"
+  - role: assistant
+    content: "汇总如下：KeyError 用 get 提供默认值；IndexError 先判断长度；AttributeError 判空后再访问属性；TypeError 显式转换类型。每条都附带复现路径、根因分析、修复代码与验证结论，整体排查流程保持一致：先复现、再读 traceback、定位根因、修复并验证。这些信息都保留在对话中，便于后续继续沿用同一套排查标准。"
 context:
-  window_override: 2000
+  window_override: 6000
 user_input: >-
   现在按标准流程排查最新的报错：ValueError: invalid literal for int()。
 max_steps: 8
 expect:
+  requires_compaction: true
   skill:
     activated: [debug-python]
     survives_compaction: true

@@ -563,6 +563,7 @@ async def _run(args: argparse.Namespace) -> int:
     skill_context_provider = SkillContextProvider(
         max_tokens=skill_settings.skill_context_max_tokens,
         max_active=skill_settings.skill_max_active,
+        catalog_max_tokens=skill_settings.skill_catalog_max_tokens,
     )
     _mark_deferred_tools(
         tool_registry,
