@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+from contextlib import suppress
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -100,6 +101,12 @@ class ShellCommandTool(BaseTool):
             timed_out = True
             _terminate_process(process)
             stdout_bytes, stderr_bytes = await process.communicate()
+        except asyncio.CancelledError:
+            # Run 被 cancel：立即终止整个进程组，避免残留子进程，再重抛取消。
+            _terminate_process(process)
+            with suppress(Exception):
+                await process.communicate()
+            raise
 
         duration_ms = (perf_counter() - started_at) * 1000
         return {

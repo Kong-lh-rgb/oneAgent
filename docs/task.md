@@ -7,6 +7,52 @@
 ---
 ## 2026-08-19
 
+### 完成：RunManager V1 架构修复（5 项，不扩展新功能）
+
+> 基于已实现的 RunManager V1 修 5 个架构问题：不重构 AgentRuntime、不重造
+> Checkpoint。保持职责边界：RunManager=Run 生命周期、AgentRuntime=Agent loop、
+> Checkpoint=恢复边界、Trace=执行记录、Task=业务状态。
+
+#### 修复 1：去掉 AgentRuntime 隐式自动恢复
+- [x] `app/agent/runtime.py`：删除 `run()` / `run_stream()` 里"未传 recovery_run_id 时
+  按 conversation_id 自动 latest_unrecovered"的分支
+- [x] 普通 start() 永远不自动恢复；只有 `RunManager.recover(run_id)` 显式传
+  `recovery_run_id` 才加载恢复证据 —— 恢复哪个 Run 的决定权属于 RunManager
+- [x] `checkpoint_store.latest_unrecovered` 保留为 API，不再被 runtime 调用
+
+#### 修复 2：Shell cancel 杀进程组
+- [x] `app/tools/builtin/shell.py`：`execute()` 捕获 `asyncio.CancelledError` 时先
+  `_terminate_process(process)`（killpg SIGKILL 整个进程组，避免残留子进程），
+  收尾后重新抛出 CancelledError（与 timeout 分支语义一致）
+
+#### 修复 3：简化 recovery lineage
+- [x] 删除 `Run.recovery_count` 字段（无真实递增价值）与 `SQLiteRunStore.record_recovery`
+  （create 后重复写同一信息）
+- [x] `recovered_from_run_id` 只在 `create()` 时一次性写入；`_execute` 不再重复写
+
+#### 修复 4：统一 reconciliation 到 RunManager
+- [x] `RunManager.reconcile()` 先调 `checkpoint_store.recover_running()`（全局把所有遗留
+  RUNNING Checkpoint 转 INTERRUPTED），再基于 Checkpoint 事实修正 RUNNING Run
+- [x] CLI 移除两处直接 `checkpoint_store.recover_running(...)` 调用（启动 + `/use`）；
+  启动只展示 `run_manager.initialize()` 结果，`/use` 只读列出该会话 INTERRUPTED Run
+  提示用 `/run recover`
+
+#### 修复 5：CLI Ctrl+C cancel 当前 Run
+- [x] `_send_message` 的 `run_manager.wait(run_id)` 捕获 `KeyboardInterrupt` →
+  调用 `run_manager.cancel(run_id)` → 打印取消结果 → 返回输入循环，不退出 oneAgent
+  （输入等待时的 Ctrl+C 退出行为保持不变）
+
+#### 测试（新增 5 例，共 563）
+- [x] `tests/test_run_manager.py`：普通 start 不自动恢复旧 interrupted checkpoint
+  （不注入恢复证据、不 mark_recovered、无 recovered_from）/ reconciliation 会把遗留
+  RUNNING Checkpoint（无 Run 记录）也转 INTERRUPTED
+- [x] `tests/test_run_cancel_shell.py`（新）：ShellCommandTool 被 cancel 时终止进程组
+  无残留（pgrep 验证）/ 经 RunManager.cancel 一个正在执行 shell 工具的 Run 后无残留进程
+- [x] `tests/test_agent_runtime.py`：恢复证据注入改为显式 `recovery_run_id`；
+  新增普通 start 不注入恢复证据的测试
+- [x] 全量 `pytest` 563 通过、`ruff`、`compileall`、`git diff --check` 全部通过
+
+---
 ### 完成：Run Manager V1（统一 Run 生命周期：start / get / list / cancel / recover）
 
 > 目标不是重构 AgentRuntime、也不是重新实现 Checkpoint。

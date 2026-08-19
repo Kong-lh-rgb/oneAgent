@@ -80,10 +80,9 @@ class Run(BaseModel):
     completed_at: datetime | None = None
     error: str | None = None
     stop_reason: str | None = None
-    # recover 语义：recover() 启动的新 Run 记录它恢复自哪个旧 Run；
+    # recover 语义：recover() 启动的新 Run 在创建时一次性记录它恢复自哪个旧 Run；
     # 旧 Run 保持 INTERRUPTED（生命周期事实不伪造为 COMPLETED）。
     recovered_from_run_id: str | None = None
-    recovery_count: int = Field(default=0, ge=0)
 
     @field_validator("id", "conversation_id", "recovered_from_run_id")
     @classmethod

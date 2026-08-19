@@ -721,3 +721,102 @@ async def test_list_runs_status_filter(manager_factory) -> None:
     completed = await manager.list_runs(status=RunStatus.COMPLETED)
     assert {item.id for item in completed} == {first, second}
     assert await manager.list_runs(status=RunStatus.RUNNING) == ()
+
+
+# ---------------------------------------------------------------------------
+# 11. 普通 start 不自动恢复（只有 recover 显式加载 Checkpoint）
+# ---------------------------------------------------------------------------
+
+
+async def test_plain_start_does_not_auto_recover_interrupted_checkpoint(
+    manager_factory,
+    tmp_path,
+) -> None:
+    build_manager = manager_factory
+    # 预置一个中断 Run + 可恢复 Checkpoint（含已完成工具结果），与 build_manager
+    # 共用同一个 database 文件（模拟进程重启后的持久化状态）。
+    old_run = await _make_interrupted_run_with_checkpoint(tmp_path)
+    old_run_id = old_run["run_id"]
+    old_checkpoint_store = old_run["checkpoint_store"]
+
+    registry, adapter = fake_registry([model_response(content="完成")])
+    manager, _, checkpoint_store = await build_manager(registry)
+    # 普通 start：不传 recovery_run_id。
+    new_run_id, _ = await manager.start("继续", conversation_id="conv-1")
+    new_run = await manager.wait(new_run_id)
+
+    assert new_run.status is RunStatus.COMPLETED
+    # 模型请求不应注入恢复证据。
+    assert not any(
+        message.name == CHECKPOINT_CONTEXT_MESSAGE_NAME
+        for message in adapter.requests[0].messages
+    )
+    # 旧 Checkpoint 不应被 mark_recovered（普通 start 不处理它）。
+    assert await old_checkpoint_store.get_unrecovered(old_run_id) is not None
+    # 新 Run 不是恢复来源（无 recovered_from）。
+    assert new_run.recovered_from_run_id is None
+
+
+# ---------------------------------------------------------------------------
+# 12. reconciliation 统一通过 RunManager（Checkpoint 层也被处理）
+# ---------------------------------------------------------------------------
+
+
+async def test_reconcile_also_marks_stale_checkpoints(
+    manager_factory,
+    tmp_path,
+) -> None:
+    build_manager = manager_factory
+    # 构造一个只有 Checkpoint（无 Run 记录）的遗留 RUNNING Checkpoint。
+    checkpoint_store = SQLiteCheckpointStore(tmp_path / "oneagent.db")
+    await checkpoint_store.initialize()
+    await checkpoint_store.start(
+        "orphan-cp",
+        conversation_id="conv-9",
+        user_message=Message(role=MessageRole.USER, content="遗留任务"),
+    )
+
+    registry, _ = fake_registry([model_response(content="完成")])
+    manager, _, checkpoint_store2 = await build_manager(
+        registry,
+        checkpoint_store=checkpoint_store,
+    )
+    await manager.initialize()
+
+    checkpoint = await checkpoint_store2.get("orphan-cp")
+    assert checkpoint is not None
+    assert checkpoint.status is CheckpointStatus.INTERRUPTED
+
+
+# ---------------------------------------------------------------------------
+# 辅助：构造一个中断 Run + 可恢复 Checkpoint
+# ---------------------------------------------------------------------------
+
+
+async def _make_interrupted_run_with_checkpoint(
+    tmp_path,
+) -> dict[str, object]:
+    database = tmp_path / "oneagent.db"
+    run_store = SQLiteRunStore(database)
+    checkpoint_store = SQLiteCheckpointStore(database)
+    await run_store.initialize()
+    await checkpoint_store.initialize()
+
+    done = ToolCall(id="done-x", name="count", arguments={"value": 1})
+    run = await run_store.create(conversation_id="conv-1", user_message="统计")
+    await run_store.mark_started(run.id)
+    await checkpoint_store.start(
+        run.id,
+        conversation_id="conv-1",
+        user_message=Message(role=MessageRole.USER, content="统计"),
+    )
+    await checkpoint_store.before_model(run.id, step=1)
+    await checkpoint_store.before_tools(run.id, step=1, tool_calls=(done,))
+    await checkpoint_store.complete_tool(run.id, result=_tool_result(done))
+    await checkpoint_store.interrupt(run.id, error="process stopped")
+    return {
+        "run_id": run.id,
+        "run_store": run_store,
+        "checkpoint_store": checkpoint_store,
+        "database": str(database),
+    }

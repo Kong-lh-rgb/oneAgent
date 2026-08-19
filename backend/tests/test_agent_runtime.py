@@ -1254,6 +1254,8 @@ async def test_runtime_cancellation_preserves_uncertain_tool_call(tmp_path) -> N
 async def test_runtime_injects_interrupted_checkpoint_without_persisting_it(
     tmp_path,
 ) -> None:
+    """恢复证据只应在显式指定 recovery_run_id 时注入（隐式自动恢复已移除）。"""
+
     checkpoint_store = SQLiteCheckpointStore(tmp_path / "oneagent.db")
     await checkpoint_store.initialize()
     uncertain = ToolCall(
@@ -1275,12 +1277,17 @@ async def test_runtime_injects_interrupted_checkpoint_without_persisting_it(
     await checkpoint_store.interrupt("old-run", error="process stopped")
     registry, adapter = fake_registry([model_response(content="已核对中断状态")])
 
+    # 显式指定 recovery_run_id 才会加载对应 Checkpoint（恢复决定权属于 RunManager）。
     result = await AgentRuntime(
         registry,
         ToolRegistry(),
         provider="fake",
         checkpoint_store=checkpoint_store,
-    ).run("继续", conversation_id="conv-1")
+    ).run(
+        "继续",
+        conversation_id="conv-1",
+        recovery_run_id="old-run",
+    )
 
     injected = next(
         message
@@ -1295,6 +1302,49 @@ async def test_runtime_injects_interrupted_checkpoint_without_persisting_it(
     )
     old = await checkpoint_store.get("old-run")
     assert old is not None and old.recovered_by_run_id == result.run_id
+
+
+@pytest.mark.asyncio
+async def test_runtime_plain_start_does_not_inject_interrupted_checkpoint(
+    tmp_path,
+) -> None:
+    """普通 start（不传 recovery_run_id）不应隐式加载旧中断 Checkpoint。"""
+
+    checkpoint_store = SQLiteCheckpointStore(tmp_path / "oneagent.db")
+    await checkpoint_store.initialize()
+    uncertain = ToolCall(
+        id="uncertain-1",
+        name="write_file",
+        arguments={"path": "output.md"},
+    )
+    await checkpoint_store.start(
+        "old-run",
+        conversation_id="conv-1",
+        user_message=Message(role=MessageRole.USER, content="写入 output.md"),
+    )
+    await checkpoint_store.before_model("old-run", step=2)
+    await checkpoint_store.before_tools(
+        "old-run",
+        step=2,
+        tool_calls=(uncertain,),
+    )
+    await checkpoint_store.interrupt("old-run", error="process stopped")
+    registry, adapter = fake_registry([model_response(content="已核对中断状态")])
+
+    await AgentRuntime(
+        registry,
+        ToolRegistry(),
+        provider="fake",
+        checkpoint_store=checkpoint_store,
+    ).run("继续", conversation_id="conv-1")
+
+    # 普通 Run 不应注入恢复证据，也不应 mark_recovered 旧 Checkpoint。
+    assert not any(
+        message.name == CHECKPOINT_CONTEXT_MESSAGE_NAME
+        for message in adapter.requests[0].messages
+    )
+    old = await checkpoint_store.get("old-run")
+    assert old is not None and old.recovered_by_run_id is None
 
 
 @pytest.mark.asyncio

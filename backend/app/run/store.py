@@ -36,8 +36,7 @@ CREATE TABLE IF NOT EXISTS runs (
     completed_at TEXT,
     error TEXT,
     stop_reason TEXT,
-    recovered_from_run_id TEXT,
-    recovery_count INTEGER NOT NULL DEFAULT 0
+    recovered_from_run_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_conversation_updated
@@ -66,7 +65,6 @@ class SQLiteRunStore:
         conversation_id: str | None = None,
         user_message: str = "",
         recovered_from_run_id: str | None = None,
-        recovery_count: int = 0,
     ) -> Run:
         """创建一个 PENDING Run，并返回完整记录。"""
 
@@ -78,8 +76,8 @@ class SQLiteRunStore:
                 """
                 INSERT INTO runs (
                     run_id, conversation_id, status, user_message,
-                    created_at, updated_at, recovered_from_run_id, recovery_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, updated_at, recovered_from_run_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -89,7 +87,6 @@ class SQLiteRunStore:
                     now,
                     now,
                     _optional_identifier(recovered_from_run_id),
-                    recovery_count,
                 ),
             )
             await database.commit()
@@ -242,45 +239,6 @@ class SQLiteRunStore:
             error=error,
         )
 
-    async def record_recovery(
-        self,
-        run_id: str,
-        *,
-        recovered_from_run_id: str,
-        recovery_count: int,
-    ) -> Run:
-        """recover 产生的新 Run 关联被恢复的旧 Run（仅 RUNNING 状态下调用）。
-
-        更新 recovered_from_run_id 与 recovery_count；不改状态。
-        """
-
-        async with self._connect() as database:
-            await database.execute("BEGIN IMMEDIATE")
-            current = await _require_row(database, run_id)
-            if current.status is not RunStatus.RUNNING:
-                raise ValueError(
-                    f"cannot record recovery on run in state {current.status.value}"
-                )
-            await database.execute(
-                """
-                UPDATE runs
-                SET recovered_from_run_id = ?, recovery_count = ?,
-                    updated_at = ?
-                WHERE run_id = ?
-                """,
-                (
-                    _required_identifier(
-                        recovered_from_run_id,
-                        "recovered_from_run_id",
-                    ),
-                    recovery_count,
-                    _now(),
-                    run_id,
-                ),
-            )
-            await database.commit()
-        return await self.require(run_id)
-
     async def require(self, run_id: str) -> Run:
         run = await self.get(run_id)
         if run is None:
@@ -346,7 +304,6 @@ def _run_from_row(row: aiosqlite.Row) -> Run:
         error=row["error"],
         stop_reason=row["stop_reason"],
         recovered_from_run_id=row["recovered_from_run_id"],
-        recovery_count=row["recovery_count"] or 0,
     )
 
 

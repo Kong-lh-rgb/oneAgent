@@ -172,8 +172,9 @@ class AgentRuntime:
 
         ``run_id`` 可选：由调用方指定 Run ID（RunManager 用它把 Run 与
         Checkpoint / Trace 关联），缺省时内部生成。
-        ``recovery_run_id`` 可选：指定要恢复的旧中断 Checkpoint（对应旧 Run），
-        而不是按会话取最近一条未恢复记录。
+        ``recovery_run_id`` 可选：显式指定要恢复的旧中断 Checkpoint（对应旧 Run）。
+        只有显式传入 ``recovery_run_id`` 时本 Run 才会加载恢复证据；普通调用
+        永远不隐式自动恢复 —— 恢复哪个 Run 的决定权属于 RunManager.recover()。
         """
 
         run_id = run_id or uuid4().hex
@@ -189,12 +190,6 @@ class AgentRuntime:
                     recovery_checkpoint = (
                         await self._checkpoint_store.get_unrecovered(
                             recovery_run_id
-                        )
-                    )
-                elif conversation_id is not None:
-                    recovery_checkpoint = (
-                        await self._checkpoint_store.latest_unrecovered(
-                            conversation_id
                         )
                     )
                 await self._checkpoint_store.start(

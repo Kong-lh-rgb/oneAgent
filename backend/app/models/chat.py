@@ -51,7 +51,7 @@ from app.memory import (
     PostRunMemoryReflector,
     register_memory_tools,
 )
-from app.run import Run, RunManager, SQLiteRunStore
+from app.run import Run, RunManager, RunStatus, SQLiteRunStore
 from app.skill_learning import (
     SkillCandidate,
     SkillCandidateStore,
@@ -192,7 +192,18 @@ async def _send_message(
         summary_state=summary_state,
         event_handler=CompositeEventHandler(trace_handler, _CliEventHandler()),
     )
-    run = await run_manager.wait(run_id)
+    try:
+        run = await run_manager.wait(run_id)
+    except KeyboardInterrupt:
+        # 用户 Ctrl+C：不退出 oneAgent，尽量 cancel 当前 Run 后回到输入循环。
+        print("\n[cancel] 正在取消当前 Run...", flush=True)
+        try:
+            cancelled = await run_manager.cancel(run_id)
+            print(f"Run 已取消：{cancelled.id[:8]} · {cancelled.status.value}")
+        except ValueError:
+            # Run 恰好已在取消/完成之间结束，无需处理。
+            print(f"Run {run_id[:8]} 已结束，无需取消。")
+        return False, conversation
     result = run_manager.result(run_id)
     if result is None:
         raise RuntimeError("RunManager 未返回最终 AgentResult")
@@ -439,19 +450,20 @@ def _print_mcp_statuses(statuses: tuple[MCPServerStatus, ...]) -> None:
             print(f"  - {tool_name}")
 
 
-def _print_recovered_checkpoints(
-    checkpoints: tuple[RunCheckpoint, ...],
-) -> None:
-    """提示启动时发现的未正常结束 Run。"""
+def _print_recovered_runs(runs: tuple[Run, ...]) -> None:
+    """展示启动 reconciliation / 会话切换发现的未正常结束 Run（只读展示）。"""
 
-    for checkpoint in checkpoints:
-        print(
-            "检测到中断 Run："
-            f"{checkpoint.run_id[:8]} · phase={checkpoint.phase.value} · "
-            f"step={checkpoint.step} · "
-            f"待核对工具={len(checkpoint.pending_tool_calls)}。"
-            "下次对话会先把恢复证据提供给模型。"
-        )
+    for run in runs:
+        if run.status is RunStatus.INTERRUPTED:
+            print(
+                f"检测到中断 Run：{run.id[:8]} · 可恢复 "
+                f"（/run recover {run.id[:8]} 继续执行）"
+            )
+        else:
+            print(
+                f"Run 状态修正：{run.id[:8]} RUNNING → {run.status.value}"
+                + (f" · {run.error}" if run.error else "")
+            )
 
 
 def _print_trace(events: tuple[AgentEvent, ...]) -> None:
@@ -643,11 +655,6 @@ async def _run(args: argparse.Namespace) -> int:
         f"{action}会话：{conversation.id[:8]} · "
         f"{conversation.title} · {conversation.message_count} 条消息"
     )
-    _print_recovered_checkpoints(
-        await checkpoint_store.recover_running(
-            conversation_id=conversation.id,
-        )
-    )
     try:
         tool_registry = build_builtin_tool_registry()
     except SearchError as exc:
@@ -802,18 +809,11 @@ async def _run(args: argparse.Namespace) -> int:
         checkpoint_store,
         runtime,
     )
+    # 启动 reconciliation（Run + Checkpoint 统一处理）；CLI 只展示结果，
+    # 不直接修改生命周期状态。
     recovered = await run_manager.initialize()
     if recovered:
-        for run in recovered:
-            print(
-                f"Run 状态修正：{run.id[:8]} "
-                f"RUNNING → {run.status.value}"
-                + (
-                    "（可恢复 Checkpoint）"
-                    if run.status.value == "interrupted"
-                    else ""
-                )
-            )
+        _print_recovered_runs(recovered)
     try:
         if args.message is not None:
             success, conversation = await _send_message(
@@ -1016,9 +1016,11 @@ async def _run(args: argparse.Namespace) -> int:
                     continue
                 conversation = selected
                 history = list(await conversation_store.load_messages(conversation.id))
-                _print_recovered_checkpoints(
-                    await checkpoint_store.recover_running(
+                # 只读展示该会话中断的 Run，生命周期修改统一走 RunManager。
+                _print_recovered_runs(
+                    await run_manager.list_runs(
                         conversation_id=conversation.id,
+                        status=RunStatus.INTERRUPTED,
                     )
                 )
                 print(

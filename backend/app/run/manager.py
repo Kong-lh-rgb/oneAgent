@@ -54,21 +54,24 @@ class RunManager:
         return await self.reconcile()
 
     async def reconcile(self) -> tuple[Run, ...]:
-        """进程重启后的 reconciliation。
+        """进程重启后的统一 reconciliation（Run 与 Checkpoint 一起处理）。
 
-        RUNNING 是进程级事实：进程重启后，一个仍显示 RUNNING 的 Run 在当前
-        进程内不可能有真正的 Agent execution。不能让它永远留在 RUNNING。
+        RUNNING 是进程级事实：进程重启后，当前进程内不可能存在这些 Run 的
+        Agent execution，不能让它永远留在 RUNNING。所有启动恢复逻辑统一收敛
+        到这里（CLI 只展示结果、不再直接改生命周期状态）。
 
-        规则（结合 Checkpoint 语义）：
-        - 存在 Checkpoint：
-          - Checkpoint 仍是 RUNNING（进程硬崩溃，checkpoint.interrupt 未执行）
-            → 先由 checkpoint 层转 INTERRUPTED，再把 Run 转 INTERRUPTED；
-          - Checkpoint 已是 INTERRUPTED → Run 转 INTERRUPTED（有可恢复边界）；
-          - Checkpoint 已是 COMPLETED / FAILED → Run 同步为对应终态
-            （Checkpoint 是“执行边界”的事实源，说明 Run 状态更新滞后于执行）。
-        - 不存在 Checkpoint → Run 转 FAILED（没有可恢复状态，不能假装可恢复）。
+        顺序：
+        1. Checkpoint 层：先把所有遗留 RUNNING Checkpoint 转 INTERRUPTED
+           （checkpoint.recover_running 不区分会话，处理全部遗留记录）；
+        2. Run 层：基于 Checkpoint 事实修正 RUNNING Run：
+           - 有 Checkpoint（已转 INTERRUPTED）→ Run 转 INTERRUPTED；
+           - Checkpoint 已是 COMPLETED / FAILED → Run 同步为对应终态
+             （Checkpoint 是“执行边界”的事实源，说明 Run 状态更新滞后）；
+           - 不存在 Checkpoint → Run 转 FAILED（没有可恢复状态）。
         """
 
+        if self._checkpoint_store is not None:
+            await self._checkpoint_store.recover_running()
         stale = await self._run_store.list_runs(status=RunStatus.RUNNING)
         reconciled: list[Run] = []
         for run in stale:
@@ -79,19 +82,11 @@ class RunManager:
                     error=_STALE_RUN_ERROR
                     + " (no recoverable checkpoint)",
                 )
-            elif checkpoint.status is CheckpointStatus.RUNNING:
-                await self._checkpoint_store.interrupt(
-                    checkpoint.run_id,
-                    error="process restarted",
-                )
-                updated = await self._run_store.mark_interrupted(
-                    run.id,
-                    error=_STALE_RUN_ERROR + " (recoverable checkpoint preserved)",
-                )
             elif checkpoint.status is CheckpointStatus.INTERRUPTED:
                 updated = await self._run_store.mark_interrupted(
                     run.id,
-                    error=_STALE_RUN_ERROR + " (recoverable checkpoint preserved)",
+                    error=_STALE_RUN_ERROR
+                    + " (recoverable checkpoint preserved)",
                 )
             elif checkpoint.status is CheckpointStatus.COMPLETED:
                 updated = await self._run_store.mark_completed(
@@ -136,7 +131,6 @@ class RunManager:
             conversation_id=conversation_id,
             user_message=user_message,
             recovered_from_run_id=recovered_from_run_id,
-            recovery_count=(0 if recovered_from_run_id is None else 1),
         )
         await self._run_store.mark_started(run.id)
         task = asyncio.create_task(
@@ -148,7 +142,6 @@ class RunManager:
                 summary_state=summary_state,
                 event_handler=event_handler,
                 recovery_run_id=recovery_run_id,
-                recovered_from_run_id=recovered_from_run_id,
             )
         )
         self._active_tasks[run.id] = task
@@ -295,15 +288,8 @@ class RunManager:
         summary_state: ConversationSummaryState | None,
         event_handler: AgentEventHandler | None,
         recovery_run_id: str | None,
-        recovered_from_run_id: str | None,
     ) -> None:
         try:
-            if recovered_from_run_id is not None:
-                await self._run_store.record_recovery(
-                    run_id,
-                    recovered_from_run_id=recovered_from_run_id,
-                    recovery_count=1,
-                )
             result: AgentResult | None = None
             try:
                 async for event in self._runtime.run_stream(

@@ -1538,3 +1538,51 @@ Multi-Agent / Task Graph / Planner DAG。Pattern Mining V1 完全用一次结构
   COMPLETED / 已完成 Tool Result 不重复执行 / 无效转换被拒 / completed 不能 cancel /
   多 Run 同会话 / Trace+Checkpoint 行为不变 / list 状态过滤；
 - 全量 `pytest` 558 通过（545 + 13），`ruff` / `compileall` / `git diff --check` 全绿。
+
+## 35. RunManager V1 架构修复（2026-08-19，不扩展功能）
+
+> 只修 5 个架构问题，保持职责边界不变。
+
+### 35.1 去掉 AgentRuntime 隐式自动恢复
+
+- 原实现：普通 `run()` 未传 `recovery_run_id` 时，若传了 conversation_id 会隐式调
+  `latest_unrecovered` 自动加载会话最近中断 Checkpoint。这会让"新对话"意外带上旧恢复
+  证据，且把"恢复哪个 Run"的决定权散落在 runtime 里。
+- 修复：删除该分支。**普通 start 永远不自动恢复**；只有 `RunManager.recover(run_id)`
+  显式传 `recovery_run_id` 才加载指定 Checkpoint。恢复决定权统一归 RunManager。
+- `latest_unrecovered` 保留为 checkpoint API（不再被 runtime 调用）。
+
+### 35.2 Shell cancel 杀进程组
+
+- 原实现：`ShellCommandTool.execute` 只处理 `asyncio.TimeoutError`（killpg）；收到
+  `asyncio.CancelledError` 时不会清理子进程 → Run 被 cancel 时 shell 残留。
+- 修复：捕获 `CancelledError` → `_terminate_process(process)`（killpg SIGKILL 整个进程
+  组）→ 收尾 communicate → **重新抛出**。与 timeout 分支语义一致，不伪造"没执行"。
+
+### 35.3 简化 recovery lineage
+
+- 删除 `Run.recovery_count`（恒为 1，无真实递增价值）与 `SQLiteRunStore.record_recovery`
+  （create 后再写同一 `recovered_from_run_id` 是重复写）。
+- `recovered_from_run_id` 只在 `create()` 一次性写入；`_execute` 不再重复写。
+
+### 35.4 统一 reconciliation
+
+- 原实现：CLI 启动 / `/use` 直接调 `checkpoint_store.recover_running()` 修改生命周期
+  状态，与 `RunManager.initialize()` 的 reconcile 重复。
+- 修复：`RunManager.reconcile()` 先调 `checkpoint_store.recover_running()`（全局转
+  INTERRUPTED），再基于 Checkpoint 事实修正 RUNNING Run；CLI 只展示结果（启动展示
+  initialize 返回值、`/use` 只读列出该会话 INTERRUPTED Run），不再直接改状态。
+
+### 35.5 CLI Ctrl+C cancel 当前 Run
+
+- `_send_message` 的 `run_manager.wait(run_id)` 捕获 `KeyboardInterrupt` →
+  `run_manager.cancel(run_id)` → 打印取消结果 → 返回输入循环，不退出 oneAgent。
+- 输入等待时的 Ctrl+C（`input()` 处）退出行为保持不变。
+
+### 35.6 测试与结果
+
+- 新增 5 例：普通 start 不自动恢复（不注入证据、不 mark_recovered、无 recovered_from）/
+  reconciliation 处理遗留 RUNNING Checkpoint（无 Run 记录）也转 INTERRUPTED /
+  ShellCommandTool cancel 无残留进程 / RunManager cancel shell Run 无残留 /
+  runtime 普通 start 不注入恢复证据（原隐式恢复测试改为显式 recovery_run_id）。
+- 全量 `pytest` 563 通过（558 + 5），`ruff` / `compileall` / `git diff --check` 全绿。
