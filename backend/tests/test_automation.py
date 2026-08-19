@@ -22,7 +22,10 @@ from app.automation.models import (
 )
 from app.automation.scheduler import AutomationScheduler
 from app.automation.store import SQLiteAutomationStore
-from app.automation.tools import build_schedule_and_next
+from app.automation.tools import (
+    AutomationCreateTool,
+    build_schedule_and_next,
+)
 from app.conversation import ConversationSource
 
 _USER_MESSAGE = "提醒我交作业"
@@ -516,6 +519,26 @@ def test_automation_create_valid_schedules() -> None:
     assert schedule.kind is ScheduleKind.CRON
     assert schedule.timezone == "Asia/Shanghai"
     assert next_run > datetime.now(UTC)
+
+
+def test_automation_create_prompt_excludes_schedule_rule() -> None:
+    """automation_create 的 schema 明确：prompt 只保存触发时真正要执行的指令，
+    调度条件必须放进 schedule 字段，不能含在 prompt 里（避免触发后模型再次
+    创建新自动化）。只校验说明文字，不新增自然语言解析。"""
+
+    definition = AutomationCreateTool(scheduler=None).definition
+    tool_desc = definition.description
+    prompt_desc = definition.parameters["properties"]["prompt"]["description"]
+
+    # Tool 说明：prompt 不能包含调度条件 + 示例拆解 + 后果说明。
+    assert "不能包含" in tool_desc and "调度条件" in tool_desc
+    assert "总结项目进度" in tool_desc
+    assert "再次创建" in tool_desc
+
+    # prompt 参数说明：只含执行内容、不含调度条件，并给出同一示例。
+    assert "不含调度条件" in prompt_desc
+    assert "总结项目进度" in prompt_desc
+    assert "再次创建" in prompt_desc
 
 
 # ---------------------------------------------------------------------------

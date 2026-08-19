@@ -39,7 +39,13 @@ class AutomationCreateTool(BaseTool):
                 "创建一个自动化：在未来某个时间，自动用指定 prompt 启动一次 "
                 "Agent Run（可选一次性、固定间隔、cron 计划）。当用户要求"
                 "“明天早上9点提醒我 / 每天晚上10点总结进度 / 每隔2小时检查”"
-                "这类定时任务时调用。"
+                "这类定时任务时调用。\n"
+                "注意：prompt 只保存“到触发时间真正要执行的指令”，不能包含"
+                "调度条件（时间、频率、时区等必须放进 kind / run_at / "
+                "interval_seconds / cron_expr / timezone，不要在 prompt 里重复）。"
+                "例：“每天晚上10点总结项目进度” → schedule=每天22:00，"
+                "prompt=“总结项目进度”。否则自动化触发后模型会把整个句子"
+                "当指令执行，可能再次创建新的自动化。"
             ),
             parameters={
                 "type": "object",
@@ -50,7 +56,13 @@ class AutomationCreateTool(BaseTool):
                     },
                     "prompt": {
                         "type": "string",
-                        "description": "触发时要执行的用户指令。",
+                        "description": (
+                            "触发时真正要执行的指令，只含执行内容、不含调度条件。"
+                            "例：“每天晚上10点总结项目进度”应拆为 schedule="
+                            "每天22:00、prompt=“总结项目进度”；不要在 prompt 里"
+                            "重复时间/频率，否则自动化触发后模型可能再次创建"
+                            "新的自动化。"
+                        ),
                     },
                     "kind": {
                         "type": "string",

@@ -1747,3 +1747,38 @@ Multi-Agent / Task Graph / Planner DAG。Pattern Mining V1 完全用一次结构
 - provenance：真 SQLite 建 store → 创建带 provenance 的 Run → 关库重建 + 重启
   ConversationService → 再查询，字段仍在。
 - 全量 `pytest` 589 通过，`ruff` / `compileall` / `git diff --check` 全绿。
+
+## 39. Automation / Scheduler V1 收口：INTERRUPTED 终态化 + prompt 不含调度条件（2026-08-19）
+
+### 39.1 INTERRUPTED 改为终态
+
+- 背景：旧语义允许 `INTERRUPTED → RUNNING`（注释"recover() 重新进入执行"），但
+  `RunManager.recover()` 实际实现是**创建新 Run B**（`B.recovered_from_run_id = A`），
+  A 永远保持 INTERRUPTED。状态机允许的转换和实现语义不一致。
+- 修正：`_ALLOWED_TRANSITIONS[INTERRUPTED] = frozenset()`（无转换），并把 INTERRUPTED
+  加入 `TERMINAL_STATUSES`（`completed_at` 随中断一并盖章，与"attempt 已结束"一致）。
+- 最终语义：**一个 Run = 一次 execution attempt**；中断后该 attempt 结束；
+  恢复 = 创建新的 execution attempt。Checkpoint recovery 协议完全不动。
+- 注意：`mark_interrupted` 现在会设置 `completed_at`（因为它属于终态集合），
+  这是语义一致的结果，不是副作用。
+
+### 39.2 automation_create 的 prompt 只保存执行指令
+
+- 问题：prompt 描述过于宽泛（"触发时要执行的用户指令"），模型可能把
+  "每天晚上10点总结项目进度"整句存进 prompt，触发后模型把调度词也当指令，
+  可能再次创建新自动化。
+- 修正：Tool description 与 prompt 参数 description 都明确约束——
+  **prompt 只保存"到触发时间真正要执行的指令"，调度条件（时间/频率/时区）
+  必须放进 kind / run_at / interval_seconds / cron_expr / timezone**，
+  并给示例拆解（“每天晚上10点总结项目进度”→ schedule=每天22:00、
+  prompt=“总结项目进度”）与后果说明。
+- 只改 schema 说明文字，不做自然语言时间解析（模型负责拆解，工具只收结构化参数）。
+
+### 39.3 测试与结果
+
+- `test_run_manager.py`：INTERRUPTED 后 mark_started / mark_completed / mark_cancelled
+  全部抛 invalid run transition。
+- `test_automation.py`：新测试断言 Tool 说明与 prompt 参数说明都含"不含调度条件"
+  约束与示例。
+- 全量 `pytest` 590 通过，`ruff` / `compileall` / `git diff --check` 全绿。
+  Automation / Scheduler V1 正式收口。

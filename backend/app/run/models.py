@@ -23,9 +23,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 class RunStatus(StrEnum):
     """Run 的生命周期状态。
 
-    COMPLETED / FAILED / CANCELLED 是终态（不可再转换）。
-    INTERRUPTED 不是终态：表示 Run 没有正常结束，但存在可恢复 Checkpoint，
-    可以通过 recover() 重新进入 RUNNING。
+    COMPLETED / FAILED / CANCELLED / INTERRUPTED 都是终态（不可再转换）。
+
+    一个 Run = 一次 execution attempt：INTERRUPTED 表示这次 attempt 被中断、
+    到此结束；恢复不是把旧 Run 重新置回 RUNNING，而是由 recover() 创建一次
+    新的 attempt（新 Run 记录 recovered_from_run_id 指向旧 Run）。
 
     与 app/trace RunStatus（RUNNING/COMPLETED/FAILED）保持值语义一致，
     这里扩展了 PENDING / CANCELLED / INTERRUPTED 三个生命周期状态。
@@ -41,9 +43,9 @@ class RunStatus(StrEnum):
 
 # 允许的状态转换。
 # - PENDING → RUNNING：start() 创建后立即开始执行；
-# - RUNNING → 终态 / INTERRUPTED：执行结束、失败、取消、进程中断；
-# - INTERRUPTED → RUNNING：recover() 重新进入执行。
-# 终态（COMPLETED / FAILED / CANCELLED）不可再转换。
+# - RUNNING → 终态 / INTERRUPTED：执行结束、失败、取消、进程中断。
+# INTERRUPTED 也是终态：中断后该 attempt 结束；恢复 = recover() 创建新的
+# execution attempt（旧 Run 永远保持 INTERRUPTED），不会重新进入 RUNNING。
 _ALLOWED_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
     RunStatus.PENDING: frozenset({RunStatus.RUNNING}),
     RunStatus.RUNNING: frozenset(
@@ -54,14 +56,19 @@ _ALLOWED_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
             RunStatus.INTERRUPTED,
         }
     ),
-    RunStatus.INTERRUPTED: frozenset({RunStatus.RUNNING}),
+    RunStatus.INTERRUPTED: frozenset(),
     RunStatus.COMPLETED: frozenset(),
     RunStatus.FAILED: frozenset(),
     RunStatus.CANCELLED: frozenset(),
 }
 
 TERMINAL_STATUSES = frozenset(
-    {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
+    {
+        RunStatus.COMPLETED,
+        RunStatus.FAILED,
+        RunStatus.CANCELLED,
+        RunStatus.INTERRUPTED,
+    }
 )
 
 

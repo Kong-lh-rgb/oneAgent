@@ -593,6 +593,19 @@ async def test_invalid_state_transitions_rejected(tmp_path) -> None:
     with pytest.raises(ValueError, match="invalid run transition"):
         await store.mark_interrupted(run.id)
 
+    # INTERRUPTED 也是终态：中断后该 attempt 结束，不可再回到 RUNNING
+    # （恢复 = recover() 创建新的 execution attempt，而不是把旧 Run 复活）。
+    run2 = await store.create(conversation_id="conv-1", user_message="x")
+    await store.mark_started(run2.id)
+    await store.mark_interrupted(run2.id)
+    assert run2 is not None
+    with pytest.raises(ValueError, match="invalid run transition"):
+        await store.mark_started(run2.id)
+    with pytest.raises(ValueError, match="invalid run transition"):
+        await store.mark_completed(run2.id)
+    with pytest.raises(ValueError, match="invalid run transition"):
+        await store.mark_cancelled(run2.id)
+
     # 终态 Run 在 Manager 层也不能 cancel。
     manager_runtime_registry, _ = fake_registry([model_response(content="完成")])
     checkpoint_store = SQLiteCheckpointStore(tmp_path / "oneagent.db")

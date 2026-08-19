@@ -7,6 +7,31 @@
 ---
 ## 2026-08-19
 
+### 完成：Automation / Scheduler V1 收口（2 个小修，不扩展新功能）
+
+> 语义修正：一个 Run = 一次 execution attempt；自动化 prompt 不含调度条件。
+
+#### 小修 1：INTERRUPTED 改为终态
+- [x] `app/run/models.py`：`RunStatus.INTERRUPTED` 从"可 recover 回 RUNNING"改为**终态**
+  （`_ALLOWED_TRANSITIONS` 清空；加入 `TERMINAL_STATUSES`，`completed_at` 一并盖章）
+- [x] 删除"recover 后原 Run 重新进入 RUNNING"注释；recover() 实现不变：
+  校验 INTERRUPTED + 可恢复 Checkpoint → `start()` 创建**新 Run**（旧 Run 永远保持
+  INTERRUPTED，新 Run 记录 `recovered_from_run_id`）；不修改 Checkpoint recovery 协议
+- [x] 测试：`test_run_manager.py::test_invalid_state_transitions_rejected` 增加
+  INTERRUPTED → RUNNING / COMPLETED / CANCELLED 全部被拒
+
+#### 小修 2：automation_create 的 prompt 不含调度条件
+- [x] `app/automation/tools.py`：Tool description 与 prompt 参数 description 明确
+  "prompt 只保存到触发时间真正要执行的指令，不能包含调度条件"，给出示例拆解
+  （“每天晚上10点总结项目进度”→ schedule=每天22:00、prompt=“总结项目进度”）
+  及后果（避免触发后模型再次创建新自动化）
+- [x] 测试：`test_automation.py::test_automation_create_prompt_excludes_schedule_rule`
+  断言 Tool 说明与 prompt 参数说明均含该约束；不新增自然语言时间解析
+
+#### 验证
+- [x] 全量 `pytest` 590 通过（+1）、`ruff`、`compileall`、`git diff --check` 全部通过
+
+---
 ### 完成：Automation / Scheduler V1 收尾（3 项修复）
 
 > 基于 ConversationService 抽取之后的架构收口 Automation / Scheduler V1，只修 3 个问题，
