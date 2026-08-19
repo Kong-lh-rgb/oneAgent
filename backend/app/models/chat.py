@@ -21,6 +21,11 @@ from app.agent.events import (
     CompositeEventHandler,
 )
 from app.agent.runtime import AgentRuntime
+from app.automation import (
+    AutomationScheduler,
+    SQLiteAutomationStore,
+    register_automation_tools,
+)
 from app.checkpoint import RunCheckpoint, SQLiteCheckpointStore
 from app.context import (
     ContextManager,
@@ -97,6 +102,8 @@ _COMMAND_OVERVIEW = (
     "/memories 查看长期记忆，/memory <id> 查看记忆详情，"
     "/runs 查看运行（生命周期），/run <id> 查看详情，/run cancel <id> 取消，"
     "/run recover <id> 恢复，/checkpoints 查看恢复点，/trace <id> 查看轨迹，"
+    "/automations 查看自动化，/automation <id> 查看详情，"
+    "/automation cancel|pause|resume <id> 管理自动化，"
     "/mcp 查看 MCP Server 与工具，"
     "/permissions 查看审批规则，"
     "/skill-candidates 查看 Skill Learning 候选，"
@@ -115,6 +122,11 @@ _HELP_TEXT = (
     "/run cancel <Run ID> 取消正在执行的 Run\n"
     "/run recover <Run ID> 恢复中断的 Run\n"
     "/checkpoints 查看当前会话的运行恢复点\n"
+    "/automations 查看当前会话的自动化\n"
+    "/automation <ID> 查看自动化详情\n"
+    "/automation cancel <ID> 取消自动化\n"
+    "/automation pause <ID> 暂停自动化\n"
+    "/automation resume <ID> 恢复自动化\n"
     "/trace <Run ID> 查看完整事件轨迹\n"
     "/permissions 查看当前会话的审批规则\n"
     "/permission remove <规则ID> 删除一条审批规则\n"
@@ -417,6 +429,53 @@ def _print_run_detail(run: Run) -> None:
     if run.recovered_from_run_id:
         print(f"  recovered_from: {run.recovered_from_run_id[:8]}")
     print(f"  user_message: {(run.user_message or '')[:120]}")
+
+
+def _print_automations(automations: tuple[object, ...]) -> None:
+    """显示自动化列表。"""
+
+    if not automations:
+        print("暂无 Automation。")
+        return
+    for item in automations:
+        next_run = (
+            item.next_run_at.astimezone().strftime("%m-%d %H:%M")
+            if item.next_run_at is not None
+            else "-"
+        )
+        print(
+            f"{item.id[:8]}  {item.title[:24]:<24}  "
+            f"{item.status.value:<9} next={next_run}"
+        )
+
+
+def _print_automation(automation: object) -> None:
+    """显示单个自动化详情。"""
+
+    if automation is None:
+        print("找不到 Automation。")
+        return
+    schedule = automation.schedule
+    print(f"Automation {automation.id}")
+    print(f"  title: {automation.title}")
+    print(f"  status: {automation.status.value}")
+    print(f"  kind: {schedule.kind.value}")
+    if schedule.kind.value == "once":
+        print(f"  run_at: {schedule.run_at}")
+    elif schedule.kind.value == "interval":
+        print(f"  interval_seconds: {schedule.interval_seconds}")
+    else:
+        print(f"  cron_expr: {schedule.cron_expr}")
+    print(f"  timezone: {schedule.timezone}")
+    print(f"  conversation_id: {automation.conversation_id or '-'}")
+    next_run = (
+        automation.next_run_at.astimezone().strftime("%m-%d %H:%M:%S")
+        if automation.next_run_at is not None
+        else "-"
+    )
+    print(f"  next_run_at: {next_run}")
+    print(f"  last_run_id: {automation.last_run_id or '-'}")
+    print(f"  prompt: {(automation.prompt or '')[:160]}")
 
 
 def _print_checkpoints(checkpoints: tuple[RunCheckpoint, ...]) -> None:
@@ -814,6 +873,17 @@ async def _run(args: argparse.Namespace) -> int:
     recovered = await run_manager.initialize()
     if recovered:
         _print_recovered_runs(recovered)
+
+    # Automation / Scheduler：到时间通过 RunManager 自动启动 Run。
+    automation_store = SQLiteAutomationStore(args.database)
+    automation_scheduler = AutomationScheduler(
+        automation_store,
+        run_manager,
+        conversation_store=conversation_store,
+        summary_store=summary_store,
+    )
+    register_automation_tools(tool_registry, automation_scheduler)
+    await automation_scheduler.start()
     try:
         if args.message is not None:
             success, conversation = await _send_message(
@@ -1001,6 +1071,65 @@ async def _run(args: argparse.Namespace) -> int:
                 )
                 _print_trace(await trace_store.load_events(run.run_id))
                 continue
+            if content == "/automations":
+                _print_automations(
+                    await automation_scheduler.list(
+                        conversation_id=conversation.id,
+                    )
+                )
+                continue
+            if content == "/automation" or content.startswith("/automation "):
+                parts = content.split()
+                if len(parts) < 2:
+                    _print_automations(
+                        await automation_scheduler.list(
+                            conversation_id=conversation.id,
+                        )
+                    )
+                    continue
+                action_word = parts[1].lower()
+                if action_word in ("cancel", "pause", "resume"):
+                    if len(parts) < 3:
+                        print(f"用法：/automation {action_word} <ID>")
+                        continue
+                    identifier = parts[2]
+                    try:
+                        automation = await automation_scheduler.resolve(
+                            identifier
+                        )
+                    except ValueError as exc:
+                        print(exc)
+                        continue
+                    if automation is None:
+                        print(f"找不到 Automation：{identifier}")
+                        continue
+                    try:
+                        if action_word == "cancel":
+                            updated = await automation_scheduler.cancel(
+                                automation.id
+                            )
+                        elif action_word == "pause":
+                            updated = await automation_scheduler.pause(
+                                automation.id
+                            )
+                        else:
+                            updated = await automation_scheduler.resume(
+                                automation.id
+                            )
+                    except ValueError as exc:
+                        print(exc)
+                        continue
+                    print(
+                        f"Automation {updated.id[:8]} "
+                        f"{action_word} → {updated.status.value}"
+                    )
+                    continue
+                automation = await automation_scheduler.get(parts[1])
+                if automation is None:
+                    print(f"找不到 Automation：{parts[1]}")
+                    continue
+                _print_automation(automation)
+                continue
             if content == "/use" or content.startswith("/use "):
                 identifier = content.removeprefix("/use").strip()
                 if not identifier:
@@ -1110,6 +1239,7 @@ async def _run(args: argparse.Namespace) -> int:
             )
             await _maybe_run_skill_learning(skill_learning)
     finally:
+        await automation_scheduler.shutdown()
         await mcp_manager.close(tool_registry)
         await registry.close()
 

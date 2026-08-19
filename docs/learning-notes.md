@@ -1586,3 +1586,61 @@ Multi-Agent / Task Graph / Planner DAG。Pattern Mining V1 完全用一次结构
   ShellCommandTool cancel 无残留进程 / RunManager cancel shell Run 无残留 /
   runtime 普通 start 不注入恢复证据（原隐式恢复测试改为显式 recovery_run_id）。
 - 全量 `pytest` 563 通过（558 + 5），`ruff` / `compileall` / `git diff --check` 全绿。
+
+## 36. Automation / Scheduler V1（2026-08-19）
+
+> 目标：让 oneAgent 具备最基本的"长期运行 / 到时间自己启动 Run"能力。
+> 职责：Automation="未来何时以什么 prompt 启动 Run"；RunManager="Run 生命周期"；
+> AgentRuntime="Run 内部怎么执行"。Scheduler 绝不直接调用 AgentRuntime。
+
+### 36.1 Schedule 数据模型
+
+- `ScheduleKind.ONCE`：`run_at`（ISO8601，必须带时区偏移）；执行一次。
+- `ScheduleKind.INTERVAL`：`interval_seconds`（>0）；固定间隔重复。
+- `ScheduleKind.CRON`：`cron_expr`（crontab 五段）；简单 calendar recurrence。
+- `timezone`（IANA）是 Schedule 的原时区语义；内部持久化 `next_run_at` 统一 UTC，
+  计算下一次始终基于 `timezone`（用 APScheduler trigger 的 `get_next_fire_time`），
+  避免"用 UTC 解释用户本地时间后又偷偷转换错"。
+
+### 36.2 调度模型（可控 + 可恢复）
+
+- 每个 ACTIVE Automation 注册一个"下次触发"的一次性 `DateTrigger` job；
+- 触发后：通过 `RunManager.start` 启动 Run → 更新 last_run_id/last_run_at →
+  用 APScheduler trigger 计算下一个未来触发点 → 写 store → 注册下一个一次性 job；
+- 计划完全可控、与持久化 `next_run_at` 一致、重启恢复简单（从 store 读 next 再注册）。
+
+### 36.3 misfire / coalesce 语义（V1 确定规则）
+
+- 一次性（ONCE）：启动恢复时若已过期且从未执行 → 补跑一次（把 next 设为 now 触发）→
+  触发后 COMPLETED；已执行过 → 直接 COMPLETED。
+- 重复（INTERVAL/CRON）：不补跑所有错过次数，`get_next_fire_time` 直接取"从现在起的
+  第一个未来触发点"——天然 coalesce，避免启动后瞬间创建几十个 Run。
+
+### 36.4 并发与失败语义
+
+- `max_instances = 1`：触发前检查上一次 `last_run_id` 对应 Run 是否仍 RUNNING，
+  若在跑则跳过本次并推进 next（coalesce）。
+- Run FAILED 不自动取消 Automation；重复任务下次仍继续；一次性保留 `last_run_id`
+  供查看失败原因。V1 无 retry policy。单个 Automation 失败被 job 包装函数隔离。
+
+### 36.5 重启恢复与 Conversation 上下文
+
+- `AutomationScheduler.start()`：建表 → 加载 ACTIVE → 应用 misfire 规则 → 注册 job → 启动。
+- 触发时从持久化 `ConversationStore.load_messages` 加载 history、`SummaryStore.load`
+  加载 summary_state，再 `RunManager.start` —— 不依赖 CLI 内存 history，
+  Automation 脱离 CLI 也能运行。
+
+### 36.6 Agent Tools
+
+- `automation_create`：模型把"明天早上9点提醒我"转成结构化参数（kind/run_at/interval/
+  cron/timezone）；工具只接收明确结构化时间，不做自然语言解析；
+  校验时间格式 / timezone / 过去时间 / interval>0 / cron 合法性（`build_schedule_and_next`）。
+- `automation_list` / `automation_get` / `automation_cancel` / `automation_pause` /
+  `automation_resume`。
+
+### 36.7 测试与结果
+
+- 12 例，全部 fake RunManager / fake ConversationStore，不调真实模型 API；
+  用可控时间（构造过去/未来 next_run_at）避免真实等待；核心 `_trigger` / `_restore`
+  白盒可测。
+- 全量 `pytest` 575 通过（563 + 12），`ruff` / `compileall` / `git diff --check` 全绿。

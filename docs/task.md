@@ -7,6 +7,54 @@
 ---
 ## 2026-08-19
 
+### 完成：Automation / Scheduler V1（到时间自动启动 Agent Run）
+
+> 让 oneAgent 具备最基本的"长期运行 / 到时间自己启动 Run"能力。
+> 不引入调度平台 / webhook / retry / DAG / 分布式 / Redis / Celery 等。
+> 关键链路：Automation → AutomationScheduler → RunManager.start(prompt) → AgentRuntime；
+> Scheduler 绝不直接调用 AgentRuntime，所有执行统一走 RunManager。
+
+#### 新增模块 `backend/app/automation/`
+- [x] `models.py`：`AutomationStatus`（active/paused/completed/cancelled）+ `Schedule`
+  （once / interval / cron）+ `Automation`（不保存 Trace / Tool Result / Checkpoint）
+  - Schedule 显式保留 timezone（IANA），内部 next_run_at 统一 UTC，避免时区转换错
+- [x] `store.py`：`SQLiteAutomationStore`（复用 oneagent.db 新增 automations 表；
+  create/get/resolve/list/update_status/mark_triggered；支持 status / conversation_id 过滤；
+  事务写入，重启后仍在）
+- [x] `scheduler.py`：`AutomationScheduler`（APScheduler AsyncIOScheduler；
+  每个 ACTIVE Automation 注册一个"下次触发"的一次性 DateTrigger job，触发后计算下一次并
+  注册下一个 job —— 计划完全可控、与持久化 next_run_at 一致、重启恢复简单）
+- [x] `tools.py`：`automation_create` / `automation_list` / `automation_get` /
+  `automation_cancel` / `automation_pause` / `automation_resume` + `register_automation_tools`
+  - 工具只接收明确结构化时间，不做自然语言解析；时间格式 / timezone / 过去时间 /
+    interval>0 / cron 合法性全部在工具层校验（`build_schedule_and_next`）
+
+#### 关键语义
+- [x] **misfire / coalesce**：一次性过期未执行 → 补跑一次后 COMPLETED；重复任务不补跑所有
+  错过次数，从未来最近触发点继续（用 APScheduler trigger 的 get_next_fire_time）
+- [x] **并发保护（max_instances=1）**：若上一次 Run 仍在 RUNNING，跳过本次触发并推进 next
+- [x] **执行失败语义**：Run FAILED 不自动取消 Automation；重复任务下次仍继续；一次性保留
+  last_run_id 供查看失败原因；V1 无 retry policy
+- [x] **重启恢复**：start() 加载 ACTIVE Automation 并应用 misfire 规则重新接入调度
+- [x] **Conversation 上下文**：触发时从持久化 ConversationStore 加载 history +
+  SummaryStore 加载 summary_state，不依赖 CLI 内存 history，Automation 脱离 CLI 也能运行
+
+#### CLI 接入（最小）
+- [x] 启动：构建 automation store + scheduler，`register_automation_tools`，`await scheduler.start()`
+  （在 run_manager.initialize() 之后）
+- [x] 退出：finally 里 `await scheduler.shutdown()`（不遗留后台 asyncio task、不阻塞）
+- [x] 新增 `/automations`、`/automation <id>`、`/automation cancel|pause|resume <id>`
+
+#### 测试（+12，共 575）
+- [x] `tests/test_automation.py`：创建一次性 / 到点触发 RunManager.start / conversation_id 关联 /
+  一次性触发后 COMPLETED / 重复触发后仍 ACTIVE / next_run_at 更新 / pause/resume/cancel /
+  重启重新加载 ACTIVE / 错过一次性只补跑一次 / 重复 misfire 不批量补跑 / 重叠保护 /
+  Run 失败不崩 Scheduler / create 参数校验 / 触发时加载持久化 Conversation 上下文
+- [x] 全部用 fake RunManager / fake ConversationStore，不调真实模型 API；
+  用可控时间（构造过去/未来 next_run_at）避免真实等待
+- [x] 全量 `pytest` 575 通过、`ruff`、`compileall`、`git diff --check` 全部通过
+
+---
 ### 完成：RunManager V1 架构修复（5 项，不扩展新功能）
 
 > 基于已实现的 RunManager V1 修 5 个架构问题：不重构 AgentRuntime、不重造
