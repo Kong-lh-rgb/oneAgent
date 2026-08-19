@@ -1644,3 +1644,55 @@ Multi-Agent / Task Graph / Planner DAG。Pattern Mining V1 完全用一次结构
   用可控时间（构造过去/未来 next_run_at）避免真实等待；核心 `_trigger` / `_restore`
   白盒可测。
 - 全量 `pytest` 575 通过（563 + 12），`ruff` / `compileall` / `git diff --check` 全绿。
+
+## 37. Automation 执行出口重构：ConversationService（2026-08-19）
+
+> 一句话原则："Automation 不是定时启动 Runtime，而是定时向 Conversation 投递一条新的输入。"
+
+### 37.1 为什么抽取 ConversationService
+
+- 原 Scheduler 直接 `RunManager.start`，自己承担 load history / load summary / Run 启动，
+  未来还要处理写回 / Trace，职责膨胀；CLI 的 `_send_message` 又各自维护一套执行链。
+- 统一后：CLI / Automation / 未来 API / Desktop 全部走 `ConversationService.dispatch`，
+  只保留一套 "load 最新 → start → wait → 写回 → save summary → 返回" 逻辑。
+
+### 37.2 ConversationService 职责（`app/conversation/service.py`）
+
+1. 从 `SQLiteConversationStore` 加载**触发那一刻最新**的持久化 history（不依赖 CLI 内存）；
+2. 加载 `ConversationSummaryState`；
+3. 统一注入 `SQLiteTraceEventHandler`（+ 可选额外观察者）；
+4. `RunManager.start` → `wait` → `result`；
+5. 把完整 `AgentResult.messages` 写回 ConversationStore、保存最新 Summary；
+6. 返回 `DispatchResult(run, result, trigger)`。
+- 不包含任何 CLI print/input；`is_run_running` 供 Scheduler max_instances 检查。
+
+### 37.3 Automation 构造 scheduled input（provenance）
+
+- `Message` schema 是 `extra="forbid"` 且无 metadata → 新增 `TriggerContext`：
+  `source(manual/automation) / automation_id / scheduled_for / triggered_at`。
+- Scheduler 到点后 `conversation_service.dispatch(conversation_id, content=prompt,
+  trigger=TriggerContext(source=AUTOMATION, automation_id, scheduled_for, triggered_at))`，
+  **不解析 AgentResult / 不修改 Conversation / 不处理 Trace**。
+
+### 37.4 Conversation / Summary / Trace 统一写回
+
+- ConversationService 是唯一写回点：`replace_messages(conversation_id, result.messages)` +
+  `summary_store.save`；下一次 Automation 或手动输入读到的是上一次执行结果
+  （A B → 触发 C → A B C D）。
+- Trace 由 Service 统一注入，Automation Run 与手动输入走同一条 Trace 路径。
+
+### 37.5 顺手修复
+
+- CLI async input：`input()` → `asyncio.to_thread(input, ...)`，避免阻塞事件循环，
+  用户停在输入框时 Scheduler 仍能按时触发（有真实异步集成测试验证）。
+- Automation 状态机：ACTIVE→PAUSED/COMPLETED/CANCELLED；PAUSED→ACTIVE/CANCELLED；
+  终态不可再转换；`_restore` 用 `set_next_run_at`（仅更新 next，避免 ACTIVE→ACTIVE 非法）。
+- 修复 `_job_ids` key 判断不一致（统一用 automation.id）。
+
+### 37.6 测试与结果
+
+- `test_conversation_service.py`（7 例）：最新 history 加载 / 写回 A B C D / Summary /
+  Trace / provenance / is_run_running / 下一次读到上次结果。
+- `test_automation.py`（15 例，重写）：经 FakeConversationService 投递、provenance、
+  状态机非法转换、completed/cancelled 不再执行、真实 APScheduler 自动触发。
+- 全量 `pytest` 584 通过，`ruff` / `compileall` / `git diff --check` 全绿。

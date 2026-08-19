@@ -18,6 +18,29 @@ from app.conversation import DEFAULT_DATABASE_PATH
 
 from .models import Automation, AutomationStatus, Schedule
 
+# Automation 状态机（终态不可再转换）：
+#   ACTIVE   → PAUSED / COMPLETED / CANCELLED
+#   PAUSED   → ACTIVE / CANCELLED
+#   COMPLETED → （无）
+#   CANCELLED → （无）
+_AUTOMATION_TRANSITIONS: dict[AutomationStatus, frozenset[AutomationStatus]] = {
+    AutomationStatus.ACTIVE: frozenset(
+        {
+            AutomationStatus.PAUSED,
+            AutomationStatus.COMPLETED,
+            AutomationStatus.CANCELLED,
+        }
+    ),
+    AutomationStatus.PAUSED: frozenset(
+        {
+            AutomationStatus.ACTIVE,
+            AutomationStatus.CANCELLED,
+        }
+    ),
+    AutomationStatus.COMPLETED: frozenset(),
+    AutomationStatus.CANCELLED: frozenset(),
+}
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS automations (
     id TEXT PRIMARY KEY,
@@ -158,13 +181,17 @@ class SQLiteAutomationStore:
         *,
         next_run_at: datetime | None = None,
     ) -> Automation:
-        """更新状态（可一并更新下一次触发时间）。"""
+        """更新状态（可一并更新下一次触发时间）；非法转换被拒绝。"""
 
         async with self._connect() as database:
             await database.execute("BEGIN IMMEDIATE")
             current = await _require_row(database, automation_id)
-            if current.status is status:
-                pass  # 允许幂等
+            allowed = _AUTOMATION_TRANSITIONS[current.status]
+            if status not in allowed:
+                raise ValueError(
+                    f"invalid automation transition: {current.status.value} -> "
+                    f"{status.value}"
+                )
             await database.execute(
                 """
                 UPDATE automations
@@ -182,6 +209,27 @@ class SQLiteAutomationStore:
                     _now(),
                     automation_id,
                 ),
+            )
+            await database.commit()
+        return await self.require(automation_id)
+
+    async def set_next_run_at(
+        self,
+        automation_id: str,
+        next_run_at: datetime,
+    ) -> Automation:
+        """仅更新下一次触发时间（不改状态，用于重启恢复时重新校准计划）。"""
+
+        async with self._connect() as database:
+            await database.execute("BEGIN IMMEDIATE")
+            await _require_row(database, automation_id)
+            await database.execute(
+                """
+                UPDATE automations
+                SET next_run_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (next_run_at.astimezone(UTC).isoformat(), _now(), automation_id),
             )
             await database.commit()
         return await self.require(automation_id)

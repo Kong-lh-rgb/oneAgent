@@ -1,15 +1,17 @@
-"""Automation / Scheduler V1 测试。
+"""Automation / Scheduler V1 测试（Scheduler 经 ConversationService 投递输入）。
 
 覆盖：一次性 / 重复任务触发、状态管理、重启恢复、misfire/coalesce、
-并发保护、工具校验、持久化 Conversation 上下文加载。
+并发保护、工具校验、provenance 投递、状态机非法转换、completed/cancelled
+不再执行。
 
-全部使用 fake RunManager / fake ConversationStore，不调用真实模型 API；
-用可控时间（直接构造过去/未来 next_run_at）避免真实等待。
+Scheduler 不再直接启动 Run —— 用 FakeConversationService 记录 dispatch 投递，
+不调用真实模型 API；用可控时间避免真实等待。
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,98 +23,73 @@ from app.automation.models import (
 from app.automation.scheduler import AutomationScheduler
 from app.automation.store import SQLiteAutomationStore
 from app.automation.tools import build_schedule_and_next
-from app.run import RunStatus
+from app.conversation import ConversationSource
 
 _USER_MESSAGE = "提醒我交作业"
 
 
-class FakeRun:
-    def __init__(self, status: RunStatus) -> None:
-        self.status = status
+class _FakeRunRef:
+    def __init__(self, run_id: str) -> None:
+        self.id = run_id
 
 
-class FakeRunManager:
-    """记录 start 调用；可配置上一次 Run 是否仍在执行。"""
+class _FakeDispatch:
+    def __init__(self, run_id: str) -> None:
+        self.run = _FakeRunRef(run_id)
+
+
+class FakeConversationService:
+    """记录 dispatch 投递；可配置上一次 Run 是否仍在执行。"""
 
     def __init__(self) -> None:
-        self.started: list[tuple[str, dict]] = []
-        self.runs: dict[str, FakeRun] = {}
-        self.fail_on_start: bool = False
+        self.dispatched: list[dict] = []
+        self.running_run_ids: set[str] = set()
+        self.fail_on_dispatch: bool = False
 
-    async def start(
+    async def dispatch(
         self,
-        user_message: str,
         *,
         conversation_id=None,
-        history=(),
-        summary_state=None,
+        content: str,
+        trigger=None,
         event_handler=None,
-        recovery_run_id=None,
-    ) -> tuple[str, None]:
-        if self.fail_on_start:
-            raise RuntimeError("run failed to start")
-        run_id = f"run-{len(self.started) + 1}"
-        self.started.append(
-            (
-                run_id,
-                {
-                    "prompt": user_message,
-                    "conversation_id": conversation_id,
-                    "history": history,
-                    "summary_state": summary_state,
-                },
-            )
+    ) -> _FakeDispatch:
+        if self.fail_on_dispatch:
+            raise RuntimeError("dispatch failed")
+        run_id = f"run-{len(self.dispatched) + 1}"
+        self.dispatched.append(
+            {
+                "run_id": run_id,
+                "conversation_id": conversation_id,
+                "content": content,
+                "trigger": trigger,
+            }
         )
-        self.runs[run_id] = FakeRun(RunStatus.RUNNING)
-        return run_id, None
+        self.running_run_ids.add(run_id)
+        return _FakeDispatch(run_id)
 
-    async def get_run(self, run_id: str) -> FakeRun | None:
-        return self.runs.get(run_id)
+    async def is_run_running(self, run_id: str) -> bool:
+        return run_id in self.running_run_ids
 
-    def finish_run(self, run_id: str, status: RunStatus) -> None:
-        self.runs[run_id] = FakeRun(status)
-
-
-class FakeConversationStore:
-    def __init__(self, messages=()) -> None:
-        self.messages = messages
-
-    async def load_messages(self, conversation_id: str):
-        if conversation_id == "missing":
-            raise KeyError("会话不存在")
-        return self.messages
-
-
-class FakeSummaryStore:
-    def __init__(self, state=None) -> None:
-        self.state = state
-
-    async def load(self, conversation_id: str):
-        return self.state
+    def finish_run(self, run_id: str) -> None:
+        self.running_run_ids.discard(run_id)
 
 
 @pytest.fixture
 async def make_scheduler(tmp_path):
-    """构造 (store, scheduler)；测试结束后统一 shutdown。"""
+    """构造 (store, scheduler, fake service)；测试结束后统一 shutdown。"""
 
     schedulers: list[AutomationScheduler] = []
 
     async def _make(
-        run_manager: FakeRunManager | None = None,
-        conversation_store: FakeConversationStore | None = None,
-        summary_store: FakeSummaryStore | None = None,
-    ) -> tuple[SQLiteAutomationStore, AutomationScheduler, FakeRunManager]:
+        service: FakeConversationService | None = None,
+    ) -> tuple[SQLiteAutomationStore, AutomationScheduler, FakeConversationService]:
         store = SQLiteAutomationStore(tmp_path / "oneagent.db")
         await store.initialize()
-        manager = run_manager or FakeRunManager()
-        scheduler = AutomationScheduler(
-            store,
-            manager,
-            conversation_store=conversation_store,
-            summary_store=summary_store,
-        )
+        service = service or FakeConversationService()
+        scheduler = AutomationScheduler(store, service)
         schedulers.append(scheduler)
-        return store, scheduler, manager
+        return store, scheduler, service
 
     yield _make
 
@@ -132,14 +109,12 @@ def _past(hours: int = 2) -> datetime:
 
 
 # ---------------------------------------------------------------------------
-# 1. 创建一次性 Automation + 2/3. 到点触发 RunManager.start + conversation 关联
+# 1. 创建一次性 Automation + 2/3. 到点投递 + conversation 关联
 # ---------------------------------------------------------------------------
 
 
-async def test_create_once_automation_and_trigger_start(make_scheduler) -> None:
-    store, scheduler, manager = await make_scheduler(
-        conversation_store=FakeConversationStore()
-    )
+async def test_create_once_automation_and_trigger_dispatch(make_scheduler) -> None:
+    store, scheduler, service = await make_scheduler()
     schedule = Schedule(
         kind=ScheduleKind.ONCE,
         run_at=_future(hours=1),
@@ -157,13 +132,12 @@ async def test_create_once_automation_and_trigger_start(make_scheduler) -> None:
     assert automation.next_run_at is not None
     assert automation.next_run_at > datetime.now(UTC)
 
-    # 到点触发。
     await scheduler._trigger(automation.id)
 
-    assert len(manager.started) == 1
-    started = manager.started[0][1]
-    assert started["prompt"] == _USER_MESSAGE
-    assert started["conversation_id"] == "conv-1"
+    assert len(service.dispatched) == 1
+    dispatched = service.dispatched[0]
+    assert dispatched["content"] == _USER_MESSAGE
+    assert dispatched["conversation_id"] == "conv-1"
 
 
 # ---------------------------------------------------------------------------
@@ -193,9 +167,6 @@ async def test_once_automation_becomes_completed_after_trigger(make_scheduler) -
     assert updated.status is AutomationStatus.COMPLETED
     assert updated.last_run_id is not None
     assert updated.next_run_at is None
-    # 不再触发。
-    await scheduler._trigger(automation.id)
-    assert len(scheduler._running) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +209,7 @@ async def test_interval_automation_stays_active_and_updates_next(
 
 
 async def test_pause_resume_cancel_lifecycle(make_scheduler) -> None:
-    store, scheduler, manager = await make_scheduler()
+    store, scheduler, service = await make_scheduler()
     schedule = Schedule(
         kind=ScheduleKind.INTERVAL,
         interval_seconds=3600,
@@ -252,24 +223,20 @@ async def test_pause_resume_cancel_lifecycle(make_scheduler) -> None:
         next_run_at=_future(hours=1),
     )
 
-    # pause：不再触发。
     paused = await scheduler.pause(automation.id)
     assert paused.status is AutomationStatus.PAUSED
     await scheduler._trigger(automation.id)
-    assert manager.started == []
+    assert service.dispatched == []
 
-    # resume：重新调度，触发生效。
     resumed = await scheduler.resume(automation.id)
     assert resumed.status is AutomationStatus.ACTIVE
     await scheduler._trigger(automation.id)
-    assert len(manager.started) == 1
+    assert len(service.dispatched) == 1
 
-    # cancel：不再触发。
     cancelled = await scheduler.cancel(automation.id)
     assert cancelled.status is AutomationStatus.CANCELLED
     await scheduler._trigger(automation.id)
-    assert len(manager.started) == 1
-    # 终态不可 pause。
+    assert len(service.dispatched) == 1
     with pytest.raises(ValueError, match="only active"):
         await scheduler.pause(automation.id)
 
@@ -282,7 +249,7 @@ async def test_pause_resume_cancel_lifecycle(make_scheduler) -> None:
 async def test_restart_reloads_active_automations(tmp_path) -> None:
     store = SQLiteAutomationStore(tmp_path / "oneagent.db")
     await store.initialize()
-    manager = FakeRunManager()
+    service = FakeConversationService()
     schedule = Schedule(
         kind=ScheduleKind.INTERVAL,
         interval_seconds=3600,
@@ -296,12 +263,7 @@ async def test_restart_reloads_active_automations(tmp_path) -> None:
         next_run_at=_future(hours=2),
     )
 
-    # “新进程”：新建 scheduler，start() 应加载 ACTIVE automation 并注册 job。
-    restarted = AutomationScheduler(
-        store,
-        manager,
-        conversation_store=FakeConversationStore(),
-    )
+    restarted = AutomationScheduler(store, service)
     try:
         await restarted.start()
         jobs = restarted._scheduler.get_jobs()
@@ -318,7 +280,7 @@ async def test_restart_reloads_active_automations(tmp_path) -> None:
 async def test_missed_once_automation_runs_only_once(tmp_path) -> None:
     store = SQLiteAutomationStore(tmp_path / "oneagent.db")
     await store.initialize()
-    manager = FakeRunManager()
+    service = FakeConversationService()
     schedule = Schedule(
         kind=ScheduleKind.ONCE,
         run_at=_past(),
@@ -332,9 +294,8 @@ async def test_missed_once_automation_runs_only_once(tmp_path) -> None:
         next_run_at=_past(hours=3),
     )
 
-    scheduler = AutomationScheduler(store, manager)
+    scheduler = AutomationScheduler(store, service)
     try:
-        # 应用 misfire 恢复规则（白盒调用，避免 APScheduler 真实触发造成竞态）。
         await scheduler._restore(automation)
         updated = await store.get(automation.id)
         assert updated is not None
@@ -343,14 +304,13 @@ async def test_missed_once_automation_runs_only_once(tmp_path) -> None:
         assert updated.next_run_at <= datetime.now(UTC) + timedelta(seconds=5)
 
         await scheduler._trigger(automation.id)
-        assert len(manager.started) == 1
+        assert len(service.dispatched) == 1
         completed = await store.get(automation.id)
         assert completed is not None
         assert completed.status is AutomationStatus.COMPLETED
 
-        # 已完成后不再补跑。
         await scheduler._trigger(automation.id)
-        assert len(manager.started) == 1
+        assert len(service.dispatched) == 1
     finally:
         await scheduler.shutdown()
 
@@ -363,7 +323,7 @@ async def test_missed_once_automation_runs_only_once(tmp_path) -> None:
 async def test_recurring_misfire_does_not_batch_catchup(tmp_path) -> None:
     store = SQLiteAutomationStore(tmp_path / "oneagent.db")
     await store.initialize()
-    manager = FakeRunManager()
+    service = FakeConversationService()
     schedule = Schedule(
         kind=ScheduleKind.INTERVAL,
         interval_seconds=3600,
@@ -374,18 +334,17 @@ async def test_recurring_misfire_does_not_batch_catchup(tmp_path) -> None:
         prompt="执行",
         conversation_id="conv-1",
         schedule=schedule,
-        next_run_at=_past(hours=5),  # 关闭期间错过了 5 个触发点
+        next_run_at=_past(hours=5),
     )
 
-    scheduler = AutomationScheduler(store, manager)
+    scheduler = AutomationScheduler(store, service)
     try:
         await scheduler.start()
-        # 不应补跑历史点：next_run_at 直接跳到未来，job 只注册一个。
         updated = await store.get(automation.id)
         assert updated is not None
         assert updated.next_run_at is not None
         assert updated.next_run_at > datetime.now(UTC)
-        assert len(manager.started) == 0
+        assert service.dispatched == []
         jobs = scheduler._scheduler.get_jobs()
         automation_jobs = [
             job for job in jobs if job.id == f"automation-{automation.id}"
@@ -401,7 +360,7 @@ async def test_recurring_misfire_does_not_batch_catchup(tmp_path) -> None:
 
 
 async def test_no_overlap_when_previous_run_still_running(make_scheduler) -> None:
-    store, scheduler, manager = await make_scheduler()
+    store, scheduler, service = await make_scheduler()
     schedule = Schedule(
         kind=ScheduleKind.INTERVAL,
         interval_seconds=3600,
@@ -415,30 +374,28 @@ async def test_no_overlap_when_previous_run_still_running(make_scheduler) -> Non
         next_run_at=_future(hours=1),
     )
 
-    # 第一次触发：Run 开始（仍在 RUNNING）。
     await scheduler._trigger(automation.id)
-    assert len(manager.started) == 1
+    assert len(service.dispatched) == 1
     refreshed = await store.get(automation.id)
     assert refreshed is not None and refreshed.last_run_id is not None
-    assert manager.runs[refreshed.last_run_id].status is RunStatus.RUNNING
 
-    # 下一次触发：上一次 Run 还在执行 → 跳过（不新建 Run）。
+    # 上一次 Run 仍在执行 → 跳过。
     await scheduler._trigger(automation.id)
-    assert len(manager.started) == 1
+    assert len(service.dispatched) == 1
 
-    # 上一次 Run 结束后，下一次触发正常执行。
-    manager.finish_run(refreshed.last_run_id, RunStatus.COMPLETED)
+    # Run 结束后，下一次触发正常投递。
+    service.finish_run(refreshed.last_run_id)
     await scheduler._trigger(automation.id)
-    assert len(manager.started) == 2
+    assert len(service.dispatched) == 2
 
 
 # ---------------------------------------------------------------------------
-# 14. 单个 Automation Run FAILED 不崩 Scheduler
+# 14. 单个 Automation 投递失败不崩 Scheduler
 # ---------------------------------------------------------------------------
 
 
-async def test_run_failure_does_not_crash_scheduler(make_scheduler) -> None:
-    store, scheduler, manager = await make_scheduler()
+async def test_dispatch_failure_does_not_crash_scheduler(make_scheduler) -> None:
+    store, scheduler, service = await make_scheduler()
     schedule = Schedule(
         kind=ScheduleKind.INTERVAL,
         interval_seconds=3600,
@@ -452,14 +409,12 @@ async def test_run_failure_does_not_crash_scheduler(make_scheduler) -> None:
         next_run_at=_future(hours=1),
     )
 
-    # 触发时 Run 启动失败 → job 包装函数应隔离异常，不崩调度器。
-    manager.fail_on_start = True
+    service.fail_on_dispatch = True
     await scheduler._job_func(automation.id)()
-    manager.fail_on_start = False
+    service.fail_on_dispatch = False
 
-    # Scheduler 仍可用。
     await scheduler._trigger(automation.id)
-    assert len(manager.started) == 1
+    assert len(service.dispatched) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -468,13 +423,10 @@ async def test_run_failure_does_not_crash_scheduler(make_scheduler) -> None:
 
 
 def test_automation_create_argument_validation() -> None:
-    # 非法 kind。
     with pytest.raises(ValueError, match="kind"):
         build_schedule_and_next({"kind": "hourly", "prompt": "x", "title": "t"})
-    # once 缺 run_at。
     with pytest.raises(ValueError, match="run_at"):
         build_schedule_and_next({"kind": "once", "prompt": "x", "title": "t"})
-    # run_at 无时区偏移。
     with pytest.raises(ValueError, match="timezone offset"):
         build_schedule_and_next(
             {
@@ -484,7 +436,6 @@ def test_automation_create_argument_validation() -> None:
                 "title": "t",
             }
         )
-    # run_at 是过去时间。
     with pytest.raises(ValueError, match="future"):
         build_schedule_and_next(
             {
@@ -494,21 +445,16 @@ def test_automation_create_argument_validation() -> None:
                 "title": "t",
             }
         )
-    # interval 非正。
     with pytest.raises(ValueError, match="interval_seconds"):
         build_schedule_and_next(
             {"kind": "interval", "interval_seconds": 0, "prompt": "x", "title": "t"}
         )
     with pytest.raises(ValueError, match="interval_seconds"):
-        build_schedule_and_next(
-            {"kind": "interval", "prompt": "x", "title": "t"}
-        )
-    # cron 表达式非法。
+        build_schedule_and_next({"kind": "interval", "prompt": "x", "title": "t"})
     with pytest.raises(ValueError, match="cron_expr"):
         build_schedule_and_next(
             {"kind": "cron", "cron_expr": "not a cron", "prompt": "x", "title": "t"}
         )
-    # 非法 timezone。
     with pytest.raises(ValueError, match="timezone"):
         build_schedule_and_next(
             {
@@ -522,7 +468,6 @@ def test_automation_create_argument_validation() -> None:
 
 
 def test_automation_create_valid_schedules() -> None:
-    # once 带时区偏移（未来）。
     schedule, next_run = build_schedule_and_next(
         {
             "kind": "once",
@@ -533,13 +478,11 @@ def test_automation_create_valid_schedules() -> None:
     )
     assert schedule.kind is ScheduleKind.ONCE
     assert next_run.tzinfo is not None
-    # interval。
     schedule, next_run = build_schedule_and_next(
         {"kind": "interval", "interval_seconds": 7200, "prompt": "x", "title": "t"}
     )
     assert schedule.kind is ScheduleKind.INTERVAL
     assert next_run > datetime.now(UTC)
-    # cron（每天 09:00）。
     schedule, next_run = build_schedule_and_next(
         {
             "kind": "cron",
@@ -555,38 +498,224 @@ def test_automation_create_valid_schedules() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 16. 触发时从持久化 Conversation 加载上下文
+# 16. provenance：Automation 触发携带 source / automation_id
 # ---------------------------------------------------------------------------
 
 
-async def test_trigger_loads_context_from_persistent_conversation(
-    make_scheduler,
-) -> None:
-    messages = (
-        {"role": "user", "content": "之前的上下文"},
-    )
-    state = object()
-    store, scheduler, manager = await make_scheduler(
-        conversation_store=FakeConversationStore(messages=messages),
-        summary_store=FakeSummaryStore(state=state),
-    )
+async def test_automation_dispatch_carries_provenance(make_scheduler) -> None:
+    store, scheduler, service = await make_scheduler()
     schedule = Schedule(
-        kind=ScheduleKind.ONCE,
-        run_at=_future(hours=1),
+        kind=ScheduleKind.INTERVAL,
+        interval_seconds=3600,
         timezone="UTC",
     )
     automation = await scheduler.create_automation(
-        title="带上下文",
+        title="带来源",
         prompt="继续",
         conversation_id="conv-9",
         schedule=schedule,
-        next_run_at=schedule.run_at,
+        next_run_at=_future(hours=1),
     )
 
     await scheduler._trigger(automation.id)
 
-    assert len(manager.started) == 1
-    started = manager.started[0][1]
-    assert started["conversation_id"] == "conv-9"
-    assert started["history"] == messages
-    assert started["summary_state"] is state
+    assert len(service.dispatched) == 1
+    trigger = service.dispatched[0]["trigger"]
+    assert trigger is not None
+    assert trigger.source is ConversationSource.AUTOMATION
+    assert trigger.automation_id == automation.id
+    assert trigger.scheduled_for is not None
+    assert trigger.triggered_at is not None
+
+
+# ---------------------------------------------------------------------------
+# 17. 状态机非法转换被拒绝；completed/cancelled 不再执行
+# ---------------------------------------------------------------------------
+
+
+async def test_invalid_automation_transitions_rejected(make_scheduler) -> None:
+    store, scheduler, service = await make_scheduler()
+    schedule = Schedule(
+        kind=ScheduleKind.INTERVAL,
+        interval_seconds=3600,
+        timezone="UTC",
+    )
+    automation = await scheduler.create_automation(
+        title="状态机",
+        prompt="执行",
+        conversation_id="conv-1",
+        schedule=schedule,
+        next_run_at=_future(hours=1),
+    )
+
+    await scheduler.cancel(automation.id)
+    with pytest.raises(ValueError, match="invalid automation transition"):
+        await store.update_status(automation.id, AutomationStatus.ACTIVE)
+    with pytest.raises(ValueError, match="invalid automation transition"):
+        await store.update_status(automation.id, AutomationStatus.COMPLETED)
+
+    second = Schedule(
+        kind=ScheduleKind.ONCE,
+        run_at=_future(hours=2),
+        timezone="UTC",
+    )
+    once = await scheduler.create_automation(
+        title="一次性状态机",
+        prompt="执行",
+        conversation_id="conv-1",
+        schedule=second,
+        next_run_at=second.run_at,
+    )
+    await scheduler._trigger(once.id)
+    assert (await store.get(once.id)).status is AutomationStatus.COMPLETED
+    with pytest.raises(ValueError, match="invalid automation transition"):
+        await store.update_status(once.id, AutomationStatus.CANCELLED)
+    with pytest.raises(ValueError, match="invalid automation transition"):
+        await store.update_status(once.id, AutomationStatus.PAUSED)
+
+
+async def test_completed_and_cancelled_automations_do_not_dispatch(
+    make_scheduler,
+) -> None:
+    store, scheduler, service = await make_scheduler()
+    once_schedule = Schedule(
+        kind=ScheduleKind.ONCE,
+        run_at=_future(hours=1),
+        timezone="UTC",
+    )
+    once = await scheduler.create_automation(
+        title="已完成",
+        prompt="执行",
+        conversation_id="conv-1",
+        schedule=once_schedule,
+        next_run_at=once_schedule.run_at,
+    )
+    await scheduler._trigger(once.id)
+    assert len(service.dispatched) == 1
+    await scheduler._trigger(once.id)
+    assert len(service.dispatched) == 1
+
+    interval_schedule = Schedule(
+        kind=ScheduleKind.INTERVAL,
+        interval_seconds=3600,
+        timezone="UTC",
+    )
+    cancelled = await scheduler.create_automation(
+        title="已取消",
+        prompt="执行",
+        conversation_id="conv-1",
+        schedule=interval_schedule,
+        next_run_at=_future(hours=1),
+    )
+    await scheduler.cancel(cancelled.id)
+    await scheduler._trigger(cancelled.id)
+    assert len(service.dispatched) == 1
+
+
+# ---------------------------------------------------------------------------
+# 18. 真实异步集成：不手动调 _trigger，事件循环正常运行时 Scheduler 自动触发
+# ---------------------------------------------------------------------------
+
+
+class _IntegrationRunManager:
+    """真实 ConversationService 用的极简 Run 管理器（返回固定结果）。"""
+
+    def __init__(self) -> None:
+        self.started: list[str] = []
+        self._result = _integration_result()
+
+    async def start(
+        self,
+        user_message: str,
+        *,
+        conversation_id=None,
+        history=(),
+        summary_state=None,
+        event_handler=None,
+        recovery_run_id=None,
+    ) -> tuple[str, None]:
+        self.started.append(user_message)
+        return "run-auto", None
+
+    async def wait(self, run_id: str):
+        return SimpleNamespace(
+            id=run_id,
+            stop_reason="final_answer",
+            status=SimpleNamespace(value="completed"),
+        )
+
+    def result(self, run_id: str):
+        return self._result
+
+    async def get_run(self, run_id: str):
+        return None
+
+
+def _integration_result():
+    from app.agent.result import AgentResult, AgentStopReason
+    from app.models.types import Message, MessageRole, ModelUsage
+
+    final = Message(role=MessageRole.ASSISTANT, content="自动完成")
+    return AgentResult(
+        run_id="run-auto",
+        final_message=final,
+        messages=(Message(role=MessageRole.USER, content="自动"), final),
+        steps=1,
+        stop_reason=AgentStopReason.FINAL_ANSWER,
+        usage=ModelUsage(),
+    )
+
+
+async def test_scheduler_auto_triggers_without_manual_trigger(tmp_path) -> None:
+    import asyncio
+
+    from app.context import SQLiteConversationSummaryStore
+    from app.conversation.service import ConversationService
+    from app.conversation.store import SQLiteConversationStore
+    from app.run import SQLiteRunStore
+    from app.trace import SQLiteTraceStore
+
+    database = tmp_path / "oneagent.db"
+    conversation_store = SQLiteConversationStore(database)
+    await conversation_store.initialize()
+    conversation = await conversation_store.create()
+    trace_store = SQLiteTraceStore(database)
+    await trace_store.initialize()
+    summary_store = SQLiteConversationSummaryStore(database)
+    await summary_store.initialize()
+    await SQLiteRunStore(database).initialize()
+
+    manager = _IntegrationRunManager()
+    service = ConversationService(
+        conversation_store,
+        manager,
+        trace_store,
+        summary_store=summary_store,
+    )
+    store = SQLiteAutomationStore(database)
+    await store.initialize()
+    scheduler = AutomationScheduler(store, service)
+
+    run_at = datetime.now(UTC) + timedelta(milliseconds=50)
+    schedule = Schedule(
+        kind=ScheduleKind.ONCE,
+        run_at=run_at,
+        timezone="UTC",
+    )
+    await scheduler.create_automation(
+        title="自动触发",
+        prompt="自动执行",
+        conversation_id=conversation.id,
+        schedule=schedule,
+        next_run_at=run_at,
+    )
+    await scheduler.start()
+
+    # 不手动调用 _trigger —— 事件循环正常运行，APScheduler 应自动触发。
+    await asyncio.sleep(0.3)
+    try:
+        assert len(manager.started) >= 1
+        completed = await store.list(status=AutomationStatus.COMPLETED)
+        assert any(item.title == "自动触发" for item in completed)
+    finally:
+        await scheduler.shutdown()

@@ -7,6 +7,57 @@
 ---
 ## 2026-08-19
 
+### 完成：Automation 执行出口重构（抽取 ConversationService）
+
+> 核心原则：**Automation 不是定时启动 Runtime，而是定时向 Conversation 投递一条新的输入。**
+> CLI 与 Automation 共用同一套执行链，不再各自维护 load history → start → wait → save。
+
+#### 原架构问题
+- AutomationScheduler 直接 `RunManager.start(...)`，自己承担了 load history / load summary /
+  Run 启动，未来还要处理 Conversation 写回、Trace —— 职责越来越重；
+- CLI `_send_message` 与 Scheduler 各维护一套执行链，容易漂移。
+
+#### 新架构
+```
+CLI ────────┐
+Automation ─┤  → ConversationService.dispatch(conversation_id, content, trigger)
+未来 API ───┘          ↓
+                 RunManager → AgentRuntime → Trace + Checkpoint → Conversation 写回
+```
+- [x] 新增 `app/conversation/service.py`：`ConversationService`（dispatch）
+  - 加载"触发那一刻最新"的持久化 history + Summary
+  - 统一注入 `SQLiteTraceEventHandler`（+ 可选额外观察者如 CLI 打印）
+  - `RunManager.start` → `wait` → `result`
+  - 把完整 Conversation history 写回 `ConversationStore`、保存最新 Summary
+  - 返回 `DispatchResult(run, result, trigger)`；无任何 CLI print/input 逻辑
+  - `is_run_running(run_id)` 供 Scheduler max_instances 检查
+- [x] 新增 `app/conversation/inputs.py`：`TriggerContext` / `ConversationInput` /
+  `ConversationSource`（manual / automation）—— provenance 结构化模型，
+  不塞进 user content（Message schema extra=forbid 无 metadata）
+- [x] CLI `_send_message` 改为复用 `ConversationService.dispatch`（只保留打印/标题/展示）；
+  Ctrl+C 时 Service 负责 cancel 当前 Run 再向上传播
+- [x] AutomationScheduler：构造改为依赖 `ConversationService`；`_trigger` 里构造
+  `TriggerContext(source=automation, automation_id, scheduled_for, triggered_at)`
+  并调用 `conversation_service.dispatch`；删掉 `_load_history` / `_load_summary`
+- [x] CLI async input：`input()` 改为 `asyncio.to_thread(input, ...)`，用户停在输入框时
+  Scheduler 仍能按时触发
+- [x] Automation 状态机：`ACTIVE→PAUSED/COMPLETED/CANCELLED`、`PAUSED→ACTIVE/CANCELLED`、
+  终态不可再转换（`update_status` 强制校验）
+- [x] 修复 scheduler `_job_ids` key 判断不一致（dict 用 automation.id 作 key，检查也用
+  automation.id）；`_restore` 用新增 `set_next_run_at`（仅更新 next 不改状态，避免
+  ACTIVE→ACTIVE 非法转换）
+
+#### 测试（新增 15 例，共 584）
+- [x] `tests/test_conversation_service.py`（7）：加载最新持久化 history / 结果写回
+  A B → 触发 C → A B C D / Summary 写回 / Trace 统一注入 / provenance 保留 /
+  is_run_running / 下一次 Automation 读到上一次执行结果（A B C D）
+- [x] `tests/test_automation.py`（重写 + 3 新）：Scheduler 改为经 FakeConversationService
+  投递；新增 provenance 携带 / 状态机非法转换被拒 / completed+cancelled 不再执行 /
+  真实异步集成（不手动调 _trigger，APScheduler 自动触发）
+- [x] `tests/test_chat_sessions.py`：适配 `_send_message` 新签名（经 ConversationService）
+- [x] 全量 `pytest` 584 通过、`ruff`、`compileall`、`git diff --check` 全部通过
+
+---
 ### 完成：Automation / Scheduler V1（到时间自动启动 Agent Run）
 
 > 让 oneAgent 具备最基本的"长期运行 / 到时间自己启动 Run"能力。

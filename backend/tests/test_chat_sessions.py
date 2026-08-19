@@ -15,7 +15,10 @@ from app.context import (
     RollingConversationSummary,
     SQLiteConversationSummaryStore,
 )
-from app.conversation import SQLiteConversationStore
+from app.conversation import (
+    SQLiteConversationStore,
+)
+from app.conversation.service import ConversationService
 from app.memory import MemoryRecord
 from app.models.chat import (
     _COMMAND_OVERVIEW,
@@ -32,7 +35,7 @@ from app.models.chat import (
 from app.models.types import Message, MessageRole, ModelProvider, ToolCall
 from app.run import RunManager, SQLiteRunStore
 from app.tools import ApprovalScope, SQLitePermissionRuleStore, build_safe_rule
-from app.trace import SQLiteTraceEventHandler, SQLiteTraceStore
+from app.trace import SQLiteTraceStore
 
 
 class StubRuntime:
@@ -112,6 +115,25 @@ async def _make_run_manager(tmp_path: Path, runtime: object) -> RunManager:
     return RunManager(run_store, checkpoint_store, runtime)  # type: ignore[arg-type]
 
 
+async def _make_conversation_service(
+    tmp_path: Path,
+    runtime: object,
+    *,
+    conversation_store: SQLiteConversationStore,
+    trace_store: SQLiteTraceStore,
+    summary_store: SQLiteConversationSummaryStore | None = None,
+) -> ConversationService:
+    """构造 ConversationService（统一执行链）。"""
+
+    run_manager = await _make_run_manager(tmp_path, runtime)
+    return ConversationService(
+        conversation_store,
+        run_manager,
+        trace_store,
+        summary_store=summary_store,
+    )
+
+
 @pytest.mark.asyncio
 async def test_cli_restores_latest_conversation_after_restart(tmp_path) -> None:
     database_path = tmp_path / "oneagent.db"
@@ -186,9 +208,13 @@ async def test_send_message_persists_runtime_history_and_generates_title(
     history = list(await store.load_messages(conversation.id))
 
     success, updated = await _send_message(
-        run_manager=await _make_run_manager(tmp_path, StubRuntime()),
+        conversation_service=await _make_conversation_service(
+            tmp_path,
+            StubRuntime(),
+            conversation_store=store,
+            trace_store=trace_store,
+        ),
         conversation_store=store,
-        trace_handler=SQLiteTraceEventHandler(trace_store),
         conversation=conversation,
         provider=ModelProvider.OPENAI,
         history=history,
@@ -236,15 +262,19 @@ async def test_send_message_restores_and_persists_summary_state(tmp_path) -> Non
     history: list[Message] = []
 
     await _send_message(
-        run_manager=await _make_run_manager(tmp_path, runtime),
+        conversation_service=await _make_conversation_service(
+            tmp_path,
+            runtime,
+            conversation_store=conversation_store,
+            trace_store=trace_store,
+            summary_store=summary_store,
+        ),
         conversation_store=conversation_store,
-        trace_handler=SQLiteTraceEventHandler(trace_store),
         conversation=conversation,
         provider=ModelProvider.OPENAI,
         history=history,
         content="继续",
         model="fake-model",
-        summary_store=summary_store,
     )
 
     assert runtime.seen_summary_state == state
@@ -303,9 +333,13 @@ async def test_cli_persists_and_restores_complete_tool_protocol_history(
             )
 
     await _send_message(
-        run_manager=await _make_run_manager(tmp_path, ToolProtocolRuntime()),
+        conversation_service=await _make_conversation_service(
+            tmp_path,
+            ToolProtocolRuntime(),
+            conversation_store=store,
+            trace_store=trace_store,
+        ),
         conversation_store=store,
-        trace_handler=SQLiteTraceEventHandler(trace_store),
         conversation=conversation,
         provider=ModelProvider.OPENAI,
         history=history,

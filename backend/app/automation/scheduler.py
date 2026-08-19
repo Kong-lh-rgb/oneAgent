@@ -1,4 +1,4 @@
-"""AutomationScheduler：到时间通过 RunManager 自动启动 Agent Run。
+"""AutomationScheduler：到时间向 Conversation 投递一条新的输入。
 
 关键链路：
 
@@ -6,15 +6,19 @@
         ↓ 到时间（APScheduler DateTrigger）
     AutomationScheduler
         ↓
-    RunManager.start(prompt, conversation_id=..., history=..., summary_state=...)
+    ConversationService.dispatch(conversation_id, content, trigger)
+        ↓
+    RunManager
         ↓
     AgentRuntime
 
-Scheduler 绝不直接调用 AgentRuntime；所有 Agent 执行统一走 RunManager。
+Scheduler 不负责执行 Agent，也不负责 load history / load summary / 写回
+Conversation / 处理 Trace —— 这些统一由 ConversationService 完成。
+Scheduler 只关心：到时间 → 投递一条 Conversation Input → 拿到 run_id →
+更新 Automation 生命周期。
 
 V1 调度模型：每个 ACTIVE Automation 注册一个"下次触发"的一次性
 ``DateTrigger`` job；每次触发后计算下一次触发时间并注册下一个一次性 job。
-这样计划完全可控、与持久化 ``next_run_at`` 一致、重启恢复简单。
 """
 
 from __future__ import annotations
@@ -29,8 +33,8 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from app.context import SQLiteConversationSummaryStore
-from app.conversation import SQLiteConversationStore
+from app.conversation import ConversationSource, TriggerContext
+from app.conversation.service import ConversationService
 
 from .models import Automation, AutomationStatus, Schedule, ScheduleKind
 from .store import SQLiteAutomationStore
@@ -41,21 +45,17 @@ _JOB_PREFIX = "automation-"
 
 
 class AutomationScheduler:
-    """Automation 生命周期与到点触发（同时充当 Agent 工具的领域门面）。"""
+    """Automation 生命周期与到点投递（同时充当 Agent 工具的领域门面）。"""
 
     def __init__(
         self,
         store: SQLiteAutomationStore,
-        run_manager: Any,
+        conversation_service: ConversationService,
         *,
-        conversation_store: SQLiteConversationStore | None = None,
-        summary_store: SQLiteConversationSummaryStore | None = None,
         timezone: str = "UTC",
     ) -> None:
         self._store = store
-        self._run_manager = run_manager  # duck-typed：start / get_run
-        self._conversation_store = conversation_store
-        self._summary_store = summary_store
+        self._conversation_service = conversation_service
         self._timezone = ZoneInfo(timezone)
         self._scheduler = AsyncIOScheduler(timezone=self._timezone)
         self._job_ids: dict[str, str] = {}
@@ -162,15 +162,11 @@ class AutomationScheduler:
             )
         now = datetime.now(UTC)
         if automation.schedule.kind is ScheduleKind.ONCE:
-            if automation.last_run_id is not None:
-                # 一次性已执行过 → 恢复后直接完成，不再触发。
-                return await self._store.update_status(
-                    automation_id,
-                    AutomationStatus.COMPLETED,
-                )
+            # 一次性任务创建后未执行被 pause → resume 后若已过期，立即补跑一次；
+            # 一次性触发即 COMPLETED，因此 PAUSED 的一次性不会出现 last_run_id。
             next_run = automation.next_run_at or now
             if next_run < now:
-                next_run = now  # 过期未执行 → resume 即补跑一次
+                next_run = now
         else:
             next_run = self._next_future(automation, now)
         updated = await self._store.update_status(
@@ -199,10 +195,9 @@ class AutomationScheduler:
                 return
             if automation.last_run_id is None:
                 # 程序关闭期间错过的一次性任务：只补执行一次。
-                refreshed = await self._store.update_status(
+                refreshed = await self._store.set_next_run_at(
                     automation.id,
-                    AutomationStatus.ACTIVE,
-                    next_run_at=now,
+                    now,
                 )
                 self._schedule(refreshed, now)
             else:
@@ -216,31 +211,27 @@ class AutomationScheduler:
         # 重复任务：misfire 恢复 —— 不补跑所有错过次数，从未来最近触发点继续。
         next_run = self._next_future(automation, now)
         if automation.next_run_at is None or next_run != automation.next_run_at:
-            refreshed = await self._store.update_status(
-                automation.id,
-                AutomationStatus.ACTIVE,
-                next_run_at=next_run,
-            )
+            refreshed = await self._store.set_next_run_at(automation.id, next_run)
             automation = refreshed
         self._schedule(automation, next_run)
 
     def _schedule(self, automation: Automation, run_at: datetime) -> None:
         """注册（或重排）下一个一次性触发 job。"""
 
-        job_id = _JOB_PREFIX + automation.id
-        if job_id in self._job_ids:
+        automation_key = automation.id
+        if automation_key in self._job_ids:
             try:
                 self._scheduler.reschedule_job(
-                    job_id,
+                    self._job_ids[automation_key],
                     trigger=DateTrigger(run_at),
                 )
                 return
             except Exception:  # noqa: BLE001
-                self._job_ids.pop(job_id, None)
+                self._job_ids.pop(automation_key, None)
         job = self._scheduler.add_job(
             self._job_func(automation.id),
             trigger=DateTrigger(run_at),
-            id=job_id,
+            id=_JOB_PREFIX + automation.id,
             replace_existing=True,
         )
         self._job_ids[automation.id] = job.id
@@ -272,7 +263,7 @@ class AutomationScheduler:
     # ------------------------------------------------------------------
 
     async def _trigger(self, automation_id: str) -> None:
-        """到点触发：通过 RunManager 启动一个 Agent Run 并更新执行元数据。
+        """到点触发：向 Conversation 投递一条输入并更新 Automation 生命周期。
 
         max_instances = 1：若该 Automation 上一次 Run 仍在执行，跳过本次触发
         （coalesce —— 直接把 next_run_at 推进到下一个未来触发点，不新建 Run）。
@@ -286,8 +277,9 @@ class AutomationScheduler:
 
         now = datetime.now(UTC)
         if automation.last_run_id is not None:
-            last_run = await self._run_manager.get_run(automation.last_run_id)
-            if last_run is not None and last_run.status.value == "running":
+            if await self._conversation_service.is_run_running(
+                automation.last_run_id
+            ):
                 # 上一次 Run 还在执行 → 跳过本次，推进到下一个未来点。
                 next_run = self._next_future(automation, now)
                 await self._store.mark_triggered(
@@ -301,12 +293,17 @@ class AutomationScheduler:
 
         self._running.add(automation_id)
         try:
-            run_id, _ = await self._run_manager.start(
-                automation.prompt,
+            dispatch = await self._conversation_service.dispatch(
                 conversation_id=automation.conversation_id,
-                history=await self._load_history(automation.conversation_id),
-                summary_state=await self._load_summary(automation.conversation_id),
+                content=automation.prompt,
+                trigger=TriggerContext(
+                    source=ConversationSource.AUTOMATION,
+                    automation_id=automation.id,
+                    scheduled_for=automation.next_run_at,
+                    triggered_at=now,
+                ),
             )
+            run_id = dispatch.run.id
             now = datetime.now(UTC)
             if automation.schedule.kind is ScheduleKind.ONCE:
                 # 一次性任务：完成本次触发后进入 COMPLETED（保留 last_run_id
@@ -366,32 +363,6 @@ class AutomationScheduler:
                 f"automation {automation.id} has no future trigger time"
             )
         return next_local.astimezone(UTC)
-
-    # ------------------------------------------------------------------
-    # Conversation 上下文（从持久化源加载，不依赖 CLI 内存 history）
-    # ------------------------------------------------------------------
-
-    async def _load_history(self, conversation_id: str | None) -> tuple[Any, ...]:
-        if self._conversation_store is None or not conversation_id:
-            return ()
-        try:
-            return tuple(
-                await self._conversation_store.load_messages(conversation_id)
-            )
-        except Exception:  # noqa: BLE001
-            logger.exception(
-                "failed to load conversation history for automation",
-            )
-            return ()
-
-    async def _load_summary(self, conversation_id: str | None) -> Any:
-        if self._summary_store is None or not conversation_id:
-            return None
-        try:
-            return await self._summary_store.load(conversation_id)
-        except Exception:  # noqa: BLE001
-            logger.exception("failed to load conversation summary for automation")
-            return None
 
 
 __all__ = ["AutomationScheduler"]

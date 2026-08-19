@@ -37,8 +37,11 @@ from app.context import (
 from app.conversation import (
     DEFAULT_DATABASE_PATH,
     Conversation,
+    ConversationSource,
     SQLiteConversationStore,
+    TriggerContext,
 )
+from app.conversation.service import ConversationService
 from app.mcp import (
     DEFAULT_MCP_CONFIG_PATH,
     MCPClientManager,
@@ -182,52 +185,32 @@ class _CliEventHandler(AgentEventHandler):
 
 async def _send_message(
     *,
-    run_manager: RunManager,
+    conversation_service: ConversationService,
     conversation_store: SQLiteConversationStore,
-    trace_handler: SQLiteTraceEventHandler,
     conversation: Conversation,
     provider: ModelProvider,
     history: list[Message],
     content: str,
     model: str,
-    summary_store: SQLiteConversationSummaryStore | None = None,
 ) -> tuple[bool, Conversation]:
     print("OneAgent 正在思考...", flush=True)
 
-    summary_state = (
-        await summary_store.load(conversation.id) if summary_store is not None else None
-    )
-    run_id, _task = await run_manager.start(
-        content,
-        conversation_id=conversation.id,
-        history=history,
-        summary_state=summary_state,
-        event_handler=CompositeEventHandler(trace_handler, _CliEventHandler()),
-    )
     try:
-        run = await run_manager.wait(run_id)
+        dispatch = await conversation_service.dispatch(
+            conversation_id=conversation.id,
+            content=content,
+            trigger=TriggerContext(source=ConversationSource.MANUAL),
+            event_handler=_CliEventHandler(),
+        )
     except KeyboardInterrupt:
-        # 用户 Ctrl+C：不退出 oneAgent，尽量 cancel 当前 Run 后回到输入循环。
-        print("\n[cancel] 正在取消当前 Run...", flush=True)
-        try:
-            cancelled = await run_manager.cancel(run_id)
-            print(f"Run 已取消：{cancelled.id[:8]} · {cancelled.status.value}")
-        except ValueError:
-            # Run 恰好已在取消/完成之间结束，无需处理。
-            print(f"Run {run_id[:8]} 已结束，无需取消。")
+        # 用户 Ctrl+C：ConversationService 已尽力 cancel 当前 Run，
+        # 回到输入循环，不退出 oneAgent。
+        print("\n[cancel] 已取消当前 Run。")
         return False, conversation
-    result = run_manager.result(run_id)
-    if result is None:
-        raise RuntimeError("RunManager 未返回最终 AgentResult")
 
-    # 会话存储保存完整原始历史；模型请求压缩由 ContextManager 单独负责。
+    result = dispatch.result
+    # 会话存储已由 ConversationService 写回；同步内存 history 供 /use 等使用。
     history[:] = result.messages
-    conversation = await conversation_store.replace_messages(
-        conversation.id,
-        history,
-    )
-    if summary_store is not None and result.summary_state is not None:
-        await summary_store.save(conversation.id, result.summary_state)
     if conversation.title == "新会话":
         conversation = await conversation_store.rename(
             conversation.id,
@@ -235,7 +218,7 @@ async def _send_message(
         )
     answer = result.content or "<模型未返回文本>"
     print(f"\nOneAgent> {answer.strip()}")
-    stop_reason = run.stop_reason or result.stop_reason.value
+    stop_reason = dispatch.run.stop_reason or result.stop_reason.value
     print(
         f"\n[{provider.value}/{model} · {result.steps} steps · "
         f"{result.usage.total_tokens} tokens · {stop_reason}]"
@@ -246,7 +229,7 @@ async def _send_message(
             for record in result.tool_calls
         )
         print(f"[工具调用：{tools}]")
-    if run.status.value == "cancelled":
+    if dispatch.run.status.value == "cancelled":
         print("[Run 已被取消]")
     return result.ok, conversation
 
@@ -874,28 +857,32 @@ async def _run(args: argparse.Namespace) -> int:
     if recovered:
         _print_recovered_runs(recovered)
 
-    # Automation / Scheduler：到时间通过 RunManager 自动启动 Run。
+    # ConversationService：CLI 与 Automation 共用的统一执行链。
+    conversation_service = ConversationService(
+        conversation_store,
+        run_manager,
+        trace_store,
+        summary_store=summary_store,
+    )
+
+    # Automation / Scheduler：到时间向 Conversation 投递一条输入。
     automation_store = SQLiteAutomationStore(args.database)
     automation_scheduler = AutomationScheduler(
         automation_store,
-        run_manager,
-        conversation_store=conversation_store,
-        summary_store=summary_store,
+        conversation_service,
     )
     register_automation_tools(tool_registry, automation_scheduler)
     await automation_scheduler.start()
     try:
         if args.message is not None:
             success, conversation = await _send_message(
-                run_manager=run_manager,
+                conversation_service=conversation_service,
                 conversation_store=conversation_store,
-                trace_handler=trace_handler,
                 conversation=conversation,
                 provider=provider,
                 history=history,
                 content=args.message,
                 model=model,
-                summary_store=summary_store,
             )
             await _maybe_run_skill_learning(skill_learning)
             return 0 if success else 1
@@ -903,7 +890,9 @@ async def _run(args: argparse.Namespace) -> int:
         print(_COMMAND_OVERVIEW)
         while True:
             try:
-                content = input("\n你> ").strip()
+                # 用 to_thread 避免同步 input() 阻塞 asyncio 事件循环，
+                # 确保用户停在输入框时 Scheduler 仍能按时触发 Automation。
+                content = (await asyncio.to_thread(input, "\n你> ")).strip()
             except EOFError, KeyboardInterrupt:
                 print("\n聊天已结束。")
                 return 0
@@ -1227,15 +1216,13 @@ async def _run(args: argparse.Namespace) -> int:
                 continue
 
             _, conversation = await _send_message(
-                run_manager=run_manager,
+                conversation_service=conversation_service,
                 conversation_store=conversation_store,
-                trace_handler=trace_handler,
                 conversation=conversation,
                 provider=provider,
                 history=history,
                 content=content,
                 model=model,
-                summary_store=summary_store,
             )
             await _maybe_run_skill_learning(skill_learning)
     finally:
