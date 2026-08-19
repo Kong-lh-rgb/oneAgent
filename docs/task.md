@@ -5,6 +5,77 @@
 > 对架构调整和缺陷修复，应同时记录 Bad Case、影响、根因和修复结果，避免只记录最终功能。
 
 ---
+## 2026-08-19
+
+### 完成：Run Manager V1（统一 Run 生命周期：start / get / list / cancel / recover）
+
+> 目标不是重构 AgentRuntime、也不是重新实现 Checkpoint。
+> RunManager 只做一件事：把“一次 Agent 执行”包装成可持久化、可查询、可取消、
+> 可恢复的 Run 生命周期对象，并负责进程重启后的 reconciliation。
+> 直接复用现有 AgentRuntime 的 agent loop；不复制 Checkpoint / Trace / Conversation。
+
+#### 职责边界（四个概念不再混在一起）
+- Run = “这次执行现在是什么生命周期状态？”（生命周期索引，不存事件/工具结果）
+- Checkpoint = “中断以后从哪里恢复？”（`app/checkpoint`，最小可恢复状态）
+- Trace = “到底发生过什么？”（`app/trace`，事件记录）
+- Task = “业务任务推进到哪里？”（`app/task`）
+- 一个 Conversation 可以有多个 Run；一个 Task 可关联多个 Run；Run.status 与 Task.status 解耦。
+
+#### 新增模块 `backend/app/run/`
+- [x] `models.py`：`RunStatus`（PENDING/RUNNING/COMPLETED/FAILED/CANCELLED/INTERRUPTED）
+  + `Run`（id/conversation_id/status/user_message/created/started/updated/completed_at/error/stop_reason/
+  recovered_from_run_id/recovery_count）；`_ALLOWED_TRANSITIONS` 状态机
+- [x] `store.py`：`SQLiteRunStore`（与 Checkpoint/Trace/Conversation 共用 `oneagent.db`，新增 `runs` 表；
+  `BEGIN IMMEDIATE` 原子写入；非法状态转换抛 ValueError；终态不可再转换）
+- [x] `manager.py`：`RunManager`（start/wait/result/get_run/list_runs/cancel/recover/reconcile；
+  持有进程内 active task 用于 cancel；`_last_results` 供 CLI 读取最终结果）
+
+#### 对现有代码的最小修改（两个小接口）
+- [x] `app/agent/runtime.py`：`run()` / `run_stream()` 增加可选 `run_id`（外部指定 Run ID，
+  使 Run 与 Checkpoint / Trace 用同一个 id）与 `recovery_run_id`（精确定位要恢复的旧中断
+  Checkpoint，而非按会话取最近一条）；默认行为不变
+- [x] `app/checkpoint/store.py`：新增 `get_unrecovered(run_id)`（INTERRUPTED 且未 recovered），
+  供 recover 精确取回恢复点
+
+#### cancel 实际如何工作
+- [x] `RunManager.cancel(run_id)` 校验 RUNNING 后，对底层 asyncio.Task 发 `cancel()`
+- [x] 取消信号传播进 AgentRuntime：在 checkpoint 保存点 / 工具 await 点停止；不再启动新的
+  Agent Step / Tool；已落库的 Trace 事件保留；AgentRuntime 的 BaseException 分支把 Checkpoint
+  转 INTERRUPTED（保留 pending_tool_calls / completed_tool_results，未决工具语义为“不确定，
+  禁止直接重试”，不伪造未执行）；`_execute` 捕获 CancelledError 把 Run 标记 CANCELLED（终态）
+- [x] 已进入终态的 Run 不能 cancel（状态机拒绝）
+
+#### recover 实际如何工作
+- [x] 复用现有 Checkpoint 恢复协议（不重造第二套）：recover(run_id) 校验 INTERRUPTED 且存在
+  可恢复 Checkpoint → 以同一 conversation 启动新 Run，传 `recovery_run_id=旧 run` →
+  AgentRuntime 注入 `render_checkpoint_context` 恢复证据（模型基于 completed_tool_results 继续、
+  把 pending 视为不确定、不重复已完成 Tool Call）→ 新 Run 完成时 `mark_recovered` 标记旧中断 →
+  旧 Run 保持 INTERRUPTED（生命周期事实），新 Run 记录 recovered_from_run_id
+
+#### 启动 reconciliation
+- [x] `RunManager.initialize()` 建表后调用 `reconcile()`：把所有仍为 RUNNING 的 Run 转非 RUNNING
+  （RUNNING 是进程级事实，重启后不该残留）：有 Checkpoint → INTERRUPTED（Checkpoint 仍 RUNNING
+  时先由 checkpoint 层转 INTERRUPTED）；Checkpoint 已终态 → Run 同步为对应终态；无 Checkpoint → FAILED
+
+#### CLI 最小接入（`app/models/chat.py`）
+- [x] `_send_message` 改为经 `RunManager.start()` 启动（保留原有事件打印、历史回写、统计输出）；
+  新增 `_CliEventHandler`（复用 `_print_agent_event`）
+- [x] `/runs` 改用 RunStore 输出完整生命周期状态（含 CANCELLED / INTERRUPTED）
+- [x] 新增 `/run <id>` 查看详情、`/run cancel <id>`、`/run recover <id>`
+- [x] 启动时打印 reconciliation 结果（RUNNING → INTERRUPTED / FAILED）
+- [x] `/checkpoints`、`/trace`、Skill Learning 触发等原有行为不变
+
+#### 测试（+13，共 558）
+- [x] `tests/test_run_manager.py`：start→RUNNING→COMPLETED / Runtime 异常→FAILED+error /
+  cancel 模型请求与工具执行（不再产生新 Step、checkpoint 保留未决工具）/ 重启 reconciliation
+  （有 Checkpoint→INTERRUPTED、无 Checkpoint→FAILED）/ recover→COMPLETED / 已完成 Tool Result
+  不重复执行 / 无效状态转换被拒 / completed 不能 cancel / 多 Run 同 Conversation / RunManager
+  不影响 Trace/Checkpoint 行为 / list 状态过滤
+- [x] `tests/test_chat_sessions.py`：适配 `_send_message` 新签名（StubRuntime 支持 run_id 参数、
+  测试经 RunManager 调用）
+- [x] 全量 `pytest` 558 通过、`ruff`、`compileall`、`git diff --check` 全部通过
+
+---
 ## 2026-08-18
 
 ### 修复：Skill V2 运行时/上下文/Eval Bad Case（主链路不变）

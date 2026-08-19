@@ -246,6 +246,30 @@ class SQLiteCheckpointStore:
             row = await cursor.fetchone()
         return _checkpoint_from_row(row) if row is not None else None
 
+    async def get_unrecovered(self, run_id: str) -> RunCheckpoint | None:
+        """返回指定 Run 的未核对中断记录（仅 INTERRUPTED 且未 recovered）。
+
+        供 RunManager.recover() 精确定位要恢复的 Checkpoint，而不是按会话
+        取最近一条（避免会话内存在多个中断 Run 时恢复错对象）。
+        """
+
+        async with self._connect() as database:
+            cursor = await database.execute(
+                """
+                SELECT * FROM run_checkpoints
+                WHERE run_id = ?
+                  AND status = ?
+                  AND recovered_by_run_id IS NULL
+                LIMIT 1
+                """,
+                (
+                    _required_identifier(run_id, "run_id"),
+                    CheckpointStatus.INTERRUPTED.value,
+                ),
+            )
+            row = await cursor.fetchone()
+        return _checkpoint_from_row(row) if row is not None else None
+
     async def mark_recovered(
         self,
         interrupted_run_id: str,

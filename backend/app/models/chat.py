@@ -14,8 +14,12 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from app.agent.events import AgentEvent, AgentEventType
-from app.agent.result import AgentResult
+from app.agent.events import (
+    AgentEvent,
+    AgentEventHandler,
+    AgentEventType,
+    CompositeEventHandler,
+)
 from app.agent.runtime import AgentRuntime
 from app.checkpoint import RunCheckpoint, SQLiteCheckpointStore
 from app.context import (
@@ -47,6 +51,7 @@ from app.memory import (
     PostRunMemoryReflector,
     register_memory_tools,
 )
+from app.run import Run, RunManager, SQLiteRunStore
 from app.skill_learning import (
     SkillCandidate,
     SkillCandidateStore,
@@ -90,7 +95,8 @@ from .types import Message, MessageRole, ModelProvider
 _COMMAND_OVERVIEW = (
     "命令：/new 新建会话，/sessions 查看会话，/use <id> 切换会话，"
     "/memories 查看长期记忆，/memory <id> 查看记忆详情，"
-    "/runs 查看运行，/checkpoints 查看恢复点，/trace <id> 查看轨迹，"
+    "/runs 查看运行（生命周期），/run <id> 查看详情，/run cancel <id> 取消，"
+    "/run recover <id> 恢复，/checkpoints 查看恢复点，/trace <id> 查看轨迹，"
     "/mcp 查看 MCP Server 与工具，"
     "/permissions 查看审批规则，"
     "/skill-candidates 查看 Skill Learning 候选，"
@@ -104,7 +110,10 @@ _HELP_TEXT = (
     "/memories 查看活跃长期记忆及 Recall Cue\n"
     "/memory <记忆ID> 查看一条长期记忆的完整内容\n"
     "/mcp 查看 MCP Server 连接状态和已注册工具\n"
-    "/runs 查看最近 Agent Run\n"
+    "/runs 查看最近 Run（生命周期状态）\n"
+    "/run <Run ID> 查看 Run 生命周期详情\n"
+    "/run cancel <Run ID> 取消正在执行的 Run\n"
+    "/run recover <Run ID> 恢复中断的 Run\n"
     "/checkpoints 查看当前会话的运行恢复点\n"
     "/trace <Run ID> 查看完整事件轨迹\n"
     "/permissions 查看当前会话的审批规则\n"
@@ -152,9 +161,16 @@ def _initial_history(system_prompt: str | None) -> list[Message]:
     return [Message(role=MessageRole.SYSTEM, content=system_prompt)]
 
 
+class _CliEventHandler(AgentEventHandler):
+    """把 Agent 事件打印到终端（等价原 run_stream async for 里的打印）。"""
+
+    async def emit(self, event: AgentEvent) -> None:
+        _print_agent_event(event)
+
+
 async def _send_message(
     *,
-    runtime: AgentRuntime,
+    run_manager: RunManager,
     conversation_store: SQLiteConversationStore,
     trace_handler: SQLiteTraceEventHandler,
     conversation: Conversation,
@@ -166,23 +182,21 @@ async def _send_message(
 ) -> tuple[bool, Conversation]:
     print("OneAgent 正在思考...", flush=True)
 
-    result: AgentResult | None = None
     summary_state = (
         await summary_store.load(conversation.id) if summary_store is not None else None
     )
-    async for event in runtime.run_stream(
+    run_id, _task = await run_manager.start(
         content,
-        history=history,
         conversation_id=conversation.id,
-        event_handler=trace_handler,
+        history=history,
         summary_state=summary_state,
-    ):
-        _print_agent_event(event)
-        if event.result is not None:
-            result = event.result
-
+        event_handler=CompositeEventHandler(trace_handler, _CliEventHandler()),
+    )
+    run = await run_manager.wait(run_id)
+    result = run_manager.result(run_id)
     if result is None:
-        raise RuntimeError("Agent 事件流结束时缺少最终结果")
+        raise RuntimeError("RunManager 未返回最终 AgentResult")
+
     # 会话存储保存完整原始历史；模型请求压缩由 ContextManager 单独负责。
     history[:] = result.messages
     conversation = await conversation_store.replace_messages(
@@ -198,9 +212,10 @@ async def _send_message(
         )
     answer = result.content or "<模型未返回文本>"
     print(f"\nOneAgent> {answer.strip()}")
+    stop_reason = run.stop_reason or result.stop_reason.value
     print(
         f"\n[{provider.value}/{model} · {result.steps} steps · "
-        f"{result.usage.total_tokens} tokens · {result.stop_reason.value}]"
+        f"{result.usage.total_tokens} tokens · {stop_reason}]"
     )
     if result.tool_calls:
         tools = ", ".join(
@@ -208,6 +223,8 @@ async def _send_message(
             for record in result.tool_calls
         )
         print(f"[工具调用：{tools}]")
+    if run.status.value == "cancelled":
+        print("[Run 已被取消]")
     return result.ok, conversation
 
 
@@ -343,6 +360,52 @@ def _print_runs(runs: tuple[AgentRunTrace, ...], current_conversation_id: str) -
             f"{marker} {run.run_id[:8]}  {started_at}  {run.status.value:<9} "
             f"steps={run.steps} tokens={run.total_tokens} reason={reason}"
         )
+
+
+def _print_run_lifecycle(runs: tuple[Run, ...], current_conversation_id: str) -> None:
+    """显示 Run 生命周期记录（含 CANCELLED / INTERRUPTED 等完整状态）。"""
+
+    if not runs:
+        print("暂无 Run 记录。")
+        return
+    for run in runs:
+        marker = "*" if run.conversation_id == current_conversation_id else " "
+        created_at = run.created_at.astimezone().strftime("%m-%d %H:%M:%S")
+        stop_reason = run.stop_reason or "-"
+        print(
+            f"{marker} {run.id[:8]}  {created_at}  "
+            f"{run.status.value:<11} reason={stop_reason}"
+        )
+
+
+def _print_run_detail(run: Run) -> None:
+    """显示单个 Run 的生命周期详情。"""
+
+    if run is None:
+        print("找不到 Run。")
+        return
+    started = (
+        run.started_at.astimezone().strftime("%m-%d %H:%M:%S")
+        if run.started_at is not None
+        else "-"
+    )
+    completed = (
+        run.completed_at.astimezone().strftime("%m-%d %H:%M:%S")
+        if run.completed_at is not None
+        else "-"
+    )
+    print(f"Run {run.id}")
+    print(f"  conversation_id: {run.conversation_id or '-'}")
+    print(f"  status: {run.status.value}")
+    print(f"  created_at: {run.created_at.astimezone().strftime('%m-%d %H:%M:%S')}")
+    print(f"  started_at: {started}")
+    print(f"  completed_at: {completed}")
+    print(f"  stop_reason: {run.stop_reason or '-'}")
+    if run.error:
+        print(f"  error: {run.error}")
+    if run.recovered_from_run_id:
+        print(f"  recovered_from: {run.recovered_from_run_id[:8]}")
+    print(f"  user_message: {(run.user_message or '')[:120]}")
 
 
 def _print_checkpoints(checkpoints: tuple[RunCheckpoint, ...]) -> None:
@@ -733,10 +796,28 @@ async def _run(args: argparse.Namespace) -> int:
         skill_store=skill_store,
         skill_context_provider=skill_context_provider,
     )
+    run_store = SQLiteRunStore(args.database)
+    run_manager = RunManager(
+        run_store,
+        checkpoint_store,
+        runtime,
+    )
+    recovered = await run_manager.initialize()
+    if recovered:
+        for run in recovered:
+            print(
+                f"Run 状态修正：{run.id[:8]} "
+                f"RUNNING → {run.status.value}"
+                + (
+                    "（可恢复 Checkpoint）"
+                    if run.status.value == "interrupted"
+                    else ""
+                )
+            )
     try:
         if args.message is not None:
             success, conversation = await _send_message(
-                runtime=runtime,
+                run_manager=run_manager,
                 conversation_store=conversation_store,
                 trace_handler=trace_handler,
                 conversation=conversation,
@@ -827,10 +908,73 @@ async def _run(args: argparse.Namespace) -> int:
                     print(f"当前会话找不到审批规则：{identifier}")
                 continue
             if content == "/runs":
-                _print_runs(
-                    await trace_store.list_runs(),
+                _print_run_lifecycle(
+                    await run_manager.list_runs(),
                     conversation.id,
                 )
+                continue
+            if content == "/run" or content.startswith("/run "):
+                parts = content.split()
+                if len(parts) == 1:
+                    _print_run_lifecycle(
+                        await run_manager.list_runs(
+                            conversation_id=conversation.id,
+                        ),
+                        conversation.id,
+                    )
+                    continue
+                action_word = parts[1].lower()
+                if action_word in ("cancel", "recover"):
+                    if len(parts) < 3:
+                        print(f"用法：/run {action_word} <Run ID>")
+                        continue
+                    identifier = parts[2]
+                    run = await run_manager.get_run(identifier)
+                    if run is None:
+                        print(f"找不到 Run：{identifier}")
+                        continue
+                    if action_word == "cancel":
+                        try:
+                            updated = await run_manager.cancel(run.id)
+                        except (KeyError, ValueError) as exc:
+                            print(exc)
+                            continue
+                        print(
+                            f"Run {updated.id[:8]} 已取消：{updated.status.value}"
+                        )
+                    else:
+                        try:
+                            new_run_id, _task = await run_manager.recover(
+                                run.id,
+                                history=history,
+                                summary_state=(
+                                    await summary_store.load(conversation.id)
+                                    if summary_store is not None
+                                    else None
+                                ),
+                                event_handler=CompositeEventHandler(
+                                    trace_handler,
+                                    _CliEventHandler(),
+                                ),
+                            )
+                        except (KeyError, ValueError) as exc:
+                            print(exc)
+                            continue
+                        recovered_run = await run_manager.wait(new_run_id)
+                        new_result = run_manager.result(new_run_id)
+                        if new_result is not None:
+                            history[:] = new_result.messages
+                        print(
+                            f"Run {recovered_run.id[:8]} 恢复自 "
+                            f"{run.id[:8]} · {recovered_run.status.value}"
+                        )
+                    continue
+                # /run <id> 查看详情
+                run = await run_manager.get_run(parts[1])
+                if run is None:
+                    print(f"找不到 Run：{parts[1]}")
+                    continue
+                _print_run_detail(run)
                 continue
             if content == "/checkpoints":
                 _print_checkpoints(
@@ -952,7 +1096,7 @@ async def _run(args: argparse.Namespace) -> int:
                 continue
 
             _, conversation = await _send_message(
-                runtime=runtime,
+                run_manager=run_manager,
                 conversation_store=conversation_store,
                 trace_handler=trace_handler,
                 conversation=conversation,

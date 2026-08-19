@@ -1456,3 +1456,85 @@ Multi-Agent / Task Graph / Planner DAG。Pattern Mining V1 完全用一次结构
   推翻 —— 它同时是 Prompt 语义问题）；
 - 无新功能性 Bad Case；仅候选文本风格波动（procedure 项是否带编号前缀、
   verification 条数 1~4 不等），不影响 Eval 与生产（生产走 Human Gate 评审）。
+
+## 34. Run Manager V1：统一 Run 生命周期（2026-08-19）
+
+> 定位：AgentRuntime 管"一个 Run 内部怎么执行"；Checkpoint 管"中断后从哪里恢复"；
+> Trace 管"实际发生了什么"；RunManager 管"Run 的生命周期：创建/查询/取消/恢复"。
+> 不重构 Runtime、不重造 Checkpoint 协议、不引入调度/队列/DB 迁移/FastAPI/UI。
+
+### 34.1 为什么需要 RunManager（生命周期缺口）
+
+- 之前没有独立的 Run 生命周期对象：Trace 的 `agent_runs` 表是事件派生的摘要
+  （RUNNING/COMPLETED/FAILED 三态），Checkpoint 只保存恢复边界，Task 是业务任务。
+  RUNNING 是进程级事实 —— 进程重启后旧 RUNNING 没有统一入口被修正；
+  也没有统一入口去"取消一个正在执行的 Run"或"恢复一个中断的 Run"。
+- RunManager V1 用一张 `runs` 表补齐：可持久化、可查询（按 conversation/status）、
+  可取消、可恢复。
+
+### 34.2 关键设计：Run 与 Checkpoint / Trace 共用同一个 run_id
+
+- 现有 `AgentRuntime.run()` 内部 `uuid4().hex` 生成 run_id，外部无法把 Run 记录与
+  Checkpoint / Trace 关联。最小修改：给 `run()` / `run_stream()` 增加可选 `run_id`，
+  RunManager 总是传入自己的 Run.id —— 于是 Run / Checkpoint / Trace 三条记录共享
+  同一个 id，recover 时用新 run_id + `recovery_run_id`（旧中断）精确定位恢复点。
+- Checkpoint 层新增 `get_unrecovered(run_id)`：只取指定 run 的 INTERRUPTED 且未
+  recovered 的 checkpoint，避免会话内多个中断 Run 时恢复错对象（原 `latest_unrecovered`
+  按会话取最近一条，保留给非 RunManager 路径）。
+
+### 34.3 RunStatus 与状态机
+
+- `PENDING → RUNNING → COMPLETED / FAILED / CANCELLED / INTERRUPTED`
+- `INTERRUPTED → RUNNING`（recover）
+- COMPLETED / FAILED / CANCELLED 是终态，不可再转换；
+  INTERRUPTED 不是终态（可恢复）。
+- 终态转换由 `SQLiteRunStore.update_status` 用 `_ALLOWED_TRANSITIONS` 强制拒绝。
+
+### 34.4 cancel 实际如何工作
+
+1. `RunManager.cancel(run_id)` 校验 RUNNING，对 `_active_tasks[run_id]`（asyncio.Task）调
+   `task.cancel()`，然后 `await task` 吞掉 CancelledError；
+2. 取消信号进入 AgentRuntime：在当前 await 点（checkpoint 保存点 / 工具执行 await）抛出
+   CancelledError —— 不再启动新的 Agent Step / Tool；
+3. AgentRuntime 的 `except BaseException` 分支把 Checkpoint 转 INTERRUPTED（保留
+   pending_tool_calls / completed_tool_results；未决工具语义 = "不确定，禁止直接重试"），
+   不伪造"没执行"；
+4. 已落库的 Trace 事件保留；
+5. `_execute` 捕获 CancelledError → Run 标记 CANCELLED（终态）。
+
+### 34.5 recover 实际如何工作（复用现有 Checkpoint 协议）
+
+1. `RunManager.recover(run_id)` 校验 INTERRUPTED 且存在 `get_unrecovered` 的 Checkpoint；
+2. 以同一 conversation 启动**新** Run，传 `recovery_run_id=旧 run`；
+3. AgentRuntime 注入 `render_checkpoint_context` 恢复证据：completed_tool_results 作为
+   "已完成"（模型继续、不重复执行）；pending_tool_calls 作为"不确定"（核对后再决定）；
+4. 新 Run 正常完成后 `mark_recovered(旧 run, recovered_by_run_id=新 run)`；
+5. 旧 Run 保持 INTERRUPTED（生命周期事实），新 Run 记录 `recovered_from_run_id`。
+
+### 34.6 启动 reconciliation（为什么）
+
+- RUNNING 是进程级事实。进程重启后，当前进程内不可能存在该 Run 的 Agent execution，
+  旧的 RUNNING 不应残留。
+- 规则：有 Checkpoint → INTERRUPTED（Checkpoint 仍 RUNNING 时先由 checkpoint 层转
+  INTERRUPTED）；Checkpoint 已 COMPLETED/FAILED → Run 同步为对应终态（执行边界是事实源）；
+  无 Checkpoint → FAILED（没有可恢复状态，不能假装可恢复）。
+
+### 34.7 职责边界（不混）
+
+- Run 不复制 Conversation / Events / Tool Results，也不复制 Checkpoint 数据结构；
+- RunManager 不构建 Context、不执行 Tool、不加载 Skill、不推进 Task；
+- Task.status 与 Run.status 解耦：一个 Task 可关联多个 Run，Run FAILED 不代表 Task FAILED。
+
+### 34.8 CLI 接入（最小）
+
+- `_send_message` 改经 `RunManager.start()` 启动（保留事件打印/历史回写/统计输出）；
+- `/runs` 用 RunStore 输出完整生命周期；新增 `/run <id>`、`/run cancel <id>`、
+  `/run recover <id>`；启动打印 reconciliation 结果；`/checkpoints` `/trace` 等不变。
+
+### 34.9 测试与结果
+
+- `tests/test_run_manager.py`（13 例）覆盖：start→COMPLETED / 异常→FAILED / cancel（模型
+  请求与工具执行，checkpoint 保留未决工具）/ reconciliation（有/无 Checkpoint）/ recover→
+  COMPLETED / 已完成 Tool Result 不重复执行 / 无效转换被拒 / completed 不能 cancel /
+  多 Run 同会话 / Trace+Checkpoint 行为不变 / list 状态过滤；
+- 全量 `pytest` 558 通过（545 + 13），`ruff` / `compileall` / `git diff --check` 全绿。

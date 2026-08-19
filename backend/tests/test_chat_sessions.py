@@ -9,6 +9,7 @@ import pytest
 
 from app.agent.events import AgentEvent, AgentEventHandler, AgentEventType
 from app.agent.result import AgentResult, AgentStopReason
+from app.checkpoint import SQLiteCheckpointStore
 from app.context import (
     ConversationSummaryState,
     RollingConversationSummary,
@@ -29,6 +30,7 @@ from app.models.chat import (
     _send_message,
 )
 from app.models.types import Message, MessageRole, ModelProvider, ToolCall
+from app.run import RunManager, SQLiteRunStore
 from app.tools import ApprovalScope, SQLitePermissionRuleStore, build_safe_rule
 from app.trace import SQLiteTraceEventHandler, SQLiteTraceStore
 
@@ -44,12 +46,14 @@ class StubRuntime:
         history: Sequence[Message] = (),
         conversation_id: str | None = None,
         summary_state: ConversationSummaryState | None = None,
+        run_id: str | None = None,
+        recovery_run_id: str | None = None,
     ) -> AgentResult:
         self.seen_summary_state = summary_state
         user_message = Message(role=MessageRole.USER, content=user_input)
         final_message = Message(role=MessageRole.ASSISTANT, content="已完成")
         return AgentResult(
-            run_id="stub-run",
+            run_id=run_id or "stub-run",
             final_message=final_message,
             messages=(*history, user_message, final_message),
             steps=1,
@@ -65,12 +69,16 @@ class StubRuntime:
         conversation_id: str | None = None,
         event_handler: AgentEventHandler | None = None,
         summary_state: ConversationSummaryState | None = None,
+        run_id: str | None = None,
+        recovery_run_id: str | None = None,
     ):
         result = await self.run(
             user_input,
             history=history,
             conversation_id=conversation_id,
             summary_state=summary_state,
+            run_id=run_id,
+            recovery_run_id=recovery_run_id,
         )
         events = (
             AgentEvent(
@@ -92,6 +100,16 @@ class StubRuntime:
             if event_handler is not None:
                 await event_handler.emit(event)
             yield event
+
+
+async def _make_run_manager(tmp_path: Path, runtime: object) -> RunManager:
+    """用给定 stub runtime 构造 RunManager（Run 表与其它 Store 共用同一 DB）。"""
+
+    run_store = SQLiteRunStore(tmp_path / "oneagent.db")
+    checkpoint_store = SQLiteCheckpointStore(tmp_path / "oneagent.db")
+    await run_store.initialize()
+    await checkpoint_store.initialize()
+    return RunManager(run_store, checkpoint_store, runtime)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
@@ -168,7 +186,7 @@ async def test_send_message_persists_runtime_history_and_generates_title(
     history = list(await store.load_messages(conversation.id))
 
     success, updated = await _send_message(
-        runtime=StubRuntime(),  # type: ignore[arg-type]
+        run_manager=await _make_run_manager(tmp_path, StubRuntime()),
         conversation_store=store,
         trace_handler=SQLiteTraceEventHandler(trace_store),
         conversation=conversation,
@@ -192,7 +210,9 @@ async def test_send_message_persists_runtime_history_and_generates_title(
     assert "OneAgent> 已完成" in output
     runs = await trace_store.list_runs()
     assert len(runs) == 1
-    assert runs[0].run_id == "stub-run"
+    # run_id 由 RunManager 生成（不再固定为 stub-run），但 conversation 关联与
+    # 事件数仍被正确记录。
+    assert runs[0].run_id
     assert runs[0].conversation_id == conversation.id
     assert runs[0].event_count == 2
 
@@ -216,7 +236,7 @@ async def test_send_message_restores_and_persists_summary_state(tmp_path) -> Non
     history: list[Message] = []
 
     await _send_message(
-        runtime=runtime,  # type: ignore[arg-type]
+        run_manager=await _make_run_manager(tmp_path, runtime),
         conversation_store=conversation_store,
         trace_handler=SQLiteTraceEventHandler(trace_store),
         conversation=conversation,
@@ -252,6 +272,8 @@ async def test_cli_persists_and_restores_complete_tool_protocol_history(
             history: Sequence[Message] = (),
             conversation_id: str | None = None,
             summary_state: ConversationSummaryState | None = None,
+            run_id: str | None = None,
+            recovery_run_id: str | None = None,
         ) -> AgentResult:
             user_message = Message(role=MessageRole.USER, content=user_input)
             tool_call_message = Message(
@@ -281,7 +303,7 @@ async def test_cli_persists_and_restores_complete_tool_protocol_history(
             )
 
     await _send_message(
-        runtime=ToolProtocolRuntime(),  # type: ignore[arg-type]
+        run_manager=await _make_run_manager(tmp_path, ToolProtocolRuntime()),
         conversation_store=store,
         trace_handler=SQLiteTraceEventHandler(trace_store),
         conversation=conversation,
