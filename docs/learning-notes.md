@@ -1696,3 +1696,54 @@ Multi-Agent / Task Graph / Planner DAG。Pattern Mining V1 完全用一次结构
 - `test_automation.py`（15 例，重写）：经 FakeConversationService 投递、provenance、
   状态机非法转换、completed/cancelled 不再执行、真实 APScheduler 自动触发。
 - 全量 `pytest` 584 通过，`ruff` / `compileall` / `git diff --check` 全绿。
+
+## 38. Automation / Scheduler V1 收尾：并发锁、提前持久化、provenance（2026-08-19）
+
+> 三个问题：①同 conversation 并发 dispatch 会交错丢消息；②Automation→Run 的 last_run_id
+> 要等 Run 完成后才写，中途崩溃就丢了；③Trigger provenance 只存在内存 TriggerContext，
+> 重启后查不到。V1 收口只修这三点，不扩展新功能。
+
+### 38.1 按 conversation 的 asyncio.Lock（并发保护）
+
+- `ConversationService` 维护 `_locks: dict[conversation_id, asyncio.Lock]` +
+  `_lock_for(conversation_id)`（None → 共享 `_NullLock`，不锁）。
+- `dispatch()` 外层 `async with self._lock_for(conversation_id)` 包住 `_dispatch_locked`。
+- 关键取舍：
+  - **同 conversation 串行**：后到的 dispatch 等前一个 Run 完全收尾（写回/Summary 都完成），
+    读取"触发那一刻最新"的 history 才不丢消息 —— 这是 fix 的核心。
+  - **不同 conversation 并行**：各用各的锁，互不阻塞。
+  - **用 dict 缓存锁**而非每 dispatch 新建锁：新建锁会破坏串行语义。
+
+### 38.2 on_run_started：Run 创建即持久化 last_run_id
+
+- 崩溃窗口：Automation 触发 → Run 创建 → 完成前进程崩溃。若 last_run_id 只在 Run 完成后
+  更新，崩溃时 Automation 记录里没有关联 Run，重启后一次性 Automation 会被当作
+  "从未执行"而**再次补跑**。
+- 解法：`dispatch(..., on_run_started=None)` 回调在 `run_manager.start(...)` 返回、
+  `wait()` **之前**调用（run_id 已生成）。Scheduler 的回调里
+  `store.mark_triggered(automation_id, last_run_id=run_id, last_run_at=now, next_run_at=None)`
+  —— Run 一创建就落库。
+- 注意：ONCE 完成分支**不再**二次 mark_triggered（避免覆盖 next_run_at）；崩溃重启后
+  一次性 Automation 已是"已触发"状态，不会补跑。
+- 回调签名用 `Any | None`，避免 scheduler → conversation 的 import 依赖方向反转。
+
+### 38.3 provenance 落库到 Run
+
+- `Run` 新增 4 列：`source / source_id / scheduled_for / triggered_at`。
+- `run/store.py` 迁移是幂等的：`ALTER TABLE runs ADD COLUMN ...` 逐个 try/except
+  OperationalError（老库补列、新库建表即带列）；`_run_from_row` 用
+  `"source" in row.keys()` 保护老行。
+- `RunManager.start(source=..., source_id=..., scheduled_for=..., triggered_at=...)`
+  透传；`ConversationService` 从 `trigger.source / trigger.automation_id /
+  trigger.scheduled_for / trigger.triggered_at` 注入。
+- 收益：provenance 与 Run 同生命周期，重启后仍可 `get_run` 查询来源。
+
+### 38.4 测试与结果
+
+- 并发：StubRunManager 记录同时最大 active 数 + 动态生成结果消息；同 conversation 断言
+  顺序不丢、不同 conversation 断言 max_active>1。
+- 崩溃：dispatch 里 on_run_started 后抛异常（模拟崩溃），断言 store 里 last_run_id 已在；
+  重启后一次性 Automation 不再补跑。
+- provenance：真 SQLite 建 store → 创建带 provenance 的 Run → 关库重建 + 重启
+  ConversationService → 再查询，字段仍在。
+- 全量 `pytest` 589 通过，`ruff` / `compileall` / `git diff --check` 全绿。

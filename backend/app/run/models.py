@@ -83,8 +83,16 @@ class Run(BaseModel):
     # recover 语义：recover() 启动的新 Run 在创建时一次性记录它恢复自哪个旧 Run；
     # 旧 Run 保持 INTERRUPTED（生命周期事实不伪造为 COMPLETED）。
     recovered_from_run_id: str | None = None
+    # 触发来源（轻量 provenance，随 Run 持久化）：
+    #   source       —— manual | automation
+    #   source_id    —— automation_id（或其它来源标识）
+    #   scheduled_for / triggered_at —— Automation 调度语义
+    source: str | None = None
+    source_id: str | None = None
+    scheduled_for: datetime | None = None
+    triggered_at: datetime | None = None
 
-    @field_validator("id", "conversation_id", "recovered_from_run_id")
+    @field_validator("id", "conversation_id", "recovered_from_run_id", "source_id")
     @classmethod
     def normalize_identifier(cls, value: str | None) -> str | None:
         if value is None:
@@ -94,7 +102,14 @@ class Run(BaseModel):
             raise ValueError("run identifiers cannot be empty")
         return normalized
 
-    @field_validator("created_at", "started_at", "updated_at", "completed_at")
+    @field_validator(
+        "created_at",
+        "started_at",
+        "updated_at",
+        "completed_at",
+        "scheduled_for",
+        "triggered_at",
+    )
     @classmethod
     def normalize_datetime(cls, value: datetime | None) -> datetime | None:
         if value is None:

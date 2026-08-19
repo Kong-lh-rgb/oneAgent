@@ -1,13 +1,15 @@
 """ConversationService 测试：统一执行链（CLI 与 Automation 共用）。
 
 覆盖：加载最新持久化 history / summary、Run 完成后写回 Conversation、
-Summary 写回、Trace 统一注入、provenance 保留、is_run_running。
+Summary 写回、Trace 统一注入、provenance 保留、is_run_running、
+同会话并发串行 / 跨会话并行、Run provenance 持久化。
 
 用 StubRunManager 返回固定的 AgentResult，不调用真实模型 API。
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -52,6 +54,10 @@ class StubRunManager:
         summary_state=None,
         event_handler=None,
         recovery_run_id=None,
+        source=None,
+        source_id=None,
+        scheduled_for=None,
+        triggered_at=None,
     ) -> tuple[str, None]:
         self.started.append(
             {
@@ -60,6 +66,10 @@ class StubRunManager:
                 "history": history,
                 "summary_state": summary_state,
                 "event_handler": event_handler,
+                "source": source,
+                "source_id": source_id,
+                "scheduled_for": scheduled_for,
+                "triggered_at": triggered_at,
             }
         )
         return "run-1", None
@@ -350,3 +360,230 @@ async def test_next_dispatch_sees_previous_automation_result(
         "C",
         "D",
     ]
+
+
+# ---------------------------------------------------------------------------
+# 8. 同 conversation 并发 dispatch 串行、不丢消息；不同 conversation 并行
+# ---------------------------------------------------------------------------
+
+
+class ConcurrentRunManager:
+    """记录并发窗口；每次 result 基于当时 history + 本次输入动态构造。"""
+
+    def __init__(self) -> None:
+        self.active = 0
+        self.max_active = 0
+        self.calls: list[dict] = []
+
+    async def start(
+        self,
+        user_message: str,
+        *,
+        conversation_id=None,
+        history=(),
+        summary_state=None,
+        event_handler=None,
+        recovery_run_id=None,
+        source=None,
+        source_id=None,
+        scheduled_for=None,
+        triggered_at=None,
+    ) -> tuple[str, None]:
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        self.calls.append(
+            {
+                "conversation_id": conversation_id,
+                "content": user_message,
+                "history": tuple(history),
+            }
+        )
+        return f"run-{len(self.calls)}", None
+
+    async def wait(self, run_id: str):
+        await asyncio.sleep(0.02)
+        self.active -= 1
+        return SimpleNamespace(
+            id=run_id,
+            stop_reason="final_answer",
+            status=SimpleNamespace(value="completed"),
+        )
+
+    def result(self, run_id: str) -> AgentResult:
+        index = int(run_id.split("-")[1]) - 1
+        call = self.calls[index]
+        messages = (
+            *call["history"],
+            _message(MessageRole.USER, call["content"]),
+            _message(MessageRole.ASSISTANT, f"out-{index + 1}"),
+        )
+        return _result_with(messages)
+
+    async def get_run(self, run_id: str):
+        return None
+
+
+async def test_same_conversation_dispatch_is_serialized(service_factory) -> None:
+    service, conversation_store, _, _, _ = await service_factory(
+        _result_with((_message(MessageRole.USER, "x"),))
+    )
+    conversation = await conversation_store.create(
+        messages=(
+            _message(MessageRole.USER, "A"),
+            _message(MessageRole.ASSISTANT, "B"),
+        )
+    )
+    # 替换为记录并发的 run manager。
+    manager = ConcurrentRunManager()
+    service._run_manager = manager  # type: ignore[assignment]
+
+    task1 = asyncio.create_task(
+        service.dispatch(
+            conversation_id=conversation.id,
+            content="C",
+            trigger=TriggerContext(source=ConversationSource.MANUAL),
+        )
+    )
+    task2 = asyncio.create_task(
+        service.dispatch(
+            conversation_id=conversation.id,
+            content="D",
+            trigger=TriggerContext(source=ConversationSource.MANUAL),
+        )
+    )
+    await asyncio.gather(task1, task2)
+
+    # 同一会话串行：任意时刻最多 1 个 dispatch 在执行。
+    assert manager.max_active == 1
+    # 第二次 dispatch 读到的是第一次写回后的最新 history，不丢消息。
+    assert len(manager.calls) == 2
+    assert [m.content for m in manager.calls[1]["history"]] == [
+        "A",
+        "B",
+        "C",
+        "out-1",
+    ]
+    persisted = await conversation_store.load_messages(conversation.id)
+    assert [m.content for m in persisted] == [
+        "A",
+        "B",
+        "C",
+        "out-1",
+        "D",
+        "out-2",
+    ]
+
+
+async def test_different_conversations_dispatch_in_parallel(service_factory) -> None:
+    service, conversation_store, _, _, _ = await service_factory(
+        _result_with((_message(MessageRole.USER, "x"),))
+    )
+    conv_a = await conversation_store.create()
+    conv_b = await conversation_store.create()
+    manager = ConcurrentRunManager()
+    service._run_manager = manager  # type: ignore[assignment]
+
+    task_a = asyncio.create_task(
+        service.dispatch(
+            conversation_id=conv_a.id,
+            content="A-input",
+            trigger=TriggerContext(source=ConversationSource.MANUAL),
+        )
+    )
+    task_b = asyncio.create_task(
+        service.dispatch(
+            conversation_id=conv_b.id,
+            content="B-input",
+            trigger=TriggerContext(source=ConversationSource.MANUAL),
+        )
+    )
+    await asyncio.gather(task_a, task_b)
+
+    # 不同会话可并行：两个 dispatch 同时进入执行。
+    assert manager.max_active == 2
+    assert len(manager.calls) == 2
+
+
+# ---------------------------------------------------------------------------
+# 9. provenance 持久化到 Run，重启后仍可查询
+# ---------------------------------------------------------------------------
+
+
+class ProvenanceRuntime:
+    """极简 runtime：直接产生一个带 run_id 的完成事件。"""
+
+    async def run_stream(
+        self,
+        user_input: str,
+        *,
+        history=(),
+        conversation_id=None,
+        event_handler=None,
+        summary_state=None,
+        run_id=None,
+        recovery_run_id=None,
+    ):
+        final = _message(MessageRole.ASSISTANT, "完成")
+        user = _message(MessageRole.USER, user_input)
+        result = _result_with((*history, user, final))
+        result = result.model_copy(update={"run_id": run_id})
+        event = AgentEvent(
+            run_id=run_id,
+            conversation_id=conversation_id,
+            type=AgentEventType.AGENT_COMPLETED,
+            stop_reason=result.stop_reason,
+            result=result,
+        )
+        if event_handler is not None:
+            await event_handler.emit(event)
+        yield event
+
+
+async def test_run_provenance_persisted_across_restart(
+    tmp_path,
+) -> None:
+    from app.checkpoint import SQLiteCheckpointStore
+    from app.run import RunManager
+
+    database = tmp_path / "oneagent.db"
+    conversation_store = SQLiteConversationStore(database)
+    await conversation_store.initialize()
+    conversation = await conversation_store.create()
+    trace_store = SQLiteTraceStore(database)
+    await trace_store.initialize()
+    summary_store = SQLiteConversationSummaryStore(database)
+    await summary_store.initialize()
+    run_store = SQLiteRunStore(database)
+    await run_store.initialize()
+    checkpoint_store = SQLiteCheckpointStore(database)
+    await checkpoint_store.initialize()
+
+    run_manager = RunManager(run_store, checkpoint_store, ProvenanceRuntime())
+    service = ConversationService(
+        conversation_store,
+        run_manager,
+        trace_store,
+        summary_store=summary_store,
+    )
+    scheduled_for = datetime.now(UTC)
+    triggered_at = datetime.now(UTC)
+    dispatch = await service.dispatch(
+        conversation_id=conversation.id,
+        content="C",
+        trigger=TriggerContext(
+            source=ConversationSource.AUTOMATION,
+            automation_id="auto-9",
+            scheduled_for=scheduled_for,
+            triggered_at=triggered_at,
+        ),
+    )
+
+    # 重启后重新打开 RunStore，provenance 仍可查询。
+    reopened = SQLiteRunStore(database)
+    await reopened.initialize()
+    run = await reopened.get(dispatch.run.id)
+    assert run is not None
+    assert run.source == "automation"
+    assert run.source_id == "auto-9"
+    assert run.scheduled_for is not None
+    assert run.triggered_at is not None

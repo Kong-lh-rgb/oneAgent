@@ -7,6 +7,44 @@
 ---
 ## 2026-08-19
 
+### 完成：Automation / Scheduler V1 收尾（3 项修复）
+
+> 基于 ConversationService 抽取之后的架构收口 Automation / Scheduler V1，只修 3 个问题，
+> 不扩展新功能。目标：并发安全、崩溃时关联关系不丢、provenance 真正落库。
+
+#### 修复 1：Conversation 并发保护
+- [x] `app/conversation/service.py`：`dispatch()` 增加**按 conversation_id 的 asyncio.Lock**
+  （`_locks` 字典 + `_lock_for`；conversation_id 为 None 时用 `_NullLock` 不锁）
+- [x] 同一 conversation 的 dispatch 串行执行（后到者等前一个 Run 完全收尾），
+  不丢消息；不同 conversation 用不同锁，天然并行
+
+#### 修复 2：Automation → Run 关联提前持久化
+- [x] `dispatch(..., on_run_started=None)`：在 `run_manager.start(...)` 返回、`wait()` 之前
+  调用回调 —— Run 一创建（run_id 已知）就通知调用方
+- [x] `app/automation/scheduler.py`：`_trigger()` 传 `on_run_started`，回调里
+  `store.mark_triggered(last_run_id, last_run_at, next_run_at=None)` **立即持久化**
+- [x] 效果：Run 创建后、完成前进程崩溃，Automation 也已有 `last_run_id`；
+  重启后已启动的一次性 Automation 不会被当作"从未执行"补跑（有崩溃 + 重启测试验证）
+- [x] ONCE 完成分支不再二次 mark_triggered（避免覆盖 next_run_at 语义）
+
+#### 修复 3：Trigger provenance 真正持久化
+- [x] `app/run/models.py`：`Run` 新增 `source / source_id / scheduled_for / triggered_at`
+  （provenance 字段）；`normalize_identifier` / `normalize_datetime` 同步
+- [x] `app/run/store.py`：runs 表新增 4 列 + 幂等迁移（`ALTER TABLE` 补列，
+  OperationalError 时忽略）；`create()` / `_run_from_row` 读写新列
+- [x] `app/run/manager.py`：`start()` 透传 `source/source_id/scheduled_for/triggered_at`
+- [x] `ConversationService` start 时注入 `trigger.source / automation_id / scheduled_for /
+  triggered_at`；provenance 重启后仍可通过 Run 查询
+
+#### 测试（+7，共 589）
+- [x] `tests/test_conversation_service.py`（+4）：同 conversation 并发 dispatch 不丢消息 /
+  不同 conversation 可并行 / provenance 重启后仍可查询（真 SQLite 重建 + 重启 Service）/
+  原 7 例不回归
+- [x] `tests/test_automation.py`（+3）：last_run_id 在 Run 创建后、崩溃前已持久化 /
+  重启不会把已启动的一次性 Automation 当作"从未执行"补跑 / 原用例适配
+- [x] 全量 `pytest` 589 通过、`ruff`、`compileall`、`git diff --check` 全部通过
+
+---
 ### 完成：Automation 执行出口重构（抽取 ConversationService）
 
 > 核心原则：**Automation 不是定时启动 Runtime，而是定时向 Conversation 投递一条新的输入。**

@@ -36,7 +36,11 @@ CREATE TABLE IF NOT EXISTS runs (
     completed_at TEXT,
     error TEXT,
     stop_reason TEXT,
-    recovered_from_run_id TEXT
+    recovered_from_run_id TEXT,
+    source TEXT,
+    source_id TEXT,
+    scheduled_for TEXT,
+    triggered_at TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_conversation_updated
@@ -45,6 +49,14 @@ ON runs(conversation_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_runs_status_updated
 ON runs(status, created_at DESC);
 """
+
+# 旧库迁移：为已存在的 runs 表补齐 provenance 列（新库由 _SCHEMA 直接创建）。
+_PROVENANCE_COLUMNS = (
+    "source TEXT",
+    "source_id TEXT",
+    "scheduled_for TEXT",
+    "triggered_at TEXT",
+)
 
 
 class SQLiteRunStore:
@@ -57,6 +69,13 @@ class SQLiteRunStore:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         async with self._connect() as database:
             await database.executescript(_SCHEMA)
+            for column in _PROVENANCE_COLUMNS:
+                try:
+                    await database.execute(
+                        f"ALTER TABLE runs ADD COLUMN {column}"
+                    )
+                except aiosqlite.OperationalError:
+                    pass  # 列已存在
             await database.commit()
 
     async def create(
@@ -65,6 +84,10 @@ class SQLiteRunStore:
         conversation_id: str | None = None,
         user_message: str = "",
         recovered_from_run_id: str | None = None,
+        source: str | None = None,
+        source_id: str | None = None,
+        scheduled_for: datetime | None = None,
+        triggered_at: datetime | None = None,
     ) -> Run:
         """创建一个 PENDING Run，并返回完整记录。"""
 
@@ -76,8 +99,9 @@ class SQLiteRunStore:
                 """
                 INSERT INTO runs (
                     run_id, conversation_id, status, user_message,
-                    created_at, updated_at, recovered_from_run_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    created_at, updated_at, recovered_from_run_id,
+                    source, source_id, scheduled_for, triggered_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -87,11 +111,24 @@ class SQLiteRunStore:
                     now,
                     now,
                     _optional_identifier(recovered_from_run_id),
+                    source,
+                    _optional_identifier(source_id),
+                    (
+                        scheduled_for.astimezone(UTC).isoformat()
+                        if scheduled_for is not None
+                        else None
+                    ),
+                    (
+                        triggered_at.astimezone(UTC).isoformat()
+                        if triggered_at is not None
+                        else None
+                    ),
                 ),
             )
             await database.commit()
         run = await self.require(run_id)
         return run
+
 
     async def get(self, run_id: str) -> Run | None:
         async with self._connect() as database:
@@ -304,6 +341,22 @@ def _run_from_row(row: aiosqlite.Row) -> Run:
         error=row["error"],
         stop_reason=row["stop_reason"],
         recovered_from_run_id=row["recovered_from_run_id"],
+        source=row["source"] if "source" in row.keys() else None,
+        source_id=(
+            row["source_id"] if "source_id" in row.keys() else None
+        ),
+        scheduled_for=(
+            _parse_datetime(row["scheduled_for"])
+            if "scheduled_for" in row.keys()
+            and row["scheduled_for"] is not None
+            else None
+        ),
+        triggered_at=(
+            _parse_datetime(row["triggered_at"])
+            if "triggered_at" in row.keys()
+            and row["triggered_at"] is not None
+            else None
+        ),
     )
 
 

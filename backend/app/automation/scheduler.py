@@ -302,18 +302,17 @@ class AutomationScheduler:
                     scheduled_for=automation.next_run_at,
                     triggered_at=now,
                 ),
+                on_run_started=self._record_run_started(
+                    automation_id,
+                    triggered_at=now,
+                ),
             )
             run_id = dispatch.run.id
             now = datetime.now(UTC)
             if automation.schedule.kind is ScheduleKind.ONCE:
-                # 一次性任务：完成本次触发后进入 COMPLETED（保留 last_run_id
-                # 供查看 Run 结果，Run 失败与否由 RunManager 负责）。
-                await self._store.mark_triggered(
-                    automation_id,
-                    last_run_id=run_id,
-                    last_run_at=now,
-                    next_run_at=None,
-                )
+                # 一次性任务：Run 已创建并记录 last_run_id，本次触发即进入
+                # COMPLETED（保留 last_run_id 供查看 Run 结果；崩溃后也不会
+                # 再被当作"从未执行"补跑）。
                 await self._store.update_status(
                     automation_id,
                     AutomationStatus.COMPLETED,
@@ -332,6 +331,28 @@ class AutomationScheduler:
             self._schedule(automation, next_run)
         finally:
             self._running.discard(automation_id)
+
+    def _record_run_started(
+        self,
+        automation_id: str,
+        *,
+        triggered_at: datetime,
+    ) -> Any:
+        """返回 on_run_started 回调：Run 创建后立刻持久化 last_run_id / last_run_at。
+
+        关键：Run 一旦启动（即使未完成、进程随后崩溃），Automation 就已记录
+        该 run —— 重启后不会把已启动的一次性 Automation 再当作"从未执行"补跑。
+        """
+
+        async def _record(run_id: str) -> None:
+            await self._store.mark_triggered(
+                automation_id,
+                last_run_id=run_id,
+                last_run_at=triggered_at,
+                next_run_at=None,
+            )
+
+        return _record
 
     # ------------------------------------------------------------------
     # 时间计算

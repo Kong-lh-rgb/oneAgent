@@ -12,6 +12,7 @@ RunManager 只负责“Run 生命周期对象”：把一次 Agent 执行包装�
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from typing import Any
 
 from app.agent.events import AgentEventHandler
@@ -119,18 +120,29 @@ class RunManager:
         event_handler: AgentEventHandler | None = None,
         recovery_run_id: str | None = None,
         recovered_from_run_id: str | None = None,
+        source: str | None = None,
+        source_id: str | None = None,
+        scheduled_for: datetime | None = None,
+        triggered_at: datetime | None = None,
     ) -> tuple[str, asyncio.Task[None]]:
         """创建一个新 Run 并开始异步执行，返回 (run_id, task)。
 
         Run 生命周期：PENDING → RUNNING →（执行结束后）COMPLETED / FAILED /
         CANCELLED / INTERRUPTED。调用方通过 ``wait()`` 等待完成，或通过
         ``cancel()`` 主动取消。
+
+        ``source / source_id / scheduled_for / triggered_at`` 是触发来源
+        provenance（如 automation_id），随 Run 一起持久化。
         """
 
         run = await self._run_store.create(
             conversation_id=conversation_id,
             user_message=user_message,
             recovered_from_run_id=recovered_from_run_id,
+            source=source,
+            source_id=source_id,
+            scheduled_for=scheduled_for,
+            triggered_at=triggered_at,
         )
         await self._run_store.mark_started(run.id)
         task = asyncio.create_task(

@@ -17,6 +17,7 @@ load→start→wait→save 逻辑。本 Service 不包含任何 CLI print/input 
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -45,8 +46,26 @@ class DispatchResult:
     conversation_id: str | None
 
 
+class _NullLock:
+    """无会话（conversation_id=None）时使用的空锁：不串行化。"""
+
+    async def __aenter__(self) -> _NullLock:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+
+_NULL_LOCK = _NullLock()
+
+
 class ConversationService:
-    """统一执行一次 Conversation 输入（手动 / Automation 同路径）。"""
+    """统一执行一次 Conversation 输入（手动 / Automation 同路径）。
+
+    同一 conversation 的 dispatch 按会话串行（per-conversation asyncio.Lock），
+    避免两个 Run 同时 load history 后互相 replace_messages 导致消息丢失；
+    不同 conversation 仍可并行。
+    """
 
     def __init__(
         self,
@@ -60,6 +79,16 @@ class ConversationService:
         self._run_manager = run_manager
         self._trace_store = trace_store
         self._summary_store = summary_store
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def _lock_for(self, conversation_id: str | None) -> Any:
+        if conversation_id is None:
+            return _NULL_LOCK
+        lock = self._locks.get(conversation_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[conversation_id] = lock
+        return lock
 
     async def dispatch(
         self,
@@ -68,17 +97,39 @@ class ConversationService:
         content: str,
         trigger: TriggerContext | None = None,
         event_handler: AgentEventHandler | None = None,
+        on_run_started: Any | None = None,
     ) -> DispatchResult:
         """投递一条输入并完整执行（加载最新 → Run → 写回 → Summary）。
 
         ``event_handler`` 是可选的额外观察者（如 CLI 打印）；Trace 总是由本
         Service 统一注入，Automation 与手动输入走同一条 Trace 路径。
+
+        ``on_run_started`` 可选：Run 创建并拿到 run_id 后、等待完成前被调用
+        （``await on_run_started(run_id)``）。Automation 用它立即持久化
+        last_run_id —— Run 已启动即记录，崩溃后不会重复补跑。
         """
 
         trigger = trigger or TriggerContext(
             source=ConversationSource.MANUAL
         )
+        async with self._lock_for(conversation_id):
+            return await self._dispatch_locked(
+                conversation_id=conversation_id,
+                content=content,
+                trigger=trigger,
+                event_handler=event_handler,
+                on_run_started=on_run_started,
+            )
 
+    async def _dispatch_locked(
+        self,
+        *,
+        conversation_id: str | None,
+        content: str,
+        trigger: TriggerContext,
+        event_handler: AgentEventHandler | None,
+        on_run_started: Any | None,
+    ) -> DispatchResult:
         # 1) 从持久化源加载“触发那一刻最新”的 history / summary。
         history: tuple[Any, ...] = ()
         if conversation_id is not None:
@@ -97,14 +148,20 @@ class ConversationService:
         if event_handler is not None:
             handler = CompositeEventHandler(trace_handler, event_handler)
 
-        # 3) 启动 Run 并等待完成。
+        # 3) 启动 Run（携带 provenance）并等待完成。
         run_id, _ = await self._run_manager.start(
             content,
             conversation_id=conversation_id,
             history=history,
             summary_state=summary_state,
             event_handler=handler,
+            source=trigger.source.value,
+            source_id=trigger.automation_id,
+            scheduled_for=trigger.scheduled_for,
+            triggered_at=trigger.triggered_at,
         )
+        if on_run_started is not None:
+            await on_run_started(run_id)
         try:
             run = await self._run_manager.wait(run_id)
         except KeyboardInterrupt:

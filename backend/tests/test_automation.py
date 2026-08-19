@@ -53,6 +53,7 @@ class FakeConversationService:
         content: str,
         trigger=None,
         event_handler=None,
+        on_run_started=None,
     ) -> _FakeDispatch:
         if self.fail_on_dispatch:
             raise RuntimeError("dispatch failed")
@@ -66,6 +67,8 @@ class FakeConversationService:
             }
         )
         self.running_run_ids.add(run_id)
+        if on_run_started is not None:
+            await on_run_started(run_id)
         return _FakeDispatch(run_id)
 
     async def is_run_running(self, run_id: str) -> bool:
@@ -73,6 +76,24 @@ class FakeConversationService:
 
     def finish_run(self, run_id: str) -> None:
         self.running_run_ids.discard(run_id)
+
+
+class CrashAfterStartService(FakeConversationService):
+    """模拟 Run 创建（on_run_started 已被调用）后、完成前进程崩溃。"""
+
+    async def dispatch(
+        self,
+        *,
+        conversation_id=None,
+        content: str,
+        trigger=None,
+        event_handler=None,
+        on_run_started=None,
+    ):
+        run_id = "run-crash"
+        if on_run_started is not None:
+            await on_run_started(run_id)
+        raise RuntimeError("process crashed after run started")
 
 
 @pytest.fixture
@@ -633,6 +654,10 @@ class _IntegrationRunManager:
         summary_state=None,
         event_handler=None,
         recovery_run_id=None,
+        source=None,
+        source_id=None,
+        scheduled_for=None,
+        triggered_at=None,
     ) -> tuple[str, None]:
         self.started.append(user_message)
         return "run-auto", None
@@ -717,5 +742,93 @@ async def test_scheduler_auto_triggers_without_manual_trigger(tmp_path) -> None:
         assert len(manager.started) >= 1
         completed = await store.list(status=AutomationStatus.COMPLETED)
         assert any(item.title == "自动触发" for item in completed)
+    finally:
+        await scheduler.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# 19. Run 创建后、完成前崩溃：Automation 已持久化 last_run_id
+# ---------------------------------------------------------------------------
+
+
+async def test_last_run_id_persisted_before_crash(tmp_path) -> None:
+    store = SQLiteAutomationStore(tmp_path / "oneagent.db")
+    await store.initialize()
+    schedule = Schedule(
+        kind=ScheduleKind.ONCE,
+        run_at=_future(hours=1),
+        timezone="UTC",
+    )
+    automation = await store.create(
+        title="崩溃任务",
+        prompt="执行",
+        conversation_id="conv-1",
+        schedule=schedule,
+        next_run_at=schedule.run_at,
+    )
+
+    crash_service = CrashAfterStartService()
+    scheduler = AutomationScheduler(store, crash_service)
+    try:
+        # dispatch 内部：Run 创建后 on_run_started 已持久化 last_run_id，随后崩溃。
+        await scheduler._job_func(automation.id)()
+    finally:
+        await scheduler.shutdown()
+
+    updated = await store.get(automation.id)
+    assert updated is not None
+    assert updated.last_run_id == "run-crash"
+    assert updated.last_run_at is not None
+
+    # 重启：不会把已启动的一次性再当作"从未执行"补跑 → COMPLETED。
+    restarted_service = FakeConversationService()
+    restarted = AutomationScheduler(store, restarted_service)
+    try:
+        await restarted._restore(await store.get(automation.id))
+        after = await store.get(automation.id)
+        assert after is not None
+        assert after.status is AutomationStatus.COMPLETED
+        assert restarted_service.dispatched == []
+    finally:
+        await restarted.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# 20. 重启不会把已启动的一次性 Automation 再补跑（last_run_id 已存在）
+# ---------------------------------------------------------------------------
+
+
+async def test_restart_does_not_rerun_started_once_automation(tmp_path) -> None:
+    store = SQLiteAutomationStore(tmp_path / "oneagent.db")
+    await store.initialize()
+    schedule = Schedule(
+        kind=ScheduleKind.ONCE,
+        run_at=_future(hours=1),
+        timezone="UTC",
+    )
+    automation = await store.create(
+        title="已启动的一次性",
+        prompt="执行",
+        conversation_id="conv-1",
+        schedule=schedule,
+        next_run_at=_past(hours=1),
+    )
+    # 模拟崩溃前已通过 on_run_started 持久化 last_run_id（next 被清空）。
+    await store.mark_triggered(
+        automation.id,
+        last_run_id="run-crash",
+        last_run_at=datetime.now(UTC),
+        next_run_at=None,
+    )
+
+    service = FakeConversationService()
+    scheduler = AutomationScheduler(store, service)
+    try:
+        await scheduler._restore(await store.get(automation.id))
+        after = await store.get(automation.id)
+        assert after is not None
+        assert after.status is AutomationStatus.COMPLETED
+        # 没有补跑任何 dispatch。
+        assert service.dispatched == []
     finally:
         await scheduler.shutdown()
