@@ -21,3 +21,8 @@ backend/.oneagent/
 
 # Local evaluation artifacts
 backend/tests/eval/reports/*.md
+
+# Desktop (Electron / Vite)
+desktop/node_modules/
+desktop/dist/
+desktop/dist-electron/

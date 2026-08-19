@@ -74,11 +74,15 @@ class ConversationService:
         trace_store: SQLiteTraceStore,
         *,
         summary_store: SQLiteConversationSummaryStore | None = None,
+        shared_event_handler: AgentEventHandler | None = None,
     ) -> None:
         self._conversation_store = conversation_store
         self._run_manager = run_manager
         self._trace_store = trace_store
         self._summary_store = summary_store
+        # 全局共享观察者（如 Desktop WebSocket 广播）：始终与 Trace 一起组合，
+        # 手动 / Automation 触发的 Run 最终都进入同一条 broadcast path。
+        self._shared_event_handler = shared_event_handler
         self._locks: dict[str, asyncio.Lock] = {}
 
     def _lock_for(self, conversation_id: str | None) -> Any:
@@ -142,11 +146,18 @@ class ConversationService:
             else None
         )
 
-        # 2) 统一注入 Trace handler（+ 额外观察者）。
+        # 2) 统一注入 Trace handler（+ 全局共享观察者 + 本次额外观察者）。
         trace_handler = SQLiteTraceEventHandler(self._trace_store)
-        handler: AgentEventHandler = trace_handler
+        handlers: list[AgentEventHandler] = [trace_handler]
+        if self._shared_event_handler is not None:
+            handlers.append(self._shared_event_handler)
         if event_handler is not None:
-            handler = CompositeEventHandler(trace_handler, event_handler)
+            handlers.append(event_handler)
+        handler: AgentEventHandler = (
+            CompositeEventHandler(*handlers)
+            if len(handlers) > 1
+            else handlers[0]
+        )
 
         # 3) 启动 Run（携带 provenance）并等待完成。
         run_id, _ = await self._run_manager.start(

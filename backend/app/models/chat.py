@@ -20,20 +20,8 @@ from app.agent.events import (
     AgentEventType,
     CompositeEventHandler,
 )
-from app.agent.runtime import AgentRuntime
-from app.automation import (
-    AutomationScheduler,
-    SQLiteAutomationStore,
-    register_automation_tools,
-)
-from app.checkpoint import RunCheckpoint, SQLiteCheckpointStore
-from app.context import (
-    ContextManager,
-    ContextSettings,
-    ConversationReducer,
-    ModelContextSummarizer,
-    SQLiteConversationSummaryStore,
-)
+from app.application import Application, title_from_content
+from app.checkpoint import RunCheckpoint
 from app.conversation import (
     DEFAULT_DATABASE_PATH,
     Conversation,
@@ -44,60 +32,33 @@ from app.conversation import (
 from app.conversation.service import ConversationService
 from app.mcp import (
     DEFAULT_MCP_CONFIG_PATH,
-    MCPClientManager,
-    MCPConfigurationError,
     MCPServerState,
     MCPServerStatus,
-    load_mcp_settings,
 )
 from app.memory import (
-    MemoryMaintenanceConfig,
-    MemoryMaintenanceReflector,
-    MemoryManager,
     MemoryRecord,
-    MemoryReflectionConfig,
-    PostRunMemoryReflector,
-    register_memory_tools,
 )
-from app.run import Run, RunManager, RunStatus, SQLiteRunStore
+from app.run import Run, RunStatus
 from app.skill_learning import (
     SkillCandidate,
-    SkillCandidateStore,
     SkillLearningService,
-    SkillLearningSettings,
-)
-from app.skills import (
-    SkillContextProvider,
-    SkillSettings,
-    SkillStore,
-    register_skill_tools,
 )
 from app.task import (
     DEFAULT_TASKS_DIR,
-    FileTaskStore,
-    TaskContextProvider,
-    register_task_tools,
 )
 from app.tools import (
     ApprovalScope,
-    ConsoleApprovalGate,
-    PermissionPolicyEngine,
     PermissionRule,
     SQLitePermissionRuleStore,
     ToolRegistry,
-    build_builtin_tool_registry,
-    describe_safe_rule,
 )
 from app.tools.builtin import WebSearchTool
 from app.tools.search import SearchError
 from app.trace import (
     AgentRunTrace,
     SQLiteTraceEventHandler,
-    SQLiteTraceStore,
 )
 
-from .config import ModelSettings
-from .registry import ModelAdapterRegistry
 from .types import Message, MessageRole, ModelProvider
 
 _COMMAND_OVERVIEW = (
@@ -144,32 +105,6 @@ _HELP_TEXT = (
 )
 
 
-def _select_provider(
-    settings: ModelSettings,
-    requested: str | None,
-) -> ModelProvider:
-    configured = settings.configured_providers()
-
-    if requested is not None:
-        provider = ModelProvider(requested)
-        if provider not in configured:
-            raise ValueError(
-                f"Provider '{provider.value}' is not configured in backend/.env."
-            )
-        return provider
-
-    if settings.model_default_provider in configured:
-        return settings.model_default_provider
-    if len(configured) == 1:
-        return configured[0]
-    if not configured:
-        raise ValueError("No model provider is configured in backend/.env.")
-    names = ", ".join(provider.value for provider in configured)
-    raise ValueError(
-        f"Multiple providers are configured ({names}); use --provider to select one."
-    )
-
-
 def _initial_history(system_prompt: str | None) -> list[Message]:
     if not system_prompt:
         return []
@@ -188,7 +123,7 @@ async def _send_message(
     conversation_service: ConversationService,
     conversation_store: SQLiteConversationStore,
     conversation: Conversation,
-    provider: ModelProvider,
+    provider: ModelProvider | str,
     history: list[Message],
     content: str,
     model: str,
@@ -214,13 +149,14 @@ async def _send_message(
     if conversation.title == "新会话":
         conversation = await conversation_store.rename(
             conversation.id,
-            _title_from_content(content),
+            title_from_content(content),
         )
     answer = result.content or "<模型未返回文本>"
     print(f"\nOneAgent> {answer.strip()}")
     stop_reason = dispatch.run.stop_reason or result.stop_reason.value
+    provider_name = provider.value if isinstance(provider, ModelProvider) else provider
     print(
-        f"\n[{provider.value}/{model} · {result.steps} steps · "
+        f"\n[{provider_name}/{model} · {result.steps} steps · "
         f"{result.usage.total_tokens} tokens · {stop_reason}]"
     )
     if result.tool_calls:
@@ -330,11 +266,6 @@ async def _load_or_create_conversation(
 
     history = list(await store.load_messages(conversation.id))
     return conversation, history, True
-
-
-def _title_from_content(content: str) -> str:
-    title = " ".join(content.split()).strip()
-    return title[:40] or "新会话"
 
 
 def _print_conversations(
@@ -658,29 +589,44 @@ def _print_memory(memory: MemoryRecord) -> None:
 
 
 async def _run(args: argparse.Namespace) -> int:
-    settings = ModelSettings()
+    app = Application(
+        provider=args.provider,
+        model=args.model,
+        system_prompt=args.system,
+        database=args.database,
+        tasks_dir=args.tasks_dir,
+        mcp_config=args.mcp_config,
+        max_steps=args.max_steps,
+        max_tool_rounds=args.max_tool_rounds,
+        max_output_tokens=args.max_output_tokens,
+    )
+    provider = app.provider
+    model = app.model
+    print(f"OneAgent Chat · provider={provider} · model={model}")
+
     try:
-        provider = _select_provider(settings, args.provider)
-    except ValueError as exc:
-        print(exc, file=sys.stderr)
+        await app.start()
+    except SearchError as exc:
+        print(f"搜索配置错误：{exc}", file=sys.stderr)
+        return 2
+    if app.mcp_error is not None:
+        print(f"MCP 配置错误：{app.mcp_error}", file=sys.stderr)
         return 2
 
-    config = settings.provider_config(provider)
-    model = args.model or config.model
-    print(f"OneAgent Chat · provider={provider.value} · model={model}")
-
-    conversation_store = SQLiteConversationStore(args.database)
-    await conversation_store.initialize()
-    summary_store = SQLiteConversationSummaryStore(args.database)
-    await summary_store.initialize()
-    trace_store = SQLiteTraceStore(args.database)
-    await trace_store.initialize()
+    # 与 CLI 循环体保持一致的局部变量名（值统一来自 Application）。
+    conversation_store = app.conversation_store
+    summary_store = app.summary_store
+    trace_store = app.trace_store
+    checkpoint_store = app.checkpoint_store
+    rule_store = app.rule_store
+    run_manager = app.run_manager
+    conversation_service = app.conversation_service
+    automation_scheduler = app.automation_scheduler
+    memory_manager = app.memory_manager
+    skill_learning = app.skill_learning
+    mcp_manager = app.mcp_manager
+    tool_registry = app.tool_registry
     trace_handler = SQLiteTraceEventHandler(trace_store)
-    checkpoint_store = SQLiteCheckpointStore(args.database)
-    await checkpoint_store.initialize()
-    rule_store = SQLitePermissionRuleStore(args.database)
-    await rule_store.initialize()
-    policy_engine = PermissionPolicyEngine(rule_store)
     try:
         conversation, history, resumed = await _load_or_create_conversation(
             conversation_store,
@@ -697,182 +643,45 @@ async def _run(args: argparse.Namespace) -> int:
         f"{action}会话：{conversation.id[:8]} · "
         f"{conversation.title} · {conversation.message_count} 条消息"
     )
-    try:
-        tool_registry = build_builtin_tool_registry()
-    except SearchError as exc:
-        print(f"搜索配置错误：{exc}", file=sys.stderr)
-        return 2
-    try:
-        mcp_settings = await load_mcp_settings(args.mcp_config)
-    except MCPConfigurationError as exc:
-        print(f"MCP 配置错误：{exc}", file=sys.stderr)
-        return 2
-    task_store = FileTaskStore(args.tasks_dir)
-    await task_store.initialize()
-    register_task_tools(tool_registry, task_store)
     search_tool = tool_registry.get("web_search")
     if isinstance(search_tool, WebSearchTool):
         if search_tool.provider_name == "tavily":
             print("联网搜索：Tavily（服务异常时自动回退 DuckDuckGo）")
         else:
             print("联网搜索：DuckDuckGo（配置 TAVILY_API_KEY 可启用 Tavily）")
-
-    registry = ModelAdapterRegistry(settings)
-    memory_manager = MemoryManager()
-    await memory_manager.initialize()
-    register_memory_tools(tool_registry, memory_manager)
-    skill_store = SkillStore()
-    await skill_store.initialize()
-    register_skill_tools(tool_registry, skill_store)
-    skill_settings = SkillSettings()
-    skill_context_provider = SkillContextProvider(
-        max_tokens=skill_settings.skill_context_max_tokens,
-        max_active=skill_settings.skill_max_active,
-        catalog_max_tokens=skill_settings.skill_catalog_max_tokens,
-    )
-    skill_learning_settings = SkillLearningSettings()
-    skill_candidate_store = SkillCandidateStore(
-        skill_learning_settings.skill_learning_data_dir
-    )
-    await skill_candidate_store.initialize()
-    skill_learning = SkillLearningService(
-        task_store=task_store,
-        trace_store=trace_store,
-        skill_store=skill_store,
-        candidate_store=skill_candidate_store,
-        registry=registry,
-        settings=skill_learning_settings,
-        default_provider=provider.value,
-        default_model=model,
-    )
-    if skill_learning_settings.skill_learning_enabled:
+    if skill_learning.settings.skill_learning_enabled:
         print(
             "Skill Learning：每 "
-            f"{skill_learning_settings.skill_learning_batch_size} 个 Completed "
+            f"{skill_learning.settings.skill_learning_batch_size} 个 Completed "
             "Task 触发一次 Pattern Mining（候选需人工评审）"
         )
-    _mark_deferred_tools(
-        tool_registry,
-        frozenset(
-            {
-                "http_request",
-                "memory_list",
-                "core_memory_update",
-                "core_memory_remove",
-            }
-        ),
-    )
-    reflection_config = MemoryReflectionConfig()
-    memory_reflector = PostRunMemoryReflector(
-        registry,
-        config=reflection_config,
-        default_provider=provider.value,
-        default_model=model,
-    )
-    reflection_model = memory_reflector.model_hint or "未解析"
-    reflection_provider = memory_reflector.provider_hint or "未解析"
-    reflection_status = "启用" if reflection_config.enabled else "关闭"
-    maintenance_config = MemoryMaintenanceConfig()
-    memory_maintenance_reflector = MemoryMaintenanceReflector(
-        registry,
-        config=maintenance_config,
-        default_provider=reflection_provider,
-        default_model=reflection_model,
-    )
-    maintenance_provider = memory_maintenance_reflector.provider_hint or "未解析"
-    maintenance_model = memory_maintenance_reflector.model_hint or "未解析"
-    maintenance_status = "启用" if maintenance_config.enabled else "关闭"
+    reflection_status = "启用" if app.memory_reflection_enabled else "关闭"
+    reflection_model = app.memory_reflector.model_hint or "未解析"
+    reflection_provider = app.memory_reflector.provider_hint or "未解析"
     print(
         "长期记忆：Sparse Memory（在线 Recall + 显式 Core + Post-Run Reflection）"
     )
-    print(
-        f"记忆反思：{reflection_status} · {reflection_provider}/{reflection_model}"
-    )
+    print(f"记忆反思：{reflection_status} · {reflection_provider}/{reflection_model}")
+    maintenance_status = "启用" if app.memory_maintenance_enabled else "关闭"
+    maintenance_model = app.memory_maintenance_reflector.model_hint or "未解析"
+    maintenance_provider = app.memory_maintenance_reflector.provider_hint or "未解析"
     print(
         f"容量维护：{maintenance_status} · "
         f"{maintenance_provider}/{maintenance_model}"
     )
-    context_settings = ContextSettings()
-    context_summarizer = ModelContextSummarizer(
-        registry,
-        provider=provider,
-        model=args.model,
-        max_output_tokens=context_settings.context_summary_max_output_tokens,
-    )
-    mcp_manager = MCPClientManager(mcp_settings.servers)
-    mcp_statuses = await mcp_manager.start(tool_registry)
     connected_mcp = sum(
-        status.state is MCPServerState.RUNNING for status in mcp_statuses
+        status.state is MCPServerState.RUNNING for status in app.mcp_statuses
     )
     failed_mcp = sum(
-        status.state is MCPServerState.FAILED for status in mcp_statuses
+        status.state is MCPServerState.FAILED for status in app.mcp_statuses
     )
-    if mcp_statuses:
+    if app.mcp_statuses:
         print(
             f"MCP：{connected_mcp} 个 Server 已连接，"
             f"{failed_mcp} 个启动失败"
         )
-    runtime = AgentRuntime(
-        registry,
-        tool_registry,
-        provider=provider,
-        model=args.model,
-        max_steps=args.max_steps,
-        max_tool_rounds=args.max_tool_rounds,
-        max_output_tokens=args.max_output_tokens,
-        approval_gate=ConsoleApprovalGate(
-            rule_label_factory=describe_safe_rule,
-        ),
-        policy_engine=policy_engine,
-        rule_store=rule_store,
-        context_manager=ContextManager(
-            context_settings=context_settings,
-            conversation_reducer=ConversationReducer(
-                context_summarizer,
-                keep_recent_conversation_blocks=(
-                    context_settings.context_keep_recent_conversation_blocks
-                ),
-                keep_recent_tool_rounds=(
-                    context_settings.context_keep_recent_tool_rounds
-                ),
-            ),
-        ),
-        task_context_provider=TaskContextProvider(task_store),
-        checkpoint_store=checkpoint_store,
-        memory_manager=memory_manager,
-        memory_reflector=memory_reflector,
-        memory_maintenance_reflector=memory_maintenance_reflector,
-        skill_store=skill_store,
-        skill_context_provider=skill_context_provider,
-    )
-    run_store = SQLiteRunStore(args.database)
-    run_manager = RunManager(
-        run_store,
-        checkpoint_store,
-        runtime,
-    )
-    # 启动 reconciliation（Run + Checkpoint 统一处理）；CLI 只展示结果，
-    # 不直接修改生命周期状态。
-    recovered = await run_manager.initialize()
-    if recovered:
-        _print_recovered_runs(recovered)
-
-    # ConversationService：CLI 与 Automation 共用的统一执行链。
-    conversation_service = ConversationService(
-        conversation_store,
-        run_manager,
-        trace_store,
-        summary_store=summary_store,
-    )
-
-    # Automation / Scheduler：到时间向 Conversation 投递一条输入。
-    automation_store = SQLiteAutomationStore(args.database)
-    automation_scheduler = AutomationScheduler(
-        automation_store,
-        conversation_service,
-    )
-    register_automation_tools(tool_registry, automation_scheduler)
-    await automation_scheduler.start()
+    if app.reconciled_runs:
+        _print_recovered_runs(app.reconciled_runs)
     try:
         if args.message is not None:
             success, conversation = await _send_message(
@@ -1226,9 +1035,7 @@ async def _run(args: argparse.Namespace) -> int:
             )
             await _maybe_run_skill_learning(skill_learning)
     finally:
-        await automation_scheduler.shutdown()
-        await mcp_manager.close(tool_registry)
-        await registry.close()
+        await app.close()
 
 
 def _parse_args() -> argparse.Namespace:

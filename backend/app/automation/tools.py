@@ -148,6 +148,9 @@ class AutomationListTool(BaseTool):
             strict=True,
         )
 
+    async def execute(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        raise ValueError("automation_list requires conversation context")
+
     async def execute_with_context(
         self,
         arguments: dict[str, Any],

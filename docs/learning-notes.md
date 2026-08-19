@@ -1782,3 +1782,34 @@ Multi-Agent / Task Graph / Planner DAG。Pattern Mining V1 完全用一次结构
   约束与示例。
 - 全量 `pytest` 590 通过，`ruff` / `compileall` / `git diff --check` 全绿。
   Automation / Scheduler V1 正式收口。
+## 40. Desktop V0：Application Bootstrap + Agent Server + Electron（2026-08-19）
+
+> 一句话目标：把已经存在的 Agent Harness 用一个真正的 Desktop UI 跑起来，
+> 不重新设计 Harness，核心链路保持 ConversationService → RunManager → AgentRuntime。
+
+### 40.1 为什么抽 Application（composition root）
+
+- 原 `app/models/chat.py` 里塞了大量依赖初始化与 wiring；Server 若再复制一套就会
+  出现两处 load history → start → save 的实现漂移。
+- `app/application.py::Application` 统一装配并持有全部运行依赖，提供
+  `await app.start()` / `await app.close()`；CLI 与 Agent Server 都复用。
+- 测试可注入离线 fake registry、关闭 memory reflection / skill learning，避免调真实模型。
+
+### 40.2 Server 只是"薄壳"，不复制 Agent 逻辑
+
+- 发消息必须走 `ConversationService.dispatch`；recover 走现有 `RunManager.recover`
+  （旧 Run   （旧 Run   （旧 Run   （旧 Run   （旧 Run   （旧 Run   （旧  �  （旧 Run   （旧 Run   （旧 Run   （旧 Run   （旧 Run   （旧 Run   �ext`（结构化 schedule，无自然语言解析）。
+
+### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSoc + �### 40.3 WebSocket 事件流：复用 Agen### 40.3 W��者### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事件流：复用 Agen### 40.3 Webler。### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket �ath�### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事件流：复用 AgxtI### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事件流：复�API### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事���### 40.3 WebSocket 事件流：复用 Agen### 40.3 Webecute`（只有 execute_with_context）：
+  由于 `register_automation_tools` 此前从未被任何测试触发，这个"实例化即崩"的 bug
+  一直潜伏；Desktop Server 启动注册工具时暴露，补一个 stub 修复。
+- 同步 TestClient 下无法用 POST 制造"运行中的 Run"做 cancel 测试 —— 用
+  `client.portal.call(...)` 在应用事件循环里启动阻塞 Run，再走 HTTP cancel。
+
+### 40.6 测试与结果
+
+- 新增 `tests/test_agent_server.py` 14 例（全离线 fake model）：health / conversation
+  CRUD / send 走 ConversationService / 写回 / run list·detail·cancel / trace /
+  automation CRUD·control / WS 收到 AgentEvent / automation Run 也广播并产生
+  source=automation Run / shutdown 正确关闭资源 / Application start-close 幂等。
+- 后端全量 `pytest` 604 通过；Desktop `typecheck` / `build` 通过。

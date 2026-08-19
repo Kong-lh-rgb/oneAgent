@@ -7,6 +7,69 @@
 ---
 ## 2026-08-19
 
+### 完成：Desktop V0（Electron + React + TS + Vite ↔ Python Agent Server）
+
+> 目标："把已经存在的 Agent Harness 用一个真正的 Desktop UI 跑起来"。
+> 核心链路不变：React → Agent Server → ConversationService → RunManager → AgentRuntime；
+> Automation → ConversationService。UI 简洁即可，不做视觉精修。
+
+#### 一、抽取 Application Bootstrap（composition root）
+- [x] 新增 `backend/app/application.py`：`Application` 统一装配并持有全部运行依赖
+  （settings / registry / tool_registry / 各 store / RunManager / ConversationService /
+  AutomationScheduler / Memory / Task / Skill / Skill Learning / MCP）
+- [x] 生命周期：`await app.start()` / `await app.close()`（关闭 Scheduler / MCP / registry）
+- [x] `select_provider` / `title_from_content` 移到 application.py，CLI 与 Server 共用
+- [x] `app/models/chat.py` 改用 `Application`，删除原来的大段 wiring（行为不变，回归通过）
+- [x] 测试可注入离线 fake registry / 关闭 memory reflection 与 skill learning
+
+#### 二、Agent Server（FastAPI + WebSocket，`backend/app/server/`）
+- [x] `app.py`：`create_app(application)`，lifespan 内 start/close；CORS 放开（本地 V0）
+- [x] `GET /health` → `{status, provider, model, version}`
+- [x] Conversation API：`GET /api/conversations`、`GET/POST /api/conversations/{id}`、
+  `POST /api/conversations/{id}/messages`（必须走 `ConversationService.dispatch`，
+  Server 不再复制 load→start→save；新会话首条消息复用现有标题生成）
+- [x] Run API：`GET /api/runs`（conversation_id/status 过滤）、`GET /api/runs/{id}`、
+  `POST /api/runs/{id}/cancel`、`POST /api/runs/{id}/recover`（走现有
+  RunManager.recover：旧 Run 保持 INTERRUPTED，新 Run.recovered_from_run_id=旧）
+- [x] Trace API：`GET /api/runs/{id}/trace`（直接读现有 TraceStore，不另建日志模型）
+- [x] Automation API：list/get/create（结构化 once/interval/cron，复用
+  `build_schedule_and_next`，无自然语言解析）/ pause / resume / cancel
+- [x] WebSocket `WS /api/events`：`EventBroker` + `DesktopBroadcastEventHandler`
+
+#### 三、WebSocket 事件流
+- [x] `ConversationService` 最小扩展：可选 `shared_event_handler`，dispatch 始终组合
+  `SQLiteTraceEventHandler + shared(Desktop 广播) + per-dispatch`
+- [x] Automation 触发与 Desktop 手动触发最终都进入同一条 broadcast path
+- [x] 复用现有 `AgentEvent`（不新增第二套）；终态事件额外广播轻量 `run_status`
+- [x] WebSocket 逻辑不进 AgentRuntime
+
+#### 四、Desktop（`desktop/`）
+- [x] Electron Main 只做桌面壳：创建窗口 / preload / lifecycle / 外链交给系统浏览器
+  （contextIsolation: true、nodeIntegration: false；V0 不打包 Python）
+- [x] preload 只暴露最小 Desktop API（platform/versions），Renderer 直接走
+  HTTP/WS 与 localhost Agent Server
+- [x] React + TS + Vite + TanStack Query + Zustand；Tailwind/Radix 未引入（保持轻量）
+- [x] 四个页面：Chat / Runs（含 Run Detail + Trace Timeline）/ Automations / Settings
+- [x] Chat：会话列表 / 消息 / Composer / 右侧实时 Run 执行进度（WS）
+- [x] Runs：badge 区分 pending/running/completed/failed/cancelled/interrupted，
+  点击进 Run Detail（lifecycle + provenance + Trace）；source=automation 明确展示
+- [x] Automations：列表 + 结构化创建表单 + pause/resume/cancel
+- [x] Settings：backend health / provider / model / db path / app version
+
+#### 五、顺带修复
+- [x] `automation/tools.py`：`AutomationListTool` 缺少抽象方法 `execute`（此前从未被
+  实例化触发；CLI/Server 注册工具时崩溃）—— 补上 stub，与 CreateTool 一致
+
+#### 六、测试与验证
+- [x] 新增 `tests/test_agent_server.py`（14 例，全用离线 fake model）：
+  health / conversation CRUD / send 走 ConversationService / 写回 / run list·detail /
+  cancel（含阻塞模型实时取消）/ trace / automation CRUD·control / WS 收到 AgentEvent /
+  automation Run 也广播 + 产生 source=automation 的 Run / shutdown 正确关闭资源 /
+  Application start/close 幂等
+- [x] 后端全量 `pytest` 604 通过（590 + 14）、`ruff`、`compileall`、`git diff --check`
+- [x] Desktop：`npm install`、`npm run typecheck`、`npm run build` 通过
+
+---
 ### 完成：Automation / Scheduler V1 收口（2 个小修，不扩展新功能）
 
 > 语义修正：一个 Run = 一次 execution attempt；自动化 prompt 不含调度条件。

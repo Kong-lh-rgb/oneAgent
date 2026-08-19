@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 
+from app.application import select_provider
 from app.models import (
     ApiStyle,
     Message,
@@ -18,7 +19,6 @@ from app.models import (
     ToolCall,
     ToolDefinition,
 )
-from app.models.chat import _select_provider
 from app.models.providers import AnthropicAdapter, OpenAICompatibleAdapter
 
 
@@ -235,4 +235,4 @@ def test_chat_auto_selects_the_only_configured_provider() -> None:
         DASHSCOPE_API_KEY="qwen-key",
     )
 
-    assert _select_provider(settings, None) is ModelProvider.QWEN
+    assert select_provider(settings, None) is ModelProvider.QWEN

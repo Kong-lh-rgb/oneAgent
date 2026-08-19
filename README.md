@@ -63,6 +63,25 @@ cp .env.example .env
 
 目前支持 OpenAI、Qwen、DeepSeek 和 Anthropic。
 
+### 🖥️ Desktop V0（Agent Server + Electron）
+
+```bash
+# 终端 1：启动 Python Agent Server（FastAPI + WebSocket）
+cd backend
+.venv/bin/python -m app.server            # http://127.0.0.1:8000
+
+# 终端 2：启动 Desktop（Electron + React + TS + Vite）
+cd desktop
+npm install
+npm run electron:dev                        # 或 npm run dev（纯 Renderer）
+```
+
+- Renderer 只通过 HTTP / WebSocket 与 localhost Agent Server 通信；
+  Electron Main 只负责桌面壳（contextIsolation / nodeIntegration:false）。
+- 核心链路不变：Desktop → Agent Server → `ConversationService` → `RunManager` →
+  `AgentRuntime`；Automation → `ConversationService`。WebSocket `/api/events`
+  复用现有 `AgentEvent` 实时推送执行进度。
+
 ```text
 🏗️ What's inside?
 Conversation   → 发生过什么
@@ -71,6 +90,10 @@ Memory         → 以后还应该知道什么
 Skill          → 以后这种事情怎么做
 Trace          → 这次具体怎么执行的
 Checkpoint     → 中断后从哪里继续
+Run            → 这次执行的 Run 生命周期
+Automation     → 未来何时以什么 prompt 再启动一次
+Server         → 把上面的能力暴露成 HTTP / WebSocket
+Desktop        → Electron + React 桌面壳（V0）
 ```
 
 oneAgent 试着把这些东西真正拆开，

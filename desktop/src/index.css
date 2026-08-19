@@ -1,0 +1,287 @@
+:root {
+  --bg: #0f1115;
+  --bg-panel: #171a21;
+  --bg-hover: #1f242e;
+  --border: #2a2f3a;
+  --text: #e6e8eb;
+  --text-dim: #9aa3af;
+  --accent: #4c8dff;
+  --accent-soft: rgba(76, 141, 255, 0.15);
+  --ok: #34c77b;
+  --warn: #e5b567;
+  --danger: #e05d5d;
+  --muted: #6b7480;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
+    Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.app-shell {
+  display: flex;
+  height: 100%;
+}
+
+.sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 12px 0;
+}
+
+.sidebar-brand {
+  padding: 0 16px 12px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 8px;
+}
+
+.nav-item {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.nav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding: 12px 16px;
+  font-size: 12px;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.panel {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+button {
+  font-family: inherit;
+}
+
+.btn {
+  background: var(--bg-hover);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.btn:hover {
+  background: #262c38;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: #3b7de8;
+}
+
+.btn-danger {
+  background: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.btn-sm {
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+input,
+select,
+textarea {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.text-dim {
+  color: var(--text-dim);
+}
+
+.text-muted {
+  color: var(--muted);
+}
+
+.error-text {
+  color: var(--danger);
+}
+
+/* 通用列表 / 表格 */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.table th {
+  color: var(--text-dim);
+  font-weight: 500;
+  position: sticky;
+  top: 0;
+  background: var(--bg-panel);
+}
+
+.row-link {
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.row-link:hover {
+  text-decoration: underline;
+}
+
+/* 状态徽章 */
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.badge-pending {
+  background: rgba(155, 163, 175, 0.15);
+  color: var(--text-dim);
+}
+
+.badge-running {
+  background: rgba(76, 141, 255, 0.18);
+  color: var(--accent);
+}
+
+.badge-completed {
+  background: rgba(52, 199, 123, 0.16);
+  color: var(--ok);
+}
+
+.badge-failed {
+  background: rgba(224, 93, 93, 0.16);
+  color: var(--danger);
+}
+
+.badge-cancelled {
+  background: rgba(229, 181, 103, 0.16);
+  color: var(--warn);
+}
+
+.badge-interrupted {
+  background: rgba(229, 181, 103, 0.16);
+  color: var(--warn);
+}
+
+/* 空状态 */
+.empty {
+  color: var(--muted);
+  text-align: center;
+  padding: 40px 16px;
+}
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  vertical-align: middle;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
