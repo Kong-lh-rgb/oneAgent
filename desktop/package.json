@@ -8,6 +8,7 @@
     "dev": "vite",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
     "build": "npm run typecheck && vite build && tsc -p tsconfig.electron.json",
+    "test": "vitest run",
     "electron": "tsc -p tsconfig.electron.json && electron .",
     "electron:dev": "concurrently -k \"vite\" \"tsc -w -p tsconfig.electron.json\" \"wait-on tcp:127.0.0.1:5173 && electron .\""
   },
@@ -26,6 +27,7 @@
     "electron": "^33.0.0",
     "typescript": "^5.6.2",
     "vite": "^5.4.8",
+    "vitest": "^2.1.4",
     "wait-on": "^8.0.1"
   }
 }

@@ -1,10 +1,13 @@
-"""Agent Server：把现有 Agent 能力通过 HTTP / WebSocket 暴露给 Desktop。
+"""Agent Server：本地 Host transport。
 
-FastAPI lifespan 内：``await application.start()``；shutdown：
-``await application.close()``（正确关闭 Scheduler / MCP / 模型适配器）。
+FastAPI 不是业务架构，只负责：
 
-核心链路保持不变：React Renderer → Python Agent Server → ConversationService
-→ RunManager → AgentRuntime；WebSocket 广播复用现有 AgentEvent。
+- process lifespan（``application.start()`` / ``application.close()``）
+- WebSocket upgrade（``WS /rpc``）
+- ``GET /health``（供 Electron / 开发环境判断 Host 是否启动）
+
+Renderer 的正常业务全部走 ``WS /rpc``（JSON-RPC 2.0，一条连接双向通信），
+不再使用 REST CRUD。
 """
 
 from __future__ import annotations
@@ -12,17 +15,19 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Request, WebSocket
 
 from app.application import Application
 
-from .events import DesktopBroadcastEventHandler, EventBroker
-from .routes import api_router
+from .rpc import (
+    RpcBroadcastEventHandler,
+    RpcConnection,
+    RpcHub,
+    build_dispatcher,
+)
+from .version import __version__
 
 logger = logging.getLogger("oneagent.server")
-
-__version__ = "0.1.0"
 
 
 def create_app(application: Application | None = None) -> FastAPI:
@@ -36,10 +41,12 @@ def create_app(application: Application | None = None) -> FastAPI:
         application = Application()
 
     # 全局共享事件观察者：在 application.start() 之前注入，
-    # ConversationService 构造时会把 Desktop 广播与 Trace 一起组合。
-    broker = EventBroker()
-    broadcast = DesktopBroadcastEventHandler(broker)
+    # ConversationService 构造时会把 RPC 广播与 Trace 一起组合。
+    hub = RpcHub()
+    broadcast = RpcBroadcastEventHandler(hub)
     application.shared_event_handler = broadcast
+
+    dispatcher = build_dispatcher()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -61,15 +68,8 @@ def create_app(application: Application | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.application = application
-    app.state.broker = broker
-
-    # V0 本地开发：允许 Vite dev origin 与 Electron file://（无鉴权）。
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    app.state.hub = hub
+    app.state.dispatcher = dispatcher
 
     @app.get("/health")
     async def health(request: Request) -> dict[str, object]:
@@ -81,8 +81,18 @@ def create_app(application: Application | None = None) -> FastAPI:
             "version": __version__,
         }
 
-    app.include_router(api_router)
+    @app.websocket("/rpc")
+    async def rpc_endpoint(websocket: WebSocket) -> None:
+        await websocket.accept()
+        connection = RpcConnection(websocket, dispatcher, application, hub)
+        await hub.register(connection)
+        try:
+            await connection.run()
+        finally:
+            await hub.unregister(connection)
+
     return app
 
 
 __all__ = ["__version__", "create_app"]
+

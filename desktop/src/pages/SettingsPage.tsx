@@ -1,11 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
 
-import { getHealth } from '../api/health'
+import { getSystemInfo } from '../api/system'
 
 export default function SettingsPage(): React.JSX.Element {
-  const healthQuery = useQuery({
-    queryKey: ['health'],
-    queryFn: () => getHealth(),
+  const infoQuery = useQuery({
+    queryKey: ['system-info'],
+    queryFn: () => getSystemInfo(),
     refetchInterval: 5000,
     retry: false,
   })
@@ -18,9 +18,9 @@ export default function SettingsPage(): React.JSX.Element {
 
       <div className="panel" style={{ padding: 14 }}>
         <h3 style={{ fontSize: 14, marginTop: 0 }}>Backend</h3>
-        {healthQuery.isLoading ? (
+        {infoQuery.isLoading ? (
           <div className="text-dim"><span className="spinner" /> 正在检查后端…</div>
-        ) : healthQuery.isError ? (
+        ) : infoQuery.isError ? (
           <div className="error-text">
             无法连接 Agent Server。请先在 backend 启动：
             <pre style={{ background: 'var(--bg)', padding: 10, borderRadius: 6 }}>{'python -m app.server'}</pre>
@@ -29,24 +29,24 @@ export default function SettingsPage(): React.JSX.Element {
           <table className="table">
             <tbody>
               <tr>
-                <td className="text-muted">health</td>
-                <td className="text-dim">{healthQuery.data?.status ?? '-'}</td>
+                <td className="text-muted">host status</td>
+                <td className="text-dim">{infoQuery.data?.status ?? '-'}</td>
               </tr>
               <tr>
                 <td className="text-muted">provider</td>
-                <td>{healthQuery.data?.provider ?? '-'}</td>
+                <td>{infoQuery.data?.provider ?? '-'}</td>
               </tr>
               <tr>
                 <td className="text-muted">model</td>
-                <td>{healthQuery.data?.model ?? '-'}</td>
+                <td>{infoQuery.data?.model ?? '-'}</td>
               </tr>
               <tr>
                 <td className="text-muted">server version</td>
-                <td className="text-dim">{healthQuery.data?.version ?? '-'}</td>
+                <td className="text-dim">{infoQuery.data?.version ?? '-'}</td>
               </tr>
               <tr>
                 <td className="text-muted">database</td>
-                <td className="text-dim">backend/.oneagent/oneagent.db</td>
+                <td className="text-dim">{infoQuery.data?.database ?? '-'}</td>
               </tr>
             </tbody>
           </table>

@@ -1,6 +1,7 @@
-/** Automation API 客户端（结构化 schedule，不做自然语言解析）。 */
+/** Automation API：全部走共享 JSON-RPC WebSocket（结构化 schedule）。 */
 
-import { apiGet, apiPost } from './http'
+import { rpcClient } from '../rpc'
+import { RpcMethods } from '../rpc/methods'
 import type { Automation, AutomationKind } from './types'
 
 export interface CreateAutomationInput {
@@ -15,39 +16,51 @@ export interface CreateAutomationInput {
 }
 
 export async function listAutomations(): Promise<Automation[]> {
-  const data = await apiGet<{ automations: Automation[] }>('/api/automations')
+  const data = await rpcClient.call<{ automations: Automation[] }>(
+    RpcMethods.automationList,
+    {},
+  )
   return data.automations
 }
 
 export async function getAutomation(id: string): Promise<Automation> {
-  const data = await apiGet<{ automation: Automation }>(`/api/automations/${id}`)
+  const data = await rpcClient.call<{ automation: Automation }>(
+    RpcMethods.automationGet,
+    { automation_id: id },
+  )
   return data.automation
 }
 
 export async function createAutomation(
   input: CreateAutomationInput,
 ): Promise<Automation> {
-  const data = await apiPost<{ automation: Automation }>('/api/automations', input)
+  const data = await rpcClient.call<{ automation: Automation }>(
+    RpcMethods.automationCreate,
+    { ...input },
+  )
   return data.automation
 }
 
 export async function pauseAutomation(id: string): Promise<Automation> {
-  const data = await apiPost<{ automation: Automation }>(
-    `/api/automations/${id}/pause`,
+  const data = await rpcClient.call<{ automation: Automation }>(
+    RpcMethods.automationPause,
+    { automation_id: id },
   )
   return data.automation
 }
 
 export async function resumeAutomation(id: string): Promise<Automation> {
-  const data = await apiPost<{ automation: Automation }>(
-    `/api/automations/${id}/resume`,
+  const data = await rpcClient.call<{ automation: Automation }>(
+    RpcMethods.automationResume,
+    { automation_id: id },
   )
   return data.automation
 }
 
 export async function cancelAutomation(id: string): Promise<Automation> {
-  const data = await apiPost<{ automation: Automation }>(
-    `/api/automations/${id}/cancel`,
+  const data = await rpcClient.call<{ automation: Automation }>(
+    RpcMethods.automationCancel,
+    { automation_id: id },
   )
   return data.automation
 }

@@ -1,7 +1,10 @@
-/** Agent Server 地址（可通过 VITE_AGENT_SERVER_URL 覆盖）。 */
+/** Agent Server 地址与 WebSocket 地址（可通过 VITE_AGENT_SERVER_URL 覆盖）。 */
 
 export const SERVER_URL: string =
   (import.meta.env.VITE_AGENT_SERVER_URL as string | undefined) ??
   'http://127.0.0.1:8000'
 
 export const WS_URL: string = SERVER_URL.replace(/^http/, 'ws')
+
+/** 共享 JSON-RPC WebSocket 端点。 */
+export const RPC_URL: string = `${WS_URL}/rpc`

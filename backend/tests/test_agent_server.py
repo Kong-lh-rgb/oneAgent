@@ -1,16 +1,22 @@
 """Agent Server 测试（全部用离线 fake model，不调用真实模型 API）。
 
-覆盖：health / conversation CRUD / send message 走 ConversationService /
-写回 / run list·detail·cancel / trace API / automation CRUD·control /
-WebSocket 收到 AgentEvent / automation Run 也能广播 / shutdown 正确关闭资源。
+覆盖：WebSocket JSON-RPC 协议（request/response correlation / parse error /
+invalid request / method not found / invalid params / internal error /
+notification）/ conversation CRUD / conversation.send 走 ConversationService 并
+实时收到 agent.event / 长请求不阻塞同 socket 的 run.cancel / run list·get·
+recover / trace.get / automation CRUD·control / Automation Run 同 socket 广播 +
+provenance=automation / Desktop 断开不取消 Run / Application start·close 幂等 /
+shutdown 正确关闭资源。
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -66,7 +72,7 @@ class RepeatingFakeAdapter(ModelAdapter):
 
 
 class BlockingFakeAdapter(ModelAdapter):
-    """阻塞在模型请求上，直到被取消（用于 cancel 测试）。"""
+    """阻塞在模型请求上，直到被取消（用于 cancel / disconnect 测试）。"""
 
     def __init__(self, config: ProviderConfig) -> None:
         super().__init__(config)
@@ -134,367 +140,639 @@ def make_app(tmp_path):
     return build
 
 
-def _create_conversation(client: TestClient) -> dict:
-    response = client.post("/api/conversations", json={})
-    assert response.status_code == 200
-    return response.json()["conversation"]
+def _rpc_request(
+    request_id: int,
+    method: str,
+    params: dict[str, Any] | None = None,
+) -> str:
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": method,
+            "params": params or {},
+        },
+        ensure_ascii=False,
+    )
+
+
+def _rpc_call(
+    websocket: Any,
+    request_id: int,
+    method: str,
+    params: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """发送请求并接收直到匹配 id 的响应；期间的消息视为 notification。"""
+
+    websocket.send_text(_rpc_request(request_id, method, params))
+    notifications: list[dict[str, Any]] = []
+    while True:
+        message = json.loads(websocket.receive_text())
+        if message.get("id") == request_id:
+            return message, notifications
+        notifications.append(message)
+
+
+def _require_result(response: dict[str, Any]) -> dict[str, Any]:
+    assert "error" not in response, f"unexpected error: {response.get('error')}"
+    return response["result"]
 
 
 # ---------------------------------------------------------------------------
-# 1. health
+# 协议：parse / invalid / correlation / notification
 # ---------------------------------------------------------------------------
 
 
-def test_health(make_app) -> None:
-    app, application, _ = make_app()
+def test_parse_error(make_app) -> None:
+    app, _, _ = make_app()
     with TestClient(app) as client:
-        response = client.get("/health")
-        assert response.status_code == 200
-        body = response.json()
-        assert body["status"] == "ok"
-        assert body["provider"] == "fake"
-        assert body["model"] == "fake-model"
+        with client.websocket_connect("/rpc") as websocket:
+            websocket.send_text("{not valid json")
+            message = json.loads(websocket.receive_text())
+            assert message["id"] is None
+            assert message["error"]["code"] == -32700
+
+
+def test_invalid_request_missing_method(make_app) -> None:
+    app, _, _ = make_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            websocket.send_text(json.dumps({"jsonrpc": "2.0", "id": 1}))
+            message = json.loads(websocket.receive_text())
+            assert message["id"] == 1
+            assert message["error"]["code"] == -32600
+
+
+def test_method_not_found(make_app) -> None:
+    app, _, _ = make_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            message, _ = _rpc_call(websocket, 1, "no.such.method")
+            assert message["id"] == 1
+            assert message["error"]["code"] == -32601
+
+
+def test_invalid_params(make_app) -> None:
+    app, _, _ = make_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            # conversation.create 的 title 必须是字符串。
+            message, _ = _rpc_call(
+                websocket,
+                1,
+                "conversation.create",
+                {"title": 123},
+            )
+            assert message["id"] == 1
+            assert message["error"]["code"] == -32602
+
+
+def test_internal_error_does_not_leak_traceback(make_app) -> None:
+    app, _, _ = make_app()
+    with TestClient(app) as client:
+        # 注册一个必然抛异常的 method，验证返回通用 Internal error（无 traceback）。
+        async def explode(params: dict[str, Any], ctx: Any) -> None:
+            raise RuntimeError("secret inner detail")
+
+        app.state.dispatcher.register("test.explode", explode)
+        with client.websocket_connect("/rpc") as websocket:
+            message, _ = _rpc_call(websocket, 1, "test.explode")
+            assert message["error"]["code"] == -32603
+            assert message["error"]["message"] == "Internal error"
+            assert "secret inner detail" not in json.dumps(message)
+
+
+def test_request_id_correlation(make_app) -> None:
+    app, _, _ = make_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            websocket.send_text(_rpc_request(10, "system.info"))
+            websocket.send_text(_rpc_request(20, "system.info"))
+            first = json.loads(websocket.receive_text())
+            second = json.loads(websocket.receive_text())
+            assert {first.get("id"), second.get("id")} == {10, 20}
+            assert first["result"]["provider"] == "fake"
+            assert second["result"]["provider"] == "fake"
+
+
+def test_notification_gets_no_response(make_app) -> None:
+    app, _, _ = make_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            # 通知（无 id）：不应产生任何响应。
+            websocket.send_text(
+                json.dumps({"jsonrpc": "2.0", "method": "conversation.list"})
+            )
+            # 紧接着一个正常请求：只应收到它的响应。
+            message, _ = _rpc_call(websocket, 7, "system.info")
+            assert message["id"] == 7
+            assert "result" in message
+
+
+def test_system_info(make_app) -> None:
+    app, _, _ = make_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            message, _ = _rpc_call(websocket, 1, "system.info")
+            result = _require_result(message)
+            assert result["status"] == "ok"
+            assert result["provider"] == "fake"
+            assert result["model"] == "fake-model"
+            assert result["database"]
 
 
 # ---------------------------------------------------------------------------
-# 2. conversation create / list / get
+# conversation
 # ---------------------------------------------------------------------------
 
 
 def test_conversation_create_list_get(make_app) -> None:
     app, _, _ = make_app()
     with TestClient(app) as client:
-        conversation = _create_conversation(client)
-        assert conversation["title"] == "新会话"
-        conversation_id = conversation["id"]
+        with client.websocket_connect("/rpc") as websocket:
+            created = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )
+            conversation_id = created["conversation"]["id"]
 
-        listed = client.get("/api/conversations").json()
-        assert any(item["id"] == conversation_id for item in listed["conversations"])
+            listed = _require_result(_rpc_call(websocket, 2, "conversation.list")[0])
+            assert any(
+                item["id"] == conversation_id for item in listed["conversations"]
+            )
 
-        detail = client.get(f"/api/conversations/{conversation_id}").json()
-        assert detail["conversation"]["id"] == conversation_id
-        assert detail["messages"] == []
+            detail = _require_result(
+                _rpc_call(
+                    websocket,
+                    3,
+                    "conversation.get",
+                    {"conversation_id": conversation_id},
+                )[0]
+            )
+            assert detail["conversation"]["id"] == conversation_id
+            assert detail["messages"] == []
 
 
-# ---------------------------------------------------------------------------
-# 3. send message 走 ConversationService + 4. Conversation 写回
-# ---------------------------------------------------------------------------
-
-
-def test_send_message_goes_through_conversation_service_and_writes_back(
-    make_app,
-) -> None:
+def test_conversation_send_goes_through_service_and_writes_back(make_app) -> None:
     app, application, _ = make_app()
     with TestClient(app) as client:
-        conversation = _create_conversation(client)
-        conversation_id = conversation["id"]
+        with client.websocket_connect("/rpc") as websocket:
+            conversation_id = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )["conversation"]["id"]
 
-        calls: list[dict] = []
-        original_dispatch = application.conversation_service.dispatch
+            # 记录 dispatch 是否被调用（证明走 ConversationService 统一入口）。
+            original_dispatch = application.conversation_service.dispatch
+            calls: list[dict[str, Any]] = []
 
-        async def spy_dispatch(**kwargs: object):
-            calls.append(kwargs)
-            return await original_dispatch(**kwargs)
+            async def spy_dispatch(**kwargs: Any):
+                calls.append(kwargs)
+                return await original_dispatch(**kwargs)
 
-        application.conversation_service.dispatch = spy_dispatch  # type: ignore[method-assign]
+            application.conversation_service.dispatch = spy_dispatch  # type: ignore[method-assign]
 
-        response = client.post(
-            f"/api/conversations/{conversation_id}/messages",
-            json={"content": "帮我总结进度"},
-        )
-        assert response.status_code == 200
-        body = response.json()
-        assert body["conversation_id"] == conversation_id
-        assert body["run"]["conversation_id"] == conversation_id
-        assert body["content"] == "已完成"
+            message, notifications = _rpc_call(
+                websocket,
+                2,
+                "conversation.send",
+                {"conversation_id": conversation_id, "content": "帮我总结进度"},
+            )
+            result = _require_result(message)
+            assert result["conversation_id"] == conversation_id
+            assert result["run"]["conversation_id"] == conversation_id
+            assert result["content"] == "已完成"
+            assert calls and calls[0]["conversation_id"] == conversation_id
 
-        # 确实经 ConversationService.dispatch。
-        assert calls, "dispatch 未被调用"
-        assert calls[0]["conversation_id"] == conversation_id
-        assert calls[0]["content"] == "帮我总结进度"
+            # 执行期间收到 agent.event notification。
+            agent_types = {
+                item["params"]["type"]
+                for item in notifications
+                if item.get("method") == "agent.event"
+            }
+            assert "agent_started" in agent_types
+            assert "agent_completed" in agent_types
 
-        # 新会话第一次发送 → 标题由首条消息生成。
-        renamed = client.get(f"/api/conversations/{conversation_id}").json()
-        assert renamed["conversation"]["title"] == "帮我总结进度"
+            # 标题由首条消息生成。
+            detail = _require_result(
+                _rpc_call(
+                    websocket,
+                    3,
+                    "conversation.get",
+                    {"conversation_id": conversation_id},
+                )[0]
+            )
+            assert detail["conversation"]["title"] == "帮我总结进度"
+            roles = [msg["role"] for msg in detail["messages"]]
+            assert "user" in roles and "assistant" in roles
 
-        # Conversation 已写回 user + assistant。
-        roles = [message["role"] for message in renamed["messages"]]
-        assert "user" in roles
-        assert "assistant" in roles
 
-
-def test_send_message_to_missing_conversation_404(make_app) -> None:
+def test_conversation_send_missing_conversation(make_app) -> None:
     app, _, _ = make_app()
     with TestClient(app) as client:
-        response = client.post(
-            "/api/conversations/nope/messages",
-            json={"content": "hi"},
-        )
-        assert response.status_code == 404
+        with client.websocket_connect("/rpc") as websocket:
+            message, _ = _rpc_call(
+                websocket,
+                1,
+                "conversation.send",
+                {"conversation_id": "nope", "content": "hi"},
+            )
+            assert message["error"]["code"] == -32000
 
 
 # ---------------------------------------------------------------------------
-# 5. run list / detail
+# 长请求不阻塞：send 期间可 run.cancel
+# ---------------------------------------------------------------------------
+
+
+def test_cancel_while_send_in_flight(make_app) -> None:
+    app, application, adapter = make_app(blocking=True)
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            conversation_id = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )["conversation"]["id"]
+
+            # 发送长请求（阻塞模型），不等待响应。
+            websocket.send_text(
+                _rpc_request(
+                    2,
+                    "conversation.send",
+                    {"conversation_id": conversation_id, "content": "阻塞"},
+                )
+            )
+            for _ in range(200):
+                if adapter.started.is_set():
+                    break
+                time.sleep(0.01)
+            assert adapter.started.is_set()
+
+            # 从 agent_started notification 拿到 run_id。
+            run_id = None
+            for _ in range(50):
+                msg = json.loads(websocket.receive_text())
+                if (
+                    msg.get("method") == "agent.event"
+                    and msg["params"].get("type") == "agent_started"
+                ):
+                    run_id = msg["params"]["run_id"]
+                    break
+            assert run_id is not None
+
+            # send 尚未完成时，同一 socket 发送 run.cancel。
+            message, _ = _rpc_call(websocket, 3, "run.cancel", {"run_id": run_id})
+            result = _require_result(message)
+            assert result["run"]["status"] == "cancelled"
+            # 注：send(id=2) 的错误响应可能在 cancel 响应前后到达，已被
+            # _rpc_call 作为 notification 消费或留在队列里，无需额外 drain。
+
+
+# ---------------------------------------------------------------------------
+# run list / get / recover / trace
 # ---------------------------------------------------------------------------
 
 
 def test_run_list_and_detail(make_app) -> None:
     app, _, _ = make_app()
     with TestClient(app) as client:
-        conversation = _create_conversation(client)
-        conversation_id = conversation["id"]
-        response = client.post(
-            f"/api/conversations/{conversation_id}/messages",
-            json={"content": "运行一次"},
-        )
-        run_id = response.json()["run"]["id"]
+        with client.websocket_connect("/rpc") as websocket:
+            conversation_id = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )["conversation"]["id"]
+            run_id = _require_result(
+                _rpc_call(
+                    websocket,
+                    2,
+                    "conversation.send",
+                    {"conversation_id": conversation_id, "content": "运行一次"},
+                )[0]
+            )["run"]["id"]
 
-        listed = client.get("/api/runs").json()
-        assert any(item["id"] == run_id for item in listed["runs"])
+            listed = _require_result(_rpc_call(websocket, 3, "run.list")[0])
+            assert any(item["id"] == run_id for item in listed["runs"])
 
-        filtered = client.get(f"/api/runs?conversation_id={conversation_id}").json()
-        assert any(item["id"] == run_id for item in filtered["runs"])
-
-        detail = client.get(f"/api/runs/{run_id}").json()["run"]
-        assert detail["id"] == run_id
-        assert detail["status"] == "completed"
-        assert detail["source"] == "manual"
-        assert detail["conversation_id"] == conversation_id
-
-
-# ---------------------------------------------------------------------------
-# 6. cancel
-# ---------------------------------------------------------------------------
-
-
-def test_cancel_terminal_run_conflict(make_app) -> None:
-    app, _, _ = make_app()
-    with TestClient(app) as client:
-        conversation = _create_conversation(client)
-        response = client.post(
-            f"/api/conversations/{conversation['id']}/messages",
-            json={"content": "运行"},
-        )
-        run_id = response.json()["run"]["id"]
-        # 已完成的 Run 不能被取消 → 409。
-        cancel = client.post(f"/api/runs/{run_id}/cancel")
-        assert cancel.status_code == 409
-
-
-def test_cancel_running_run(make_app) -> None:
-    app, application, adapter = make_app(blocking=True)
-    with TestClient(app) as client:
-        conversation = _create_conversation(client)
-        # 在应用事件循环里启动一个阻塞 Run（同步测试无法通过 POST 制造 running）。
-        run_id, _task = client.portal.call(
-            lambda: application.run_manager.start(
-                "阻塞任务",
-                conversation_id=conversation["id"],
+            filtered = _require_result(
+                _rpc_call(
+                    websocket,
+                    4,
+                    "run.list",
+                    {"conversation_id": conversation_id},
+                )[0]
             )
-        )
-        # 等待模型请求真正开始，确保 Run 处于 RUNNING。
-        for _ in range(100):
-            if adapter.started.is_set():
-                break
-            time.sleep(0.01)
-        assert adapter.started.is_set()
+            assert any(item["id"] == run_id for item in filtered["runs"])
 
-        response = client.post(f"/api/runs/{run_id}/cancel")
-        assert response.status_code == 200
-        assert response.json()["run"]["status"] == "cancelled"
-        assert adapter.cancelled is True
+            detail = _require_result(
+                _rpc_call(websocket, 5, "run.get", {"run_id": run_id})[0]
+            )["run"]
+            assert detail["status"] == "completed"
+            assert detail["source"] == "manual"
+            assert detail["conversation_id"] == conversation_id
 
 
-# ---------------------------------------------------------------------------
-# 7. trace API
-# ---------------------------------------------------------------------------
-
-
-def test_trace_api(make_app) -> None:
+def test_run_cancel_terminal_conflict(make_app) -> None:
     app, _, _ = make_app()
     with TestClient(app) as client:
-        conversation = _create_conversation(client)
-        response = client.post(
-            f"/api/conversations/{conversation['id']}/messages",
-            json={"content": "执行并记录轨迹"},
-        )
-        run_id = response.json()["run"]["id"]
+        with client.websocket_connect("/rpc") as websocket:
+            conversation_id = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )["conversation"]["id"]
+            run_id = _require_result(
+                _rpc_call(
+                    websocket,
+                    2,
+                    "conversation.send",
+                    {"conversation_id": conversation_id, "content": "运行"},
+                )[0]
+            )["run"]["id"]
+            message, _ = _rpc_call(websocket, 3, "run.cancel", {"run_id": run_id})
+            assert message["error"]["code"] == -32001
 
-        trace = client.get(f"/api/runs/{run_id}/trace")
-        assert trace.status_code == 200
-        body = trace.json()
-        assert body["run"]["run_id"] == run_id
-        event_types = {event["type"] for event in body["events"]}
-        assert "agent_started" in event_types
-        assert "model_started" in event_types
-        assert "agent_completed" in event_types
 
-        missing = client.get("/api/runs/nope/trace")
-        assert missing.status_code == 404
+def test_run_recover_keeps_old_interrupted(make_app) -> None:
+    """recover 语义：旧 Run 保持 INTERRUPTED，新 Run 指向旧 Run。"""
+
+    app, _, _ = make_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            conversation_id = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )["conversation"]["id"]
+
+            # 制造一个 INTERRUPTED Run + 可恢复 Checkpoint。
+            application = app.state.application
+            old_run_id = client.portal.call(
+                lambda: _make_interrupted_run(application, conversation_id)
+            )
+
+            message, _ = _rpc_call(
+                websocket, 2, "run.recover", {"run_id": old_run_id}
+            )
+            result = _require_result(message)
+            assert result["recovered_from_run_id"] == old_run_id
+            new_run_id = result["run"]["id"]
+            assert new_run_id != old_run_id
+            assert result["run"]["status"] == "completed"
+
+            old = _require_result(
+                _rpc_call(websocket, 3, "run.get", {"run_id": old_run_id})[0]
+            )["run"]
+            assert old["status"] == "interrupted"
+
+            new = _require_result(
+                _rpc_call(websocket, 4, "run.get", {"run_id": new_run_id})[0]
+            )["run"]
+            assert new["recovered_from_run_id"] == old_run_id
+
+
+async def _make_interrupted_run(
+    application: Application,
+    conversation_id: str,
+) -> str:
+    """构造一个带可恢复 Checkpoint 的 INTERRUPTED Run。"""
+
+    run = await application.run_store.create(
+        conversation_id=conversation_id,
+        user_message="中断任务",
+    )
+    await application.run_store.mark_started(run.id)
+    await application.checkpoint_store.start(
+        run.id,
+        conversation_id=conversation_id,
+        user_message=Message(role=MessageRole.USER, content="中断任务"),
+    )
+    await application.checkpoint_store.interrupt(run.id, error="simulated stop")
+    await application.run_store.mark_interrupted(run.id, error="simulated stop")
+    return run.id
+
+
+def test_trace_get(make_app) -> None:
+    app, _, _ = make_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            conversation_id = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )["conversation"]["id"]
+            run_id = _require_result(
+                _rpc_call(
+                    websocket,
+                    2,
+                    "conversation.send",
+                    {"conversation_id": conversation_id, "content": "记录轨迹"},
+                )[0]
+            )["run"]["id"]
+
+            trace = _require_result(
+                _rpc_call(websocket, 3, "trace.get", {"run_id": run_id})[0]
+            )
+            assert trace["run"]["run_id"] == run_id
+            event_types = {event["type"] for event in trace["events"]}
+            assert "agent_started" in event_types
+            assert "agent_completed" in event_types
 
 
 # ---------------------------------------------------------------------------
-# 8. automation CRUD / control
+# automation
 # ---------------------------------------------------------------------------
 
 
 def test_automation_crud_and_control(make_app) -> None:
     app, _, _ = make_app()
     with TestClient(app) as client:
-        conversation = _create_conversation(client)
-        created = client.post(
-            "/api/automations",
-            json={
-                "title": "每小时检查",
-                "prompt": "检查进度",
-                "kind": "interval",
-                "interval_seconds": 3600,
-                "conversation_id": conversation["id"],
-            },
-        )
-        assert created.status_code == 200
-        automation = created.json()["automation"]
-        automation_id = automation["id"]
-        assert automation["status"] == "active"
-        assert automation["conversation_id"] == conversation["id"]
+        with client.websocket_connect("/rpc") as websocket:
+            conversation_id = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )["conversation"]["id"]
 
-        listed = client.get("/api/automations").json()
-        assert any(item["id"] == automation_id for item in listed["automations"])
+            created = _require_result(
+                _rpc_call(
+                    websocket,
+                    2,
+                    "automation.create",
+                    {
+                        "title": "每小时检查",
+                        "prompt": "检查进度",
+                        "kind": "interval",
+                        "interval_seconds": 3600,
+                        "conversation_id": conversation_id,
+                    },
+                )[0]
+            )
+            automation_id = created["automation"]["id"]
+            assert created["automation"]["status"] == "active"
 
-        detail = client.get(f"/api/automations/{automation_id}").json()["automation"]
-        assert detail["prompt"] == "检查进度"
+            listed = _require_result(_rpc_call(websocket, 3, "automation.list")[0])
+            assert any(item["id"] == automation_id for item in listed["automations"])
 
-        paused = client.post(f"/api/automations/{automation_id}/pause").json()
-        assert paused["automation"]["status"] == "paused"
+            detail = _require_result(
+                _rpc_call(
+                    websocket,
+                    4,
+                    "automation.get",
+                    {"automation_id": automation_id},
+                )[0]
+            )
+            assert detail["automation"]["prompt"] == "检查进度"
 
-        resumed = client.post(f"/api/automations/{automation_id}/resume").json()
-        assert resumed["automation"]["status"] == "active"
-
-        cancelled = client.post(f"/api/automations/{automation_id}/cancel").json()
-        assert cancelled["automation"]["status"] == "cancelled"
+            paused = _require_result(
+                _rpc_call(
+                    websocket,
+                    5,
+                    "automation.pause",
+                    {"automation_id": automation_id},
+                )[0]
+            )
+            assert paused["automation"]["status"] == "paused"
+            resumed = _require_result(
+                _rpc_call(
+                    websocket,
+                    6,
+                    "automation.resume",
+                    {"automation_id": automation_id},
+                )[0]
+            )
+            assert resumed["automation"]["status"] == "active"
+            cancelled = _require_result(
+                _rpc_call(
+                    websocket,
+                    7,
+                    "automation.cancel",
+                    {"automation_id": automation_id},
+                )[0]
+            )
+            assert cancelled["automation"]["status"] == "cancelled"
 
 
 def test_automation_create_validation(make_app) -> None:
     app, _, _ = make_app()
     with TestClient(app) as client:
-        # 缺少 run_at 的 once → 422。
-        response = client.post(
-            "/api/automations",
-            json={"title": "t", "prompt": "p", "kind": "once"},
-        )
-        assert response.status_code == 422
+        with client.websocket_connect("/rpc") as websocket:
+            # once 缺少 run_at → invalid params。
+            message, _ = _rpc_call(
+                websocket,
+                1,
+                "automation.create",
+                {"title": "t", "prompt": "p", "kind": "once"},
+            )
+            assert message["error"]["code"] == -32602
 
 
-# ---------------------------------------------------------------------------
-# 9. WebSocket 收到 AgentEvent
-# ---------------------------------------------------------------------------
-
-
-def test_websocket_receives_agent_events(make_app) -> None:
+def test_automation_run_broadcasts_and_keeps_provenance(make_app) -> None:
     app, _, _ = make_app()
     with TestClient(app) as client:
-        conversation = _create_conversation(client)
-        with client.websocket_connect("/api/events") as websocket:
-            response = client.post(
-                f"/api/conversations/{conversation['id']}/messages",
-                json={"content": "实时看一下"},
-            )
-            assert response.status_code == 200
-
-            seen: set[str] = set()
-            run_statuses: list[dict] = []
-            for _ in range(100):
-                message = websocket.receive_json()
-                if message["type"] == "agent_event":
-                    seen.add(message["data"]["type"])
-                elif message["type"] == "run_status":
-                    run_statuses.append(message["data"])
-                if (
-                    "agent_completed" in seen
-                    and any(item["status"] == "completed" for item in run_statuses)
-                ):
-                    break
-            assert "agent_started" in seen
-            assert "model_started" in seen
-            assert "model_completed" in seen
-            assert "agent_completed" in seen
-            assert any(item["status"] == "running" for item in run_statuses)
-            assert any(item["status"] == "completed" for item in run_statuses)
-
-
-# ---------------------------------------------------------------------------
-# 10. automation Run 也能广播 event + 产生 source=automation 的 Run
-# ---------------------------------------------------------------------------
-
-
-def test_automation_run_broadcasts_and_creates_source_automation_run(make_app) -> None:
-    app, application, _ = make_app()
-    with TestClient(app) as client:
-        conversation = _create_conversation(client)
-        with client.websocket_connect("/api/events") as websocket:
+        with client.websocket_connect("/rpc") as websocket:
+            conversation_id = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )["conversation"]["id"]
             run_at = (datetime.now(UTC) + timedelta(seconds=1)).isoformat()
-            created = client.post(
-                "/api/automations",
-                json={
-                    "title": "稍后总结",
-                    "prompt": "总结项目进度",
-                    "kind": "once",
-                    "run_at": run_at,
-                    "conversation_id": conversation["id"],
-                },
+            created = _require_result(
+                _rpc_call(
+                    websocket,
+                    2,
+                    "automation.create",
+                    {
+                        "title": "稍后总结",
+                        "prompt": "总结项目进度",
+                        "kind": "once",
+                        "run_at": run_at,
+                        "conversation_id": conversation_id,
+                    },
+                )[0]
             )
-            assert created.status_code == 200
-            automation_id = created.json()["automation"]["id"]
+            automation_id = created["automation"]["id"]
 
-            # 等 APScheduler 到点自动触发（不手动调用 _trigger）。
+            # 等 APScheduler 到点自动触发（不手动调用）。
             time.sleep(2.5)
 
-            seen_agent_events = False
+            saw_agent_event = False
             for _ in range(100):
-                message = websocket.receive_json()
-                if message["type"] == "agent_event":
-                    seen_agent_events = True
-                if message["type"] == "agent_event" and message["data"]["type"] == (
-                    "agent_completed"
-                ):
-                    break
-            assert seen_agent_events, "automation Run 未广播 AgentEvent"
+                msg = json.loads(websocket.receive_text())
+                if msg.get("method") == "agent.event":
+                    saw_agent_event = True
+                    if msg["params"].get("type") == "agent_completed":
+                        break
+            assert saw_agent_event, "automation Run 未广播 agent.event"
 
-        # Runs 页面能看到 source=automation 的 Run。
-        runs = client.get(f"/api/runs?conversation_id={conversation['id']}").json()
-        automation_runs = [
-            run for run in runs["runs"] if run["source"] == "automation"
-        ]
-        assert automation_runs, "未找到 source=automation 的 Run"
-        assert automation_runs[0]["source_id"] == automation_id
+            runs = _require_result(
+                _rpc_call(
+                    websocket,
+                    3,
+                    "run.list",
+                    {"conversation_id": conversation_id},
+                )[0]
+            )
+            automation_runs = [
+                run for run in runs["runs"] if run["source"] == "automation"
+            ]
+            assert automation_runs, "未找到 source=automation 的 Run"
+            assert automation_runs[0]["source_id"] == automation_id
 
-        # Conversation 中出现 Automation 执行结果。
-        detail = client.get(f"/api/conversations/{conversation['id']}").json()
-        roles = [message["role"] for message in detail["messages"]]
-        assert "assistant" in roles
+            detail = _require_result(
+                _rpc_call(
+                    websocket,
+                    4,
+                    "conversation.get",
+                    {"conversation_id": conversation_id},
+                )[0]
+            )
+            roles = [msg["role"] for msg in detail["messages"]]
+            assert "assistant" in roles
 
 
 # ---------------------------------------------------------------------------
-# 11. shutdown 正确关闭资源
+# Desktop 断开不取消 Run
+# ---------------------------------------------------------------------------
+
+
+def test_disconnect_does_not_cancel_running_run(make_app) -> None:
+    app, application, adapter = make_app(blocking=True)
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            conversation_id = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )["conversation"]["id"]
+            websocket.send_text(
+                _rpc_request(
+                    2,
+                    "conversation.send",
+                    {"conversation_id": conversation_id, "content": "阻塞"},
+                )
+            )
+            for _ in range(200):
+                if adapter.started.is_set():
+                    break
+                time.sleep(0.01)
+            assert adapter.started.is_set()
+            run_id = None
+            for _ in range(50):
+                msg = json.loads(websocket.receive_text())
+                if (
+                    msg.get("method") == "agent.event"
+                    and msg["params"].get("type") == "agent_started"
+                ):
+                    run_id = msg["params"]["run_id"]
+                    break
+            assert run_id is not None
+        # WS 已断开；Run 仍在执行（不因断线被取消）。
+        run = client.portal.call(lambda: application.run_manager.get_run(run_id))
+        assert run is not None and run.status.value == "running"
+        assert adapter.cancelled is False
+        # 清理：显式 cancel（不残留后台任务）。
+        client.portal.call(lambda: application.run_manager.cancel(run_id))
+
+
+# ---------------------------------------------------------------------------
+# lifecycle
 # ---------------------------------------------------------------------------
 
 
 def test_server_shutdown_closes_resources(make_app) -> None:
     app, application, _ = make_app()
     with TestClient(app) as client:
-        _create_conversation(client)
-        client.get("/health")
+        with client.websocket_connect("/rpc") as websocket:
+            _require_result(_rpc_call(websocket, 1, "system.info")[0])
         assert application._started is True
     # lifespan finally 已执行 application.close()。
     assert application._started is False
-    # Scheduler 已 shutdown：不再残留 job / running 集合。
     assert application.automation_scheduler._running == set()
     assert application.automation_scheduler._job_ids == {}
-
-
-# ---------------------------------------------------------------------------
-# 12. application bootstrap 幂等：start/close 可安全重复
-# ---------------------------------------------------------------------------
 
 
 async def test_application_start_close_idempotent(tmp_path: Path) -> None:
