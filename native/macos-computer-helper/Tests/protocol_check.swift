@@ -434,17 +434,22 @@ do {
         (typeEmpty["result"] as? [String: Any])?["characters"] as? Int == 0
     )
 
-    // 19b. type_text 非空：未授权 → accessibility_permission_required；
-    //      已授权 → 返回 characters。
-    let typeRes = try request([
-        "id": 62, "method": "type_text", "params": ["text": "Hi"]
-    ])
+    // 19b. type_text 非空：未授权时验证权限错误；已授权时只走测试成功入口，
+    //      默认自动测试绝不向用户当前焦点发送真实文本。
     if trusted == true {
+        let typeRes = try request([
+            "id": 62,
+            "method": "__test_type_success",
+            "params": ["text": "Hi"],
+        ])
         check(
-            "type_text(已授权) characters == 2",
+            "type_text 测试成功入口 characters == 2",
             (typeRes["result"] as? [String: Any])?["characters"] as? Int == 2
         )
     } else {
+        let typeRes = try request([
+            "id": 62, "method": "type_text", "params": ["text": "Hi"]
+        ])
         check(
             "type_text 未授权 → accessibility_permission_required",
             (typeRes["error"] as? [String: Any])?["code"] as? String
@@ -473,11 +478,173 @@ do {
         "type_text 后仍能 ping",
         (afterTypePing["result"] as? [String: Any])?["ok"] as? Bool == true
     )
+
+    // 22. __test_key_logic：纯 key / modifier 映射，不发送真实键盘事件。
+    let keyLogic = try request([
+        "id": 70, "method": "__test_key_logic", "params": [:]
+    ])
+    let kLogic = keyLogic["result"] as? [String: Any]
+    check("全部 V1 key 都有映射", kLogic?["all_supported"] as? Bool == true)
+    let keyCodes = kLogic?["key_codes"] as? [String: Any]
+    let expectedKeyCodes: [String: Int] = [
+        "enter": 36, "return": 36, "tab": 48, "escape": 53,
+        "space": 49, "backspace": 51, "delete": 117,
+        "left": 123, "right": 124, "up": 126, "down": 125,
+        "a": 0, "b": 11, "c": 8, "d": 2, "e": 14, "f": 3,
+        "g": 5, "h": 4, "i": 34, "j": 38, "k": 40, "l": 37,
+        "m": 46, "n": 45, "o": 31, "p": 35, "q": 12, "r": 15,
+        "s": 1, "t": 17, "u": 32, "v": 9, "w": 13, "x": 7,
+        "y": 16, "z": 6,
+        "0": 29, "1": 18, "2": 19, "3": 20, "4": 21,
+        "5": 23, "6": 22, "7": 26, "8": 28, "9": 25,
+    ]
+    check(
+        "key → CGKeyCode 显式映射正确",
+        expectedKeyCodes.allSatisfy { key, code in
+            keyCodes?[key] as? Int == code
+        }
+    )
+    let supportRows = kLogic?["supported"] as? [[String: Any]]
+    let f5Row = supportRows?.first { $0["key"] as? String == "f5" }
+    check("F5 不受支持", f5Row?["supported"] as? Bool == false)
+    let modifierRows = kLogic?["modifiers"] as? [[String: Any]]
+    func normalizedModifier(_ input: String) -> String? {
+        modifierRows?.first { $0["input"] as? String == input }?["normalized"]
+            as? String
+    }
+    check("cmd → command", normalizedModifier("cmd") == "command")
+    check("ctrl → control", normalizedModifier("ctrl") == "control")
+    check("alt → option", normalizedModifier("alt") == "option")
+    check("未知 modifier 不规范化", normalizedModifier("bogus") == "")
+    check(
+        "重复 modifier 去重并保序",
+        kLogic?["dedupe"] as? [String] == ["command", "shift"]
+    )
+
+    // 23. key_press 参数/错误语义。全部错误都在权限检查和事件发送之前返回。
+    let keyMissing = try request([
+        "id": 71, "method": "key_press", "params": [:]
+    ])
+    check(
+        "key_press 缺 key → invalid_params",
+        (keyMissing["error"] as? [String: Any])?["code"] as? String
+            == "invalid_params"
+    )
+    let keyUnsupported = try request([
+        "id": 72, "method": "key_press", "params": ["key": "f5"]
+    ])
+    check(
+        "key_press 未支持 key → unsupported_key",
+        (keyUnsupported["error"] as? [String: Any])?["code"] as? String
+            == "unsupported_key"
+    )
+    let invalidModifier = try request([
+        "id": 73,
+        "method": "key_press",
+        "params": ["key": "a", "modifiers": ["fn"]],
+    ])
+    check(
+        "key_press 未知 modifier → invalid_modifier",
+        (invalidModifier["error"] as? [String: Any])?["code"] as? String
+            == "invalid_modifier"
+    )
+    let invalidModifierShape = try request([
+        "id": 74,
+        "method": "key_press",
+        "params": ["key": "a", "modifiers": "command"],
+    ])
+    check(
+        "key_press modifiers 非数组 → invalid_params",
+        (invalidModifierShape["error"] as? [String: Any])?["code"] as? String
+            == "invalid_params"
+    )
+    if trusted == false {
+        let keyPermission = try request([
+            "id": 75,
+            "method": "key_press",
+            "params": ["key": "enter", "modifiers": []],
+        ])
+        check(
+            "key_press 未授权 → accessibility_permission_required",
+            (keyPermission["error"] as? [String: Any])?["code"] as? String
+                == "accessibility_permission_required"
+        )
+    } else {
+        check("已授权环境跳过真实 key_press，避免自动按键", true)
+    }
+
+    // 24. UI action cache 生命周期：成功清理、空 type/失败 action 不清理。
+    let typeCache = try request([
+        "id": 76,
+        "method": "__test_type_success",
+        "params": [
+            "text": "hello", "observation_id": "obs-type", "refs": ["e1"],
+        ],
+    ])
+    check(
+        "type_text 成功后清空 Observation cache",
+        (typeCache["result"] as? [String: Any])?["cache_cleared"] as? Bool
+            == true
+    )
+    let emptyTypeCache = try request([
+        "id": 77,
+        "method": "__test_type_success",
+        "params": [
+            "text": "", "observation_id": "obs-empty", "refs": ["e1"],
+        ],
+    ])
+    check(
+        "空 type_text 不清空 Observation cache",
+        (emptyTypeCache["result"] as? [String: Any])?["cache_cleared"] as? Bool
+            == false
+    )
+    let keyCache = try request([
+        "id": 78,
+        "method": "__test_key_success",
+        "params": [
+            "key": "a", "modifiers": ["command", "cmd"],
+            "observation_id": "obs-key", "refs": ["e1"],
+        ],
+    ])
+    let keyCacheResult = keyCache["result"] as? [String: Any]
+    check(
+        "key_press 成功后清空 Observation cache",
+        keyCacheResult?["cache_cleared"] as? Bool == true
+    )
+    check(
+        "key_press 成功返回 normalized modifiers",
+        keyCacheResult?["modifiers"] as? [String] == ["command"]
+    )
+
+    _ = try request([
+        "id": 79, "method": "__test_element_mapping",
+        "params": ["observation_id": "obs-failure", "refs": ["e1"]],
+    ])
+    _ = try request([
+        "id": 80, "method": "key_press", "params": ["key": "f5"]
+    ])
+    let cacheAfterFailure = try request([
+        "id": 81, "method": "__test_observation_cache", "params": [:]
+    ])
+    let cacheState = cacheAfterFailure["result"] as? [String: Any]
+    check(
+        "失败 key_press 不清空 Observation cache",
+        cacheState?["observation_id"] as? String == "obs-failure"
+            && cacheState?["refs"] as? [String] == ["e1"]
+    )
+
+    let afterKeyPing = try request([
+        "id": 82, "method": "ping", "params": [:]
+    ])
+    check(
+        "key_press 错误后 helper 仍能 ping",
+        (afterKeyPing["result"] as? [String: Any])?["ok"] as? Bool == true
+    )
 } catch {
     check("协议用例执行无异常", false, "\(error)")
 }
 
-// 22. stdin EOF → 正常退出
+// 25. stdin EOF → 正常退出
 try? stdinPipe.fileHandleForWriting.close()
 process.waitUntilExit()
 check("stdin EOF 后 exit code == 0", process.terminationStatus == 0)

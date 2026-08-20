@@ -5,6 +5,29 @@
 > 对架构调整和缺陷修复，应同时记录 Bad Case、影响、根因和修复结果，避免只记录最终功能。
 
 ---
+## 2026-08-20
+
+### 完成：macOS Computer V6 - Keyboard Key Input
+
+#### Bad Case
+- [x] `MacOSComputerRuntime.key()` 仍抛 `NotImplementedError`，现有 `computer_key` 虽已接入审批链却无法执行真实按键
+- [x] 中断草稿曾按 ASCII 偏移推导 a-z / 0-9 的 `CGKeyCode`，但 macOS ANSI 虚拟键码并不连续，会按错键
+- [x] V5 `type_text` 成功后没有使旧 Observation 失效，UI 已变化但旧 element ref 仍可能被继续使用
+- [x] 自动测试若直接调用已授权的 `type_text` / `key_press`，会污染用户当前焦点和键盘状态
+
+#### 实现结果
+- [x] Swift helper 新增 `key_press`：Accessibility 检查后创建成对 keyDown/keyUp，设置相同 `CGEventFlags` 并投递到 `cghidEventTap`
+- [x] 新增小型显式键位映射：enter/return、tab、escape、space、backspace、delete、方向键、a-z、0-9；未知键返回 `unsupported_key`
+- [x] modifier 支持 command/shift/option/control，并规范化 cmd/ctrl/alt、按首次出现顺序去重；未知值返回 `invalid_modifier`
+- [x] `MacOSComputerRuntime.key()` 校验 key 与字符串 tuple modifiers，调用 `key_press` 并构造 `ActionResult.KEY`
+- [x] `type_text` 非空成功与 `key_press` 成功统一调用 `clearObservationCache()`；空 type 和所有失败路径不清理
+- [x] 保持 `computer_key` Tool 与 HUMAN_APPROVAL 原链路不变；未实现 scroll、坐标点击、截图等范围外能力
+- [x] Python Stub 测试覆盖请求、modifier、metadata、错误传播、参数拒绝与既有操作回归
+- [x] Swift JSON 协议测试覆盖全部 key code、modifier/alias/去重、错误码与 Observation cache 生命周期，且不发送真实键盘事件
+- [x] Backend 全量验证：`pytest` 760 通过，`ruff` 与 `compileall` 通过；Swift `swift build` 与协议检查通过
+- [x] 已尝试 `swift test`；本机 Command Line Tools 不提供 XCTest/Testing 模块，继续沿用仓库既有 `Tests/protocol_check.swift` 自动测试入口
+
+---
 ## 2026-08-19
 
 ### 完成：Desktop V0（Electron + React + TS + Vite ↔ Python Agent Server）

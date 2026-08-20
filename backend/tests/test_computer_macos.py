@@ -1,4 +1,4 @@
-"""MacOSComputerRuntime（V1 open_app + V2/V3 observe + V4 click + V5 type）测试。
+"""MacOSComputerRuntime（open_app / observe / click / type / key）测试。
 
 使用 stub HelperClient，不启动真实 GUI App、不调用 NSWorkspace /
 AXUIElement / AXPress / CGEvent、不需要 Accessibility / Screen Recording
@@ -32,7 +32,12 @@ V5 type：
 18. permission error 正确向上传播
 19. open_app / observe / click 不受影响
 
-其它 key/scroll/focus_window 仍然 NotImplementedError
+V6 key：
+20. key / modifiers 正确传给 key_press
+21. helper result 正确转成 ActionResult.KEY
+22. helper 错误向上传播，非法 Python 参数在本地拒绝
+
+其它 scroll/focus_window 仍然 NotImplementedError
 """
 
 from __future__ import annotations
@@ -599,6 +604,115 @@ async def test_type_does_not_break_others() -> None:
 
 
 # ---------------------------------------------------------------------------
+# V6 key（CGEvent keyDown/keyUp）
+# ---------------------------------------------------------------------------
+
+
+def _key_result(
+    key: str = "return",
+    modifiers: list[str] | None = None,
+) -> dict:
+    return {"key": key, "modifiers": modifiers or []}
+
+
+async def test_key_calls_key_press() -> None:
+    stub = StubHelperClient(result=_key_result())
+    runtime = _runtime(stub)
+
+    result = await runtime.key("enter")
+
+    assert stub.calls == [("key_press", {"key": "enter", "modifiers": []})]
+    assert result.success is True
+
+
+async def test_key_passes_modifiers_and_converts_action_result() -> None:
+    stub = StubHelperClient(result=_key_result("a", ["command", "shift"]))
+    runtime = _runtime(stub)
+
+    result = await runtime.key("a", ("cmd", "shift"))
+
+    assert stub.calls == [
+        ("key_press", {"key": "a", "modifiers": ["cmd", "shift"]})
+    ]
+    assert isinstance(result, ActionResult)
+    assert result.success is True
+    assert result.action is ActionName.KEY
+    assert result.metadata == {
+        "key": "a",
+        "modifiers": ["command", "shift"],
+    }
+
+
+@pytest.mark.parametrize(
+    "code",
+    ["unsupported_key", "accessibility_permission_required"],
+)
+async def test_key_helper_error_propagates(code: str) -> None:
+    stub = StubHelperClient(error=ComputerHelperError(f"{code}: test error"))
+    runtime = _runtime(stub)
+
+    with pytest.raises(ComputerHelperError, match=code):
+        await runtime.key("enter")
+
+
+@pytest.mark.parametrize("key", ["", "   ", None])
+async def test_key_rejects_empty_or_non_string_key(key: object) -> None:
+    stub = StubHelperClient(result=_key_result())
+    runtime = _runtime(stub)
+
+    with pytest.raises(ValueError, match="non-empty string"):
+        await runtime.key(key)  # type: ignore[arg-type]
+    assert stub.calls == []
+
+
+@pytest.mark.parametrize(
+    "modifiers",
+    [["command"], ("command", 1)],
+)
+async def test_key_rejects_invalid_modifier_tuple(
+    modifiers: object,
+) -> None:
+    stub = StubHelperClient(result=_key_result())
+    runtime = _runtime(stub)
+
+    with pytest.raises(ValueError, match="tuple of strings"):
+        await runtime.key("a", modifiers)  # type: ignore[arg-type]
+    assert stub.calls == []
+
+
+async def test_key_does_not_break_existing_operations() -> None:
+    stub = StubHelperClient(
+        per_method={
+            "observe": _observe_result(),
+            "click_element": _click_result(),
+            "type_text": _type_result(5),
+            "key_press": _key_result("tab"),
+            "open_app": {
+                "app": "TextEdit",
+                "bundle_id": "com.apple.TextEdit",
+                "process_id": 5,
+            },
+        }
+    )
+    runtime = _runtime(stub)
+
+    await runtime.observe()
+    await runtime.click(ElementTarget(observation_id="obs-1", element_ref="e1"))
+    await runtime.type("hello")
+    key_result = await runtime.key("tab")
+    await runtime.open_app("TextEdit")
+
+    assert key_result.action is ActionName.KEY
+    assert [method for method, _ in stub.calls] == [
+        "observe",
+        "click_element",
+        "type_text",
+        "key_press",
+        "open_app",
+    ]
+
+
+# ---------------------------------------------------------------------------
 # 其它方法仍然 NotImplementedError
 # ---------------------------------------------------------------------------
 
@@ -607,7 +721,6 @@ async def test_other_runtime_methods_still_not_implemented() -> None:
     runtime = _runtime(StubHelperClient(result={}))
 
     for coro in (
-        runtime.key("enter"),
         runtime.scroll(),
         runtime.focus_window("w1"),
     ):

@@ -1,9 +1,10 @@
-"""MacOSComputerRuntime：真实 macOS ComputerRuntime（V5）。
+"""MacOSComputerRuntime：真实 macOS ComputerRuntime（V6）。
 
 V5 实现 ``open_app``（NSWorkspace 打开应用）、``observe``（读取当前前台
 App / 窗口及其可交互 AX UI 元素）、``click``（ElementTarget → AXPress）与
-``type``（CGEvent Unicode 文本输入到当前焦点），其余契约方法
-（key/scroll/focus_window）仍抛 ``NotImplementedError``，不返回假的成功。
+``type``（CGEvent Unicode 文本输入到当前焦点）与 ``key``（CGEvent
+keyDown/keyUp），其余契约方法（scroll/focus_window）仍抛
+``NotImplementedError``，不返回假的成功。
 
 真实电脑控制（完整 AX Tree / ScreenCaptureKit / CGEvent 其余能力）留到后续
 轮次；FakeComputerRuntime 继续用于 Agent Tool 测试。
@@ -29,8 +30,8 @@ from .models import (
 __all__ = ["MacOSComputerRuntime"]
 
 _NOT_IMPLEMENTED = (
-    "macOS Computer Runtime 本轮只实现 open_app / observe / click / type"
-    "（AXPress / CGEvent 文本输入），该操作尚未实现真实电脑控制"
+    "macOS Computer Runtime 当前只实现 open_app / observe / click / type / key"
+    "（AXPress / CGEvent 键盘输入），该操作尚未实现真实电脑控制"
 )
 
 
@@ -239,7 +240,36 @@ class MacOSComputerRuntime:
         key: str,
         modifiers: tuple[str, ...] = (),
     ) -> ActionResult:
-        raise NotImplementedError(_NOT_IMPLEMENTED)
+        """发送一个物理按键语义的 CGEvent keyDown/keyUp（V6）。
+
+        ``computer_type`` 负责 Unicode 文本，``computer_key`` 只负责明确
+        键位与快捷键。键位、modifier 支持范围和规范化由 Swift helper
+        统一处理；helper 的 unsupported_key / invalid_modifier / 权限错误
+        继续以 ``ComputerHelperError`` 向上传播。
+        """
+
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError("'key' must be a non-empty string")
+        if not isinstance(modifiers, tuple) or not all(
+            isinstance(modifier, str) for modifier in modifiers
+        ):
+            raise ValueError("'modifiers' must be a tuple of strings")
+
+        result = await self.helper_client.call(
+            "key_press",
+            {
+                "key": key,
+                "modifiers": list(modifiers),
+            },
+        )
+        return ActionResult(
+            success=True,
+            action=ActionName.KEY,
+            metadata={
+                "key": result.get("key"),
+                "modifiers": result.get("modifiers", []),
+            },
+        )
 
     async def scroll(
         self,

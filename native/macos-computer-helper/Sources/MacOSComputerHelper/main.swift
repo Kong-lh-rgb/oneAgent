@@ -1,8 +1,9 @@
-// macOS Computer Helper V3 —— 长驻 subprocess。
+// macOS Computer Helper V6 —— 长驻 subprocess。
 //
 // 职责：从 stdin 按行读 JSON，向 stdout 按行写 JSON（JSON Lines 协议）。
 // 本轮实现 ping / system_info / open_app / accessibility_status /
-// basic_observe / observe（AX Element Observation）。
+// basic_observe / observe（AX Element Observation）、click_element（AXPress）、
+// type_text（CGEvent Unicode）与 key_press（CGEvent keyDown/keyUp）。
 //
 // 关键边界：
 // - stdout 只允许输出协议 JSON；日志一律写 stderr；
@@ -20,6 +21,7 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
+import MacOSComputerCore
 
 /// helper 版本号（system_info 返回）。
 private let helperVersion = "0.0.1"
@@ -881,13 +883,20 @@ func postUnicodeChunk(_ chunk: [UniChar]) -> Bool {
     return true
 }
 
+/// 成功输入文本后的响应 payload（同时使旧 Observation 失效）。
+/// 只有实际发送了事件才调用；空字符串不调用。
+func successfulTypePayload(_ text: String) -> [String: Any] {
+    clearObservationCache()
+    return ["characters": characterCount(text)]
+}
+
 /// 处理 type_text 请求（V5）。
 ///
 /// params: {"text": "..."}。向当前 macOS keyboard focus 输入文本
 /// （CGEvent Unicode，非 clipboard / pbcopy / Cmd+V / osascript）。
 ///
 /// - 缺/非字符串 text → invalid_params；
-/// - 空字符串 → {"characters": 0}（不制造系统事件）；
+/// - 空字符串 → {"characters": 0}（不制造系统事件，不清缓存）；
 /// - 未授权 Accessibility → accessibility_permission_required；
 /// - CGEvent 创建失败 → input_event_failed。
 func handleTypeText(params: Any?, id: Any?) {
@@ -941,7 +950,7 @@ func handleTypeText(params: Any?, id: Any?) {
 
     writeResponse([
         "id": id ?? NSNull(),
-        "result": ["characters": characterCount(text)],
+        "result": successfulTypePayload(text),
     ])
 }
 
@@ -963,6 +972,255 @@ func handleTestTypeLogic(params: Any?, id: Any?) {
                 ).count,
                 "chunk_size": 100,
             ],
+        ],
+    ])
+}
+
+// ---------------------------------------------------------------------------
+// V6：Keyboard Key Input（CGEvent keyDown/keyUp）
+// ---------------------------------------------------------------------------
+
+/// 成功按键后的响应 payload（同时使旧 Observation 失效）。
+func successfulKeyPayload(
+    normalizedKey: String,
+    modifiers: [String]
+) -> [String: Any] {
+    clearObservationCache()
+    return ["key": normalizedKey, "modifiers": modifiers]
+}
+
+/// 处理 key_press 请求（V6）。
+///
+/// params: {"key": "...", "modifiers": [...]}。发送 CGEvent keyDown/keyUp。
+func handleKeyPress(params: Any?, id: Any?) {
+    guard
+        let params = params as? [String: Any],
+        let key = params["key"] as? String,
+        !key.isEmpty
+    else {
+        writeResponse(
+            makeError(
+                id: id,
+                code: "invalid_params",
+                message: "missing or empty 'key'"
+            )
+        )
+        return
+    }
+
+    guard let code = keyCode(for: key) else {
+        writeResponse(
+            makeError(
+                id: id,
+                code: "unsupported_key",
+                message: "unsupported key: \(key)"
+            )
+        )
+        return
+    }
+
+    let rawModifiers: [String]
+    if let value = params["modifiers"] {
+        guard let parsed = value as? [String] else {
+            writeResponse(
+                makeError(
+                    id: id,
+                    code: "invalid_params",
+                    message: "'modifiers' must be an array of strings"
+                )
+            )
+            return
+        }
+        rawModifiers = parsed
+    } else {
+        rawModifiers = []
+    }
+    guard let mods = normalizeModifiers(rawModifiers) else {
+        writeResponse(
+            makeError(
+                id: id,
+                code: "invalid_modifier",
+                message: "unknown modifier in \(rawModifiers)"
+            )
+        )
+        return
+    }
+
+    guard AXIsProcessTrusted() else {
+        writeResponse(
+            makeError(
+                id: id,
+                code: "accessibility_permission_required",
+                message: "macOS Accessibility permission is required"
+            )
+        )
+        return
+    }
+
+    guard let source = CGEventSource(stateID: .combinedSessionState) else {
+        writeResponse(
+            makeError(
+                id: id,
+                code: "input_event_failed",
+                message: "failed to create CGEventSource"
+            )
+        )
+        return
+    }
+    guard let down = CGEvent(
+        keyboardEventSource: source,
+        virtualKey: code,
+        keyDown: true
+    ), let up = CGEvent(
+        keyboardEventSource: source,
+        virtualKey: code,
+        keyDown: false
+    ) else {
+        writeResponse(
+            makeError(
+                id: id,
+                code: "input_event_failed",
+                message: "failed to create keyDown/keyUp CGEvent"
+            )
+        )
+        return
+    }
+    down.flags = mods.flags
+    up.flags = mods.flags
+    down.post(tap: .cghidEventTap)
+    up.post(tap: .cghidEventTap)
+
+    writeResponse([
+        "id": id ?? NSNull(),
+        "result": successfulKeyPayload(
+            normalizedKey: normalizeKey(key),
+            modifiers: mods.normalized
+        ),
+    ])
+}
+
+/// 测试辅助：返回可独立验证的 key / modifier 纯逻辑（不发送真实键盘事件）。
+func handleTestKeyLogic(params: Any?, id: Any?) {
+    let namedKeys = [
+        "enter", "return", "tab", "escape", "space", "backspace", "delete",
+        "left", "right", "up", "down",
+    ]
+    let letterKeys = "abcdefghijklmnopqrstuvwxyz".map(String.init)
+    let digitKeys = "0123456789".map(String.init)
+    let supportedKeys = namedKeys + letterKeys + digitKeys
+    let supported: [[String: Any]] = [
+        ["key": "enter", "supported": keyCode(for: "enter") != nil],
+        ["key": "a", "supported": keyCode(for: "a") != nil],
+        ["key": "0", "supported": keyCode(for: "0") != nil],
+        ["key": "f5", "supported": keyCode(for: "f5") != nil],
+    ]
+    var keyCodes: [String: Int] = [:]
+    for key in supportedKeys {
+        if let code = keyCode(for: key) {
+            keyCodes[key] = Int(code)
+        }
+    }
+    let modifiers: [[String: Any]] = [
+        ["input": "cmd", "normalized": normalizeModifier("cmd") ?? ""],
+        ["input": "ctrl", "normalized": normalizeModifier("ctrl") ?? ""],
+        ["input": "alt", "normalized": normalizeModifier("alt") ?? ""],
+        ["input": "command", "normalized": normalizeModifier("command") ?? ""],
+        ["input": "bogus", "normalized": normalizeModifier("bogus") ?? ""],
+    ]
+    let keyNormalize: [[String: Any]] = [
+        ["input": "enter", "normalized": normalizeKey("enter")],
+        ["input": "RETURN", "normalized": normalizeKey("RETURN")],
+        ["input": "SPACE", "normalized": normalizeKey("SPACE")],
+    ]
+
+    var result: [String: Any] = [:]
+    result["supported"] = supported
+    result["key_codes"] = keyCodes
+    result["modifiers"] = modifiers
+    result["dedupe"] = normalizeModifiers(["command", "cmd", "shift"])?
+        .normalized ?? []
+    result["all_supported"] = keyCodes.count == supportedKeys.count
+    result["key_normalize"] = keyNormalize
+    writeResponse(["id": id ?? NSNull(), "result": result])
+}
+
+/// 用假的 AXUIElement 为测试建立 observation 映射（可选）。
+func seedFakeMapping(observationID: String?, refs: [String]) {
+    guard let observationID = observationID else { return }
+    let fake = AXUIElementCreateApplication(1)
+    var mapping: [String: AXUIElement] = [:]
+    for ref in refs { mapping[ref] = fake }
+    currentObservationID = observationID
+    currentElements = mapping
+}
+
+/// 测试辅助：模拟 type_text 成功后的清理（复用成功 payload，不发送事件）。
+func handleTestTypeSuccess(params: Any?, id: Any?) {
+    guard
+        let params = params as? [String: Any],
+        let text = params["text"] as? String
+    else {
+        writeResponse(
+            makeError(id: id, code: "invalid_params", message: "missing 'text'")
+        )
+        return
+    }
+    if let observationID = params["observation_id"] as? String {
+        seedFakeMapping(
+            observationID: observationID,
+            refs: (params["refs"] as? [String]) ?? []
+        )
+    }
+    var result: [String: Any]
+    if text.isEmpty {
+        result = ["characters": 0]
+    } else {
+        result = successfulTypePayload(text)
+    }
+    result["cache_cleared"] =
+        currentObservationID == nil && currentElements.isEmpty
+    writeResponse(["id": id ?? NSNull(), "result": result])
+}
+
+/// 测试辅助：模拟 key_press 成功后的清理（复用成功 payload，不发送事件）。
+func handleTestKeySuccess(params: Any?, id: Any?) {
+    guard
+        let params = params as? [String: Any],
+        let key = params["key"] as? String
+    else {
+        writeResponse(
+            makeError(id: id, code: "invalid_params", message: "missing 'key'")
+        )
+        return
+    }
+    if let observationID = params["observation_id"] as? String {
+        seedFakeMapping(
+            observationID: observationID,
+            refs: (params["refs"] as? [String]) ?? []
+        )
+    }
+    let modifiers = normalizeModifiers(
+        (params["modifiers"] as? [String]) ?? []
+    )?.normalized ?? []
+    var result = successfulKeyPayload(
+        normalizedKey: normalizeKey(key),
+        modifiers: modifiers
+    )
+    result["cache_cleared"] =
+        currentObservationID == nil && currentElements.isEmpty
+    writeResponse(["id": id ?? NSNull(), "result": result])
+}
+
+/// 测试辅助：只读当前 Observation cache 状态，不修改缓存。
+func handleTestObservationCache(params: Any?, id: Any?) {
+    let observationID: Any = currentObservationID.map { $0 as Any } ?? NSNull()
+    writeResponse([
+        "id": id ?? NSNull(),
+        "result": [
+            "observation_id": observationID,
+            "refs": Array(currentElements.keys).sorted(),
+            "cache_cleared":
+                currentObservationID == nil && currentElements.isEmpty,
         ],
     ])
 }
@@ -1024,6 +1282,21 @@ func handleRequest(_ payload: [String: Any]) {
 
     case "__test_type_logic":
         handleTestTypeLogic(params: payload["params"], id: id)
+
+    case "key_press":
+        handleKeyPress(params: payload["params"], id: id)
+
+    case "__test_key_logic":
+        handleTestKeyLogic(params: payload["params"], id: id)
+
+    case "__test_type_success":
+        handleTestTypeSuccess(params: payload["params"], id: id)
+
+    case "__test_key_success":
+        handleTestKeySuccess(params: payload["params"], id: id)
+
+    case "__test_observation_cache":
+        handleTestObservationCache(params: payload["params"], id: id)
 
     default:
         writeResponse(
