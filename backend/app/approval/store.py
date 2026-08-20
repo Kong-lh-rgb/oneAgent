@@ -154,9 +154,10 @@ class SQLiteApprovalStore:
         approval_id: str,
         status: ApprovalRequestStatus | str,
     ) -> ApprovalRequest:
-        """把 PENDING 审批原子地置为 APPROVED / DENIED（只能执行一次）。
+        """把 PENDING 审批原子地置为 APPROVED / DENIED / CANCELLED（只能一次）。
 
-        - 已 resolved（APPROVED / DENIED）的记录再调用会抛 ValueError；
+        - 已 resolved（APPROVED / DENIED / CANCELLED）的记录再调用会抛
+          ValueError（approve / deny 只能执行一次，resolved 不可再修改）；
         - 状态写入与读取在同一 ``BEGIN IMMEDIATE`` 事务内，并发下仍保证
           只有一个调用能真正 resolve。
         """
@@ -183,6 +184,73 @@ class SQLiteApprovalStore:
             )
             await database.commit()
         return await self.require(approval_id)
+
+    async def cancel_pending_for_run(self, run_id: str) -> int:
+        """把某 Run 下仍 PENDING 的审批全部置为 CANCELLED。
+
+        Run 被 cancel 时调用；返回取消的数量。已 resolved 的审批不受影响。
+        """
+
+        normalized = _required(run_id, "run_id")
+        async with self._connect() as database:
+            await database.execute("BEGIN IMMEDIATE")
+            cursor = await database.execute(
+                """
+                UPDATE approvals
+                SET status = ?, resolved_at = ?
+                WHERE run_id = ? AND status = ?
+                """,
+                (
+                    ApprovalRequestStatus.CANCELLED.value,
+                    _now(),
+                    normalized,
+                    ApprovalRequestStatus.PENDING.value,
+                ),
+            )
+            await database.commit()
+        return cursor.rowcount
+
+    async def reconcile_orphans(self, active_run_ids: set[str]) -> int:
+        """Host 启动时把没有对应活跃 Run 的 PENDING 审批置为 CANCELLED。
+
+        - run_id 不在 ``active_run_ids``（即对应 Run 已终态 / 不存在）；
+        - run_id 为 NULL（无法关联任何 Run）。
+        两者都视为孤儿审批。返回取消的数量。
+        """
+
+        async with self._connect() as database:
+            await database.execute("BEGIN IMMEDIATE")
+            if active_run_ids:
+                placeholders = ",".join("?" for _ in active_run_ids)
+                cursor = await database.execute(
+                    f"""
+                    UPDATE approvals
+                    SET status = ?, resolved_at = ?
+                    WHERE status = ?
+                      AND (run_id IS NULL OR run_id NOT IN ({placeholders}))
+                    """,
+                    (
+                        ApprovalRequestStatus.CANCELLED.value,
+                        _now(),
+                        ApprovalRequestStatus.PENDING.value,
+                        *active_run_ids,
+                    ),
+                )
+            else:
+                cursor = await database.execute(
+                    """
+                    UPDATE approvals
+                    SET status = ?, resolved_at = ?
+                    WHERE status = ?
+                    """,
+                    (
+                        ApprovalRequestStatus.CANCELLED.value,
+                        _now(),
+                        ApprovalRequestStatus.PENDING.value,
+                    ),
+                )
+            await database.commit()
+        return cursor.rowcount
 
     @asynccontextmanager
     async def _connect(self) -> AsyncIterator[aiosqlite.Connection]:

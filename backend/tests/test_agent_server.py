@@ -1263,7 +1263,11 @@ def test_plan_mode_send_reject_task(make_app) -> None:
                     ToolCall(
                         id="plan-1",
                         name="task_create",
-                        arguments={"title": "另一个计划"},
+                        arguments={
+                            "title": "另一个计划",
+                            "goal": "目标",
+                            "steps": [{"title": "第一步"}],
+                        },
                     ),
                 )
             ),

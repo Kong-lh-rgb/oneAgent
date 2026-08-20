@@ -20,10 +20,15 @@ export interface RpcClientOptions {
   socketFactory?: () => WebSocket
 }
 
+export interface RpcCallOptions {
+  /** 本次调用的超时（ms）。省略用客户端默认值；0 = 不设客户端超时（仍会因断线 reject）。 */
+  timeoutMs?: number
+}
+
 interface PendingRequest {
   resolve: (value: unknown) => void
   reject: (error: RpcError) => void
-  timer: ReturnType<typeof setTimeout>
+  timer: ReturnType<typeof setTimeout> | null
 }
 
 interface OpenWaiter {
@@ -143,14 +148,18 @@ export class RpcClient {
   // 请求 / 响应
   // ------------------------------------------------------------------
 
-  async call<T>(method: string, params?: Record<string, unknown>): Promise<T> {
+  async call<T>(
+    method: string,
+    params?: Record<string, unknown>,
+    options?: RpcCallOptions,
+  ): Promise<T> {
     if (!this.socket) {
       throw new RpcError(RpcErrorCode.NotConnected, 'not connected')
     }
     if (this.socket.readyState !== WS_OPEN) {
       await this.waitForOpen()
     }
-    return this.sendRequest<T>(method, params)
+    return this.sendRequest<T>(method, params, options?.timeoutMs)
   }
 
   private waitForOpen(): Promise<void> {
@@ -175,17 +184,26 @@ export class RpcClient {
     })
   }
 
-  private sendRequest<T>(method: string, params?: Record<string, unknown>): Promise<T> {
+  private sendRequest<T>(
+    method: string,
+    params?: Record<string, unknown>,
+    timeoutMs?: number,
+  ): Promise<T> {
     const id = this.nextId++
     const socket = this.socket
     if (!socket) {
       return Promise.reject(new RpcError(RpcErrorCode.NotConnected, 'not connected'))
     }
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id)
-        reject(new RpcError(RpcErrorCode.RequestTimeout, `request timeout: ${method}`))
-      }, this.requestTimeoutMs)
+      // 省略 timeoutMs → 客户端默认值；0 → 不设客户端超时（断线仍 reject）。
+      const effectiveTimeout = timeoutMs ?? this.requestTimeoutMs
+      let timer: ReturnType<typeof setTimeout> | null = null
+      if (effectiveTimeout !== 0) {
+        timer = setTimeout(() => {
+          this.pending.delete(id)
+          reject(new RpcError(RpcErrorCode.RequestTimeout, `request timeout: ${method}`))
+        }, effectiveTimeout)
+      }
       this.pending.set(id, {
         resolve: resolve as (value: unknown) => void,
         reject,
@@ -212,7 +230,7 @@ export class RpcClient {
     if (message.id !== undefined) {
       const pending = this.pending.get(message.id)
       if (!pending) return
-      clearTimeout(pending.timer)
+      if (pending.timer !== null) clearTimeout(pending.timer)
       this.pending.delete(message.id)
       if (message.error !== undefined) {
         pending.reject(
@@ -290,7 +308,7 @@ export class RpcClient {
     const entries = [...this.pending.values()]
     this.pending.clear()
     for (const entry of entries) {
-      clearTimeout(entry.timer)
+      if (entry.timer !== null) clearTimeout(entry.timer)
       entry.reject(error)
     }
   }

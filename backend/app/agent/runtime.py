@@ -96,6 +96,7 @@ _PLAN_MODE_SYSTEM_MESSAGE = (
 )
 
 _PLAN_NO_TASK_MESSAGE = "Plan mode finished without creating a task."
+_PLAN_NO_VALID_TASK_MESSAGE = "Plan mode finished without a valid pending task."
 
 
 class AgentRuntime:
@@ -604,10 +605,33 @@ class AgentRuntime:
             tool_calls_in_message = assistant_message.tool_calls
             if not tool_calls_in_message:
                 final_message = assistant_message
-                if mode is AgentMode.PLAN and not plan_task_created:
-                    # Plan Mode 未产生 Task：Run 正常完成，但明确提示。
-                    final_message = _plan_no_task_message(assistant_message)
-                    messages[-1] = final_message
+                if mode is AgentMode.PLAN:
+                    # Plan Mode 完成条件：不仅要 task_create/task_update 成功，
+                    # 还要最终重新读取 Task 并确认是有效的 PENDING 计划
+                    # （PENDING + goal 非空 + steps 非空 + 无 DONE/IN_PROGRESS 步骤）。
+                    plan_valid = False
+                    if (
+                        plan_task_id is not None
+                        and self._task_context_provider is not None
+                    ):
+                        plan_valid = (
+                            await self._task_context_provider.pending_plan_is_valid(
+                                conversation_id,
+                                plan_task_id,
+                            )
+                        )
+                    if not plan_valid:
+                        prefix = (
+                            _PLAN_NO_TASK_MESSAGE
+                            if not plan_task_created
+                            else _PLAN_NO_VALID_TASK_MESSAGE
+                        )
+                        final_message = _plan_failure_message(
+                            assistant_message,
+                            prefix,
+                        )
+                        plan_task_id = None
+                        messages[-1] = final_message
                 return self._result(
                     run_id=run_id,
                     final_message=final_message,
@@ -1399,12 +1423,11 @@ def _skill_read_activated_name(output: object) -> str | None:
     return name if isinstance(name, str) and name else None
 
 
-def _plan_no_task_message(message: Message) -> Message:
-    """Plan Mode 未产生 Task 时，在最终回复前附加明确提示。"""
+def _plan_failure_message(message: Message, prefix: str) -> Message:
+    """Plan Mode 未形成有效计划时，在最终回复前附加明确提示。"""
 
     content = message.content or ""
-    prefix = f"{_PLAN_NO_TASK_MESSAGE}\n\n"
-    return message.model_copy(update={"content": prefix + content})
+    return message.model_copy(update={"content": f"{prefix}\n\n{content}"})
 
 
 def _plan_task_id_from_output(output: object) -> str | None:

@@ -48,6 +48,7 @@ from app.task import (
     FileTaskStore,
     TaskContextProvider,
     TaskStatus,
+    TaskStep,
     TaskStepStatus,
     register_task_tools,
 )
@@ -338,6 +339,7 @@ async def test_plan_mode_can_update_plan_content(tmp_path) -> None:
                             "task_id": created.id,
                             "goal": "细化后的目标",
                             "constraints": ["不改动核心模块"],
+                            "steps": [{"title": "第一步"}, {"title": "第二步"}],
                         },
                     ),
                 )
@@ -355,7 +357,9 @@ async def test_plan_mode_can_update_plan_content(tmp_path) -> None:
     assert updated is not None
     assert updated.goal == "细化后的目标"
     assert updated.constraints == ("不改动核心模块",)
+    assert len(updated.steps) == 2
     assert updated.status is TaskStatus.PENDING
+
 
 
 async def test_plan_mode_task_update_cannot_change_status(tmp_path) -> None:
@@ -433,6 +437,150 @@ async def test_plan_mode_without_task_returns_clear_message(tmp_path) -> None:
     assert result.ok is True
     assert result.plan_task_id is None
     assert "Plan mode finished without creating a task" in (result.content or "")
+
+
+# ---------------------------------------------------------------------------
+# Plan Mode 最终 Task 校验（不能只凭 task_create/task_update 成功）
+# ---------------------------------------------------------------------------
+
+
+async def test_plan_mode_invalid_pending_task_is_not_success(tmp_path) -> None:
+    """task_create 成功但缺 goal / steps → 不算有效计划。"""
+
+    tools, task_store, _ = await _build_tools(tmp_path)
+    registry, _ = _registry(
+        [
+            _response(
+                tool_calls=(_call("task_create", {"title": "空计划"}),)
+            ),
+            _response(content="计划完成"),
+        ]
+    )
+    result = await _run(
+        registry, tools, mode=AgentMode.PLAN, task_store=task_store
+    )
+
+    assert result.ok is True
+    assert result.plan_task_id is None  # 无效计划不暴露给 Desktop 展示
+    assert "without a valid pending task" in (result.content or "")
+
+    # 任务确实被创建了（仍是 PENDING），只是不够格当计划。
+    tasks = await task_store.list()
+    assert len(tasks) == 1
+    assert tasks[0].status is TaskStatus.PENDING
+
+
+async def test_plan_mode_valid_pending_task_passes(tmp_path) -> None:
+    """goal + steps 齐全的 PENDING 计划正常通过。"""
+
+    tools, task_store, _ = await _build_tools(tmp_path)
+    registry, _ = _registry(
+        [
+            _response(
+                tool_calls=(
+                    _call(
+                        "task_create",
+                        {
+                            "title": "实现 Computer Runtime",
+                            "goal": "实现 Computer Runtime V1",
+                            "steps": [
+                                {"title": "定义 protocol"},
+                                {"title": "实现 observe"},
+                            ],
+                        },
+                    ),
+                )
+            ),
+            _response(content="计划已形成"),
+        ]
+    )
+    result = await _run(
+        registry, tools, mode=AgentMode.PLAN, task_store=task_store
+    )
+
+    assert result.ok is True
+    assert result.plan_task_id is not None
+    assert "without a valid pending task" not in (result.content or "")
+    task = await task_store.get(result.plan_task_id)
+    assert task is not None and task.status is TaskStatus.PENDING
+
+
+async def test_pending_plan_validation_conditions(tmp_path) -> None:
+    """TaskContextProvider.pending_plan_is_valid 的完整条件。"""
+
+    store = FileTaskStore(tmp_path / "tasks")
+    await store.initialize()
+    provider = TaskContextProvider(store)
+
+    # 有效：PENDING + goal + 无 DONE/IN_PROGRESS 步骤。
+    valid = await store.create(
+        title="T",
+        goal="G",
+        steps=(TaskStep(id="s1", title="s1"),),
+        owner_conversation_id="conv-1",
+    )
+    assert await provider.pending_plan_is_valid("conv-1", valid.id) is True
+
+    # 缺 goal。
+    no_goal = await store.create(
+        title="T",
+        steps=(TaskStep(id="s2", title="s2"),),
+        owner_conversation_id="conv-1",
+    )
+    assert await provider.pending_plan_is_valid("conv-1", no_goal.id) is False
+
+    # 缺 steps。
+    no_steps = await store.create(
+        title="T",
+        goal="G",
+        owner_conversation_id="conv-1",
+    )
+    assert await provider.pending_plan_is_valid("conv-1", no_steps.id) is False
+
+    # 含 DONE / IN_PROGRESS 步骤 → 不算有效计划。
+    with_done = await store.create(
+        title="T",
+        goal="G",
+        steps=(
+            TaskStep(
+                id="s3",
+                title="s3",
+                status=TaskStepStatus.DONE,
+                note="已完成",
+            ),
+        ),
+        owner_conversation_id="conv-1",
+    )
+    assert await provider.pending_plan_is_valid("conv-1", with_done.id) is False
+    with_progress = await store.create(
+        title="T",
+        goal="G",
+        steps=(
+            TaskStep(
+                id="s4",
+                title="s4",
+                status=TaskStepStatus.IN_PROGRESS,
+            ),
+        ),
+        owner_conversation_id="conv-1",
+    )
+    assert await provider.pending_plan_is_valid("conv-1", with_progress.id) is False
+
+    # 非 PENDING（accept 后）→ 不算有效计划。
+    await store.plan_accept(valid.id)
+    assert await provider.pending_plan_is_valid("conv-1", valid.id) is False
+
+    # 不属于该会话 / 不存在 → False。
+    other = await store.create(
+        title="T",
+        goal="G",
+        steps=(TaskStep(id="s5", title="s5"),),
+        owner_conversation_id="conv-2",
+    )
+    assert await provider.pending_plan_is_valid("conv-1", other.id) is False
+    assert await provider.pending_plan_is_valid("conv-1", "0" * 32) is False
+    assert await provider.pending_plan_is_valid(None, "0" * 32) is False
+    assert await provider.pending_plan_is_valid("conv-1", "") is False
 
 
 # ---------------------------------------------------------------------------

@@ -19,11 +19,15 @@ describe('plan mode desktop api', () => {
   it('conversation.send 默认 normal mode', async () => {
     callMock.mockResolvedValue({ run: { id: 'run-1' } })
     await sendMessage('conv-1', 'hello')
-    expect(callMock).toHaveBeenCalledWith('conversation.send', {
-      conversation_id: 'conv-1',
-      content: 'hello',
-      mode: 'normal',
-    })
+    expect(callMock).toHaveBeenCalledWith(
+      'conversation.send',
+      {
+        conversation_id: 'conv-1',
+        content: 'hello',
+        mode: 'normal',
+      },
+      { timeoutMs: 0 },
+    )
   })
 
   it('conversation.send 显式 plan mode', async () => {
@@ -32,11 +36,15 @@ describe('plan mode desktop api', () => {
       run: { id: 'run-2', mode: 'plan' },
     })
     const data = await sendMessage('conv-1', '帮我实现 Computer Runtime', 'plan')
-    expect(callMock).toHaveBeenCalledWith('conversation.send', {
-      conversation_id: 'conv-1',
-      content: '帮我实现 Computer Runtime',
-      mode: 'plan',
-    })
+    expect(callMock).toHaveBeenCalledWith(
+      'conversation.send',
+      {
+        conversation_id: 'conv-1',
+        content: '帮我实现 Computer Runtime',
+        mode: 'plan',
+      },
+      { timeoutMs: 0 },
+    )
     expect(data.plan_task_id).toBe('task-1')
   })
 

@@ -6,7 +6,7 @@ import json
 
 from app.models.types import Message, MessageRole
 
-from .models import Task, TaskStep, TaskStepStatus
+from .models import Task, TaskStatus, TaskStep, TaskStepStatus
 from .store import FileTaskStore
 
 TASK_CONTEXT_MESSAGE_NAME = "oneagent_active_task"
@@ -58,6 +58,42 @@ class TaskContextProvider:
                 max_pending_steps=self._max_pending_steps,
             ),
         )
+
+    async def pending_plan_is_valid(
+        self,
+        conversation_id: str | None,
+        task_id: str,
+    ) -> bool:
+        """校验一个 PENDING 计划是否有效（Plan Mode 完成条件）。
+
+        不能只因为 task_create / task_update 成功就认定 Plan 成功。必须满足：
+        - 任务存在且属于该会话；
+        - status == PENDING（尚未开始执行）；
+        - goal 非空；
+        - steps 非空；
+        - 不存在 DONE / IN_PROGRESS 步骤（尚未执行，不伪造进度）。
+        """
+
+        if not conversation_id or not task_id:
+            return False
+        task = await self._store.resolve(
+            task_id,
+            owner_conversation_id=conversation_id,
+        )
+        if task is None:
+            return False
+        if task.status is not TaskStatus.PENDING:
+            return False
+        if not task.goal:
+            return False
+        if not task.steps:
+            return False
+        if any(
+            step.status in {TaskStepStatus.DONE, TaskStepStatus.IN_PROGRESS}
+            for step in task.steps
+        ):
+            return False
+        return True
 
 
 def render_task_context(

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.agent.events import AgentEventHandler
 from app.agent.result import AgentResult
@@ -21,6 +21,9 @@ from app.agent.runtime import AgentRuntime
 from app.checkpoint import CheckpointStatus, SQLiteCheckpointStore
 from app.context import ConversationSummaryState
 from app.models.types import AgentMode
+
+if TYPE_CHECKING:  # 仅类型引用，避免运行时耦合
+    from app.approval import SQLiteApprovalStore
 
 from .models import Run, RunStatus
 from .store import SQLiteRunStore
@@ -37,10 +40,13 @@ class RunManager:
         run_store: SQLiteRunStore,
         checkpoint_store: SQLiteCheckpointStore,
         runtime: AgentRuntime,
+        approval_store: SQLiteApprovalStore | None = None,
     ) -> None:
         self._run_store = run_store
         self._checkpoint_store = checkpoint_store
         self._runtime = runtime
+        # Run 取消时清理其下无人等待的 PENDING approval（可选注入）。
+        self._approval_store = approval_store
         # 进程内正在执行的 Run → asyncio.Task（用于 cancel / wait）。
         self._active_tasks: dict[str, asyncio.Task[None]] = {}
         # 会话内最近一次执行完成的 AgentResult（供 CLI 读取，不持久化）。
@@ -243,16 +249,26 @@ class RunManager:
         if task is None or task.done():
             # 进程内没有活跃执行（例如记录恢复自持久化的 RUNNING 但 task 已消失），
             # 无法发送取消信号 —— 直接标记 CANCELLED。
-            return await self._run_store.mark_cancelled(
+            updated = await self._run_store.mark_cancelled(
                 run_id,
                 error="cancelled without active execution",
             )
+            await self._cancel_pending_approvals(run_id)
+            return updated
         task.cancel()
         try:
             await task
         except asyncio.CancelledError:
             pass
-        return await self._run_store.require(run_id)
+        updated = await self._run_store.require(run_id)
+        await self._cancel_pending_approvals(run_id)
+        return updated
+
+    async def _cancel_pending_approvals(self, run_id: str) -> None:
+        """Run 取消后清理该 run 下无人等待的 PENDING approval。"""
+
+        if self._approval_store is not None:
+            await self._approval_store.cancel_pending_for_run(run_id)
 
     # ------------------------------------------------------------------
     # recover

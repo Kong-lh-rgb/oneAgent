@@ -76,7 +76,13 @@ class DesktopApprovalGate(ApprovalGate):
         self,
         request: ApprovalSubmission,
     ) -> ApprovalResponse:
-        """创建持久化 PENDING 审批并等待用户 approve / deny。"""
+        """创建持久化 PENDING 审批并等待用户 approve / deny。
+
+        顺序保证：先创建记录 → 再创建并注册 Future → 最后广播 approval.required。
+        这样 Desktop 在收到 approval.required 后立刻 approve / deny 时，
+        Future 必然已注册，`_settle` 一定能唤醒等待中的 Run —— 不会出现
+        "数据库已 resolved 但 Run 没被唤醒" 的竞态。
+        """
 
         record = await self._store.create(
             run_id=request.run_id,
@@ -86,11 +92,10 @@ class DesktopApprovalGate(ApprovalGate):
             arguments=request.arguments,
             reason=request.description,
         )
-        await self._notify("approval.required", {"approval": record})
-
         loop = asyncio.get_running_loop()
         future: asyncio.Future[ApprovalResponse] = loop.create_future()
         self._pending[record.id] = future
+        await self._notify("approval.required", {"approval": record})
         try:
             return await future
         finally:

@@ -152,9 +152,191 @@ async def test_list_filters(approval_store) -> None:
     assert [item.id for item in by_run] == [first.id]
 
 
+async def test_cancelled_approval_cannot_resolve(approval_store) -> None:
+    """CANCELLED 是终态：不能再 approve / deny。"""
+
+    record = await _create(approval_store, run_id="run-1")
+    resolved = await approval_store.resolve(
+        record.id,
+        ApprovalRequestStatus.CANCELLED,
+    )
+    assert resolved.status is ApprovalRequestStatus.CANCELLED
+
+    with pytest.raises(ValueError, match="already resolved"):
+        await approval_store.resolve(record.id, ApprovalRequestStatus.APPROVED)
+    with pytest.raises(ValueError, match="already resolved"):
+        await approval_store.resolve(record.id, ApprovalRequestStatus.DENIED)
+
+
+async def test_cancel_pending_for_run(approval_store) -> None:
+    """Run cancel 时该 run 下仍 PENDING 的 approval 自动变为 CANCELLED。"""
+
+    target = await _create(approval_store, run_id="run-cancel", tool_call_id="c1")
+    other_run = await _create(
+        approval_store,
+        run_id="run-other",
+        tool_call_id="c2",
+    )
+    resolved = await _create(approval_store, run_id="run-cancel", tool_call_id="c3")
+    await approval_store.resolve(resolved.id, ApprovalRequestStatus.APPROVED)
+
+    cancelled = await approval_store.cancel_pending_for_run("run-cancel")
+
+    assert cancelled == 1  # 只取消 PENDING 的，不动已 resolved
+    assert (await approval_store.get(target.id)).status is (
+        ApprovalRequestStatus.CANCELLED
+    )
+    assert (await approval_store.get(other_run.id)).status is (
+        ApprovalRequestStatus.PENDING
+    )
+    assert (await approval_store.get(resolved.id)).status is (
+        ApprovalRequestStatus.APPROVED
+    )
+
+
+async def test_reconcile_orphans_cancels_orphan_pending(approval_store) -> None:
+    """Host 启动 reconcile：没有对应活跃 Run 的 PENDING approval → CANCELLED。"""
+
+    live = await _create(approval_store, run_id="active-run", tool_call_id="c1")
+    orphan = await _create(approval_store, run_id="dead-run", tool_call_id="c2")
+    no_run = await _create(approval_store, run_id=None, tool_call_id="c3")
+    resolved = await _create(approval_store, run_id="dead-run", tool_call_id="c4")
+    await approval_store.resolve(resolved.id, ApprovalRequestStatus.APPROVED)
+
+    cancelled = await approval_store.reconcile_orphans({"active-run"})
+
+    assert cancelled == 2  # orphan + no_run
+    assert (await approval_store.get(live.id)).status is (
+        ApprovalRequestStatus.PENDING
+    )
+    assert (await approval_store.get(orphan.id)).status is (
+        ApprovalRequestStatus.CANCELLED
+    )
+    assert (await approval_store.get(no_run.id)).status is (
+        ApprovalRequestStatus.CANCELLED
+    )
+    assert (await approval_store.get(resolved.id)).status is (
+        ApprovalRequestStatus.APPROVED
+    )
+
+
 # ---------------------------------------------------------------------------
 # DesktopApprovalGate：等待 / 唤醒 / 不自动决定
 # ---------------------------------------------------------------------------
+
+
+async def test_approve_right_after_record_created_wakes_run(approval_store) -> None:
+    """竞态修复：记录出现后立刻 approve，等待中的 Run 一定被唤醒。
+
+    回归场景：旧顺序 create→broadcast→register 存在 "数据库已 resolved 但
+    Future 未注册 → Run 没被唤醒"。新顺序 create→register→broadcast 保证
+    客户端看到记录时 Future 已注册（create 返回与 register 之间无 await）。
+    """
+
+    gate = DesktopApprovalGate(approval_store)
+    submission = ApprovalSubmission(
+        tool_call_id="call-1",
+        tool_name="run_shell_command",
+        arguments={"command": "pytest"},
+        run_id="run-1",
+    )
+    waiting = asyncio.create_task(gate.request_approval(submission))
+
+    # 轮询到记录出现（此时 Future 已注册）。
+    for _ in range(500):
+        pending = await approval_store.list(
+            status=ApprovalRequestStatus.PENDING,
+        )
+        if pending:
+            break
+        await asyncio.sleep(0)
+    assert pending, "应创建 PENDING ApprovalRequest"
+    assert not waiting.done()
+
+    # 立刻 approve（模拟 Desktop 看到记录后马上响应）。
+    await gate.approve(pending[0].id)
+    response = await asyncio.wait_for(waiting, timeout=5)
+    assert response.decision is ApprovalDecision.APPROVED
+    assert gate.pending_count == 0
+
+
+async def test_cancel_run_cancels_pending_approval(tmp_path) -> None:
+    """RunManager.cancel 会把该 run 下 PENDING 的 approval 置为 CANCELLED。"""
+
+    from app.agent.runtime import AgentRuntime
+    from app.checkpoint import SQLiteCheckpointStore
+    from app.run import RunManager, SQLiteRunStore
+
+    config = ProviderConfig(
+        provider="fake",
+        model="fake-model",
+        api_key=SecretStr("offline-test-key"),
+        api_style=ApiStyle.CHAT_COMPLETIONS,
+    )
+    adapter = _BlockingAdapter(config)
+    registry = ModelAdapterRegistry(ModelSettings(_env_file=None))
+    registry.register("fake", lambda _: adapter, config=config)
+
+    database = tmp_path / "oneagent.db"
+    run_store = SQLiteRunStore(database)
+    await run_store.initialize()
+    checkpoint_store = SQLiteCheckpointStore(database)
+    await checkpoint_store.initialize()
+    approval_store = SQLiteApprovalStore(database)
+    await approval_store.initialize()
+
+    runtime = AgentRuntime(registry, ToolRegistry(), provider="fake")
+    manager = RunManager(
+        run_store,
+        checkpoint_store,
+        runtime,
+        approval_store=approval_store,
+    )
+    run_id, _ = await manager.start("阻塞", conversation_id="conv-1")
+    for _ in range(200):
+        if adapter.started.is_set():
+            break
+        await asyncio.sleep(0)
+    assert adapter.started.is_set()
+
+    # 该 run 有一个 PENDING approval（模拟正在等待审批）。
+    record = await approval_store.create(
+        run_id=run_id,
+        conversation_id="conv-1",
+        tool_name="run_shell_command",
+        tool_call_id="call-1",
+        arguments={"command": "pytest"},
+    )
+    assert record.status is ApprovalRequestStatus.PENDING
+
+    await manager.cancel(run_id)
+
+    after = await approval_store.get(record.id)
+    assert after is not None
+    assert after.status is ApprovalRequestStatus.CANCELLED
+
+
+class _BlockingAdapter(ModelAdapter):
+    """阻塞在模型请求上，直到被取消（用于 cancel 测试）。"""
+
+    def __init__(self, config: ProviderConfig) -> None:
+        super().__init__(config)
+        self.started = asyncio.Event()
+        self.cancelled = False
+        self.requests: list[ModelRequest] = []
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        self.requests.append(request)
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        raise AssertionError("阻塞模型不应正常完成")
+
+    async def close(self) -> None:
+        pass
 
 
 async def test_desktop_gate_waits_until_approve(approval_store) -> None:

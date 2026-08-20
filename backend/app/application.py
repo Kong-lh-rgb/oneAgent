@@ -64,7 +64,7 @@ from app.memory import (
 from app.models.config import ModelSettings
 from app.models.registry import ModelAdapterRegistry
 from app.models.types import ModelProvider
-from app.run import RunManager, SQLiteRunStore
+from app.run import RunManager, RunStatus, SQLiteRunStore
 from app.skill_learning import (
     SkillCandidateStore,
     SkillLearningService,
@@ -422,9 +422,22 @@ class Application:
             run_store,
             checkpoint_store,
             runtime,
+            approval_store=approval_store,
         )
         # 启动 reconciliation（Run + Checkpoint 统一处理）。
         reconciled_runs = await run_manager.initialize()
+        # 孤儿审批：Host 启动后，没有对应活跃 Run（非终态）的 PENDING approval
+        # 统一置为 CANCELLED（无人等待，也不应再显示为 pending）。
+        active_run_ids = {
+            run.id
+            for run in (
+                await run_store.list_runs(status=RunStatus.PENDING)
+            )
+            + (
+                await run_store.list_runs(status=RunStatus.RUNNING)
+            )
+        }
+        await approval_store.reconcile_orphans(active_run_ids)
 
         conversation_service = ConversationService(
             conversation_store,

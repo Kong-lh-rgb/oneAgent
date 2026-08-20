@@ -6,8 +6,9 @@ ApprovalRequest 是“一次待人工决定 / 已决定的工具审批”的可�
 - 本模块 ApprovalRequest —— 持久化记录（id / status / created_at / resolved_at）；
 - 工具层 ApprovalRequest  —— 审批门输入（tool_call_id / tool_name / arguments）。
 
-status 只允许 PENDING → APPROVED / DENIED（终态不可再修改），由
-``SQLiteApprovalStore.resolve`` 在事务内强制。
+status 只允许 PENDING → APPROVED / DENIED / CANCELLED（终态不可再修改），由
+``SQLiteApprovalStore.resolve`` 在事务内强制。CANCELLED 表示"无人等待的孤儿
+审批"：Run 被 cancel，或 Host 重启后找不到对应活跃 Run。
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ class ApprovalRequestStatus(StrEnum):
     PENDING = "pending"
     APPROVED = "approved"
     DENIED = "denied"
+    CANCELLED = "cancelled"
 
 
 class ApprovalRequest(BaseModel):

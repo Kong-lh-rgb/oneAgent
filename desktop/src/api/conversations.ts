@@ -38,9 +38,15 @@ export async function sendMessage(
   content: string,
   mode: AgentMode = 'normal',
 ): Promise<SendMessageResponse> {
-  return rpcClient.call(RpcMethods.conversationSend, {
-    conversation_id: conversationId,
-    content,
-    mode,
-  })
+  // conversation.send 可能长时间运行（Agent 多步 / 等待审批），不设客户端
+  // 固定超时（timeoutMs: 0 = 无客户端超时；WebSocket 断线仍会 reject）。
+  return rpcClient.call<SendMessageResponse>(
+    RpcMethods.conversationSend,
+    {
+      conversation_id: conversationId,
+      content,
+      mode,
+    },
+    { timeoutMs: 0 },
+  )
 }
