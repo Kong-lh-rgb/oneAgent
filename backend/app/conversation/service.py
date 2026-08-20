@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 
 from app.agent.events import AgentEventHandler, CompositeEventHandler
 from app.agent.result import AgentResult
+from app.models.types import AgentMode
 from app.trace import SQLiteTraceEventHandler, SQLiteTraceStore
 
 from .inputs import ConversationSource, TriggerContext
@@ -102,6 +103,7 @@ class ConversationService:
         trigger: TriggerContext | None = None,
         event_handler: AgentEventHandler | None = None,
         on_run_started: Any | None = None,
+        mode: AgentMode = AgentMode.NORMAL,
     ) -> DispatchResult:
         """投递一条输入并完整执行（加载最新 → Run → 写回 → Summary）。
 
@@ -111,6 +113,8 @@ class ConversationService:
         ``on_run_started`` 可选：Run 创建并拿到 run_id 后、等待完成前被调用
         （``await on_run_started(run_id)``）。Automation 用它立即持久化
         last_run_id —— Run 已启动即记录，崩溃后不会重复补跑。
+
+        ``mode`` 可选：本次执行的模式（NORMAL / PLAN），默认 NORMAL。
         """
 
         trigger = trigger or TriggerContext(
@@ -123,6 +127,7 @@ class ConversationService:
                 trigger=trigger,
                 event_handler=event_handler,
                 on_run_started=on_run_started,
+                mode=mode,
             )
 
     async def _dispatch_locked(
@@ -133,6 +138,7 @@ class ConversationService:
         trigger: TriggerContext,
         event_handler: AgentEventHandler | None,
         on_run_started: Any | None,
+        mode: AgentMode,
     ) -> DispatchResult:
         # 1) 从持久化源加载“触发那一刻最新”的 history / summary。
         history: tuple[Any, ...] = ()
@@ -159,7 +165,7 @@ class ConversationService:
             else handlers[0]
         )
 
-        # 3) 启动 Run（携带 provenance）并等待完成。
+        # 3) 启动 Run（携带 provenance + mode）并等待完成。
         run_id, _ = await self._run_manager.start(
             content,
             conversation_id=conversation_id,
@@ -170,6 +176,7 @@ class ConversationService:
             source_id=trigger.automation_id,
             scheduled_for=trigger.scheduled_for,
             triggered_at=trigger.triggered_at,
+            mode=mode,
         )
         if on_run_started is not None:
             await on_run_started(run_id)
@@ -204,6 +211,124 @@ class ConversationService:
 
         return DispatchResult(
             run=run,
+            result=result,
+            trigger=trigger,
+            conversation_id=conversation_id,
+        )
+
+    async def recover(
+        self,
+        run_id: str,
+        *,
+        trigger: TriggerContext | None = None,
+        event_handler: AgentEventHandler | None = None,
+        on_run_started: Any | None = None,
+    ) -> DispatchResult:
+        """恢复一个 INTERRUPTED Run，并像 dispatch 一样完整收口。
+
+        CLI 与 RPC 的 recover 都收敛到这里，不再各自维护一条
+        load→recover→wait→写回 的链路：
+
+            load 最新持久化 history / summary
+            → RunManager.recover()（生命周期只归 RunManager）
+            → 等待恢复后的 Run 完成（含 Trace handler 注入）
+            → 获取 AgentResult
+            → 把最终 messages 写回 ConversationStore
+            → 保存最新 Summary
+            → 返回 DispatchResult
+
+        recover 语义保持：旧 Run 保持 INTERRUPTED；新 Run 的
+        recovered_from_run_id 指向旧 Run（由 RunManager 负责）。
+        """
+
+        run = await self._run_manager.get_run(run_id)
+        if run is None:
+            raise KeyError(f"Run 不存在：{run_id}")
+        conversation_id = run.conversation_id
+        trigger = trigger or TriggerContext(source=ConversationSource.MANUAL)
+        async with self._lock_for(conversation_id):
+            return await self._recover_locked(
+                run_id=run_id,
+                conversation_id=conversation_id,
+                trigger=trigger,
+                event_handler=event_handler,
+                on_run_started=on_run_started,
+            )
+
+    async def _recover_locked(
+        self,
+        *,
+        run_id: str,
+        conversation_id: str | None,
+        trigger: TriggerContext,
+        event_handler: AgentEventHandler | None,
+        on_run_started: Any | None,
+    ) -> DispatchResult:
+        # 1) 从持久化源加载最新 history / summary（与 dispatch 一致）。
+        history: tuple[Any, ...] = ()
+        if conversation_id is not None:
+            history = tuple(
+                await self._conversation_store.load_messages(conversation_id)
+            )
+        summary_state = (
+            await self._summary_store.load(conversation_id)
+            if self._summary_store is not None and conversation_id is not None
+            else None
+        )
+
+        # 2) 统一注入 Trace handler（+ 全局共享观察者 + 本次额外观察者）。
+        trace_handler = SQLiteTraceEventHandler(self._trace_store)
+        handlers: list[AgentEventHandler] = [trace_handler]
+        if self._shared_event_handler is not None:
+            handlers.append(self._shared_event_handler)
+        if event_handler is not None:
+            handlers.append(event_handler)
+        handler: AgentEventHandler = (
+            CompositeEventHandler(*handlers)
+            if len(handlers) > 1
+            else handlers[0]
+        )
+
+        # 3) 由 RunManager 启动恢复后的新 Run 并等待完成。
+        new_run_id, _ = await self._run_manager.recover(
+            run_id,
+            history=history,
+            summary_state=summary_state,
+            event_handler=handler,
+        )
+        if on_run_started is not None:
+            await on_run_started(new_run_id)
+        try:
+            recovered_run = await self._run_manager.wait(new_run_id)
+        except KeyboardInterrupt:
+            # 用户 Ctrl+C：取消正在执行的恢复 Run（不残留 task），再向上传播。
+            try:
+                await self._run_manager.cancel(new_run_id)
+            except (ValueError, KeyError):
+                pass
+            raise
+        result = self._run_manager.result(new_run_id)
+        if result is None:
+            raise RuntimeError("RunManager 未返回最终 AgentResult")
+
+        # 4) 把恢复后的完整 history 写回 ConversationStore（保存最新 Summary）。
+        if conversation_id is not None:
+            await self._conversation_store.replace_messages(
+                conversation_id,
+                result.messages,
+            )
+        if (
+            self._summary_store is not None
+            and conversation_id is not None
+            and result.summary_state is not None
+        ):
+            await self._summary_store.save(
+                conversation_id,
+                result.summary_state,
+            )
+
+        return DispatchResult(
+            run=recovered_run,
             result=result,
             trigger=trigger,
             conversation_id=conversation_id,

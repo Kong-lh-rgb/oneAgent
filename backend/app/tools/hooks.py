@@ -5,7 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.models.types import ToolCall, ToolDefinition, ToolResult
+from app.models.types import (
+    AgentMode,
+    ToolCall,
+    ToolDefinition,
+    ToolResult,
+)
 
 from .approval import ApprovalDecision, ApprovalRequest
 from .permissions.models import PermissionRule
@@ -23,6 +28,8 @@ class ToolExecutionContext:
     tool_definition: ToolDefinition | None = None
     arguments: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # 当前 Run 的执行模式（NORMAL / PLAN）；工具可据此做模式内限制。
+    mode: AgentMode | None = None
 
 
 @dataclass(frozen=True, slots=True)

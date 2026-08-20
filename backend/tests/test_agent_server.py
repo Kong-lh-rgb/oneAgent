@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -37,12 +38,19 @@ from app.models.types import (
     ModelRequest,
     ModelResponse,
     ModelUsage,
+    ToolCall,
+    ToolDefinition,
+    ToolPermission,
 )
 from app.server.app import create_app
 from app.skill_learning import SkillLearningSettings
+from app.tools.base import BaseTool
 
 
-def _model_response(content: str = "已完成") -> ModelResponse:
+def _model_response(
+    content: str = "已完成",
+    tool_calls: tuple[ToolCall, ...] = (),
+) -> ModelResponse:
     return ModelResponse(
         id="fake-response",
         provider="fake",
@@ -50,6 +58,7 @@ def _model_response(content: str = "已完成") -> ModelResponse:
         message=Message(
             role=MessageRole.ASSISTANT,
             content=content,
+            tool_calls=tool_calls,
         ),
         usage=ModelUsage(input_tokens=10, output_tokens=5, total_tokens=15),
     )
@@ -69,6 +78,73 @@ class RepeatingFakeAdapter(ModelAdapter):
 
     async def close(self) -> None:
         pass
+
+
+class ScriptedFakeAdapter(ModelAdapter):
+    """按脚本顺序返回响应的离线适配器（审批 / 多步测试用）。"""
+
+    def __init__(
+        self,
+        config: ProviderConfig,
+        responses: Sequence[ModelResponse | Exception],
+    ) -> None:
+        super().__init__(config)
+        self.responses = list(responses)
+        self.requests: list[ModelRequest] = []
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        self.requests.append(request)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    async def close(self) -> None:
+        pass
+
+
+class ApprovalProbeTool(BaseTool):
+    """HUMAN_APPROVAL 档位的探测工具（注册进运行中的 application）。"""
+
+    definition = ToolDefinition(
+        name="approval_probe",
+        description="需要审批的探测工具",
+        parameters={
+            "type": "object",
+            "properties": {"value": {"type": "integer"}},
+            "required": ["value"],
+        },
+        permission=ToolPermission.HUMAN_APPROVAL,
+    )
+
+    def __init__(self) -> None:
+        self.executions = 0
+
+    async def execute(self, arguments: dict[str, object]) -> str:
+        self.executions += 1
+        return f"probe-{arguments.get('value')}"
+
+
+def _drain_until(websocket: Any, predicate: Any, *, limit: int = 500) -> dict[str, Any]:
+    """读取消息直到 predicate 命中并返回；中间消息丢弃。"""
+
+    for _ in range(limit):
+        message = json.loads(websocket.receive_text())
+        if predicate(message):
+            return message
+    raise AssertionError("未在限次内等到目标消息")
+
+
+def _model_with_tool_call() -> ModelResponse:
+    return _model_response(
+        tool_calls=(
+            ToolCall(
+                id="ap-1",
+                name="approval_probe",
+                arguments={"value": 7},
+            ),
+        )
+    )
 
 
 class BlockingFakeAdapter(ModelAdapter):
@@ -98,7 +174,12 @@ class BlockingFakeAdapter(ModelAdapter):
 def make_app(tmp_path):
     """构造一个可注入 fake registry 的 Application + FastAPI app。"""
 
-    def build(*, blocking: bool = False, response_text: str = "已完成"):
+    def build(
+        *,
+        blocking: bool = False,
+        response_text: str = "已完成",
+        responses: Sequence[ModelResponse | Exception] | None = None,
+    ):
         config = ProviderConfig(
             provider="fake",
             model="fake-model",
@@ -107,6 +188,8 @@ def make_app(tmp_path):
         )
         if blocking:
             adapter: ModelAdapter = BlockingFakeAdapter(config)
+        elif responses is not None:
+            adapter = ScriptedFakeAdapter(config, responses)
         else:
             adapter = RepeatingFakeAdapter(config, _model_response(response_text))
         registry = ModelAdapterRegistry(ModelSettings(_env_file=None))
@@ -756,6 +839,540 @@ def test_disconnect_does_not_cancel_running_run(make_app) -> None:
         assert adapter.cancelled is False
         # 清理：显式 cancel（不残留后台任务）。
         client.portal.call(lambda: application.run_manager.cancel(run_id))
+
+
+# ---------------------------------------------------------------------------
+# Async Approval V1（approval RPC + 通知 + 不阻塞 WebSocket）
+# ---------------------------------------------------------------------------
+
+
+def test_approval_approve_flow_via_websocket(make_app) -> None:
+    """Agent 等待审批时 WebSocket 不阻塞：同一连接可 approval.approve。"""
+
+    app, application, _ = make_app(
+        responses=[
+            _model_with_tool_call(),
+            _model_response(content="审批通过，任务完成"),
+        ]
+    )
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            client.portal.call(
+                lambda: application.tool_registry.register(ApprovalProbeTool())
+            )
+            conversation_id = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )["conversation"]["id"]
+
+            # conversation.send 会停在审批等待上（不阻塞整个 WebSocket）。
+            websocket.send_text(
+                _rpc_request(
+                    2,
+                    "conversation.send",
+                    {"conversation_id": conversation_id, "content": "执行审批"},
+                )
+            )
+            required = _drain_until(
+                websocket,
+                lambda msg: msg.get("method") == "approval.required",
+            )
+            approval = required["params"]["approval"]
+            assert approval["status"] == "pending"
+            assert approval["tool_name"] == "approval_probe"
+            assert approval["run_id"] is not None
+            assert approval["conversation_id"] == conversation_id
+            run_id = approval["run_id"]
+
+            # 同一 WebSocket 仍可发送 approval.approve。
+            websocket.send_text(
+                _rpc_request(
+                    3,
+                    "approval.approve",
+                    {"approval_id": approval["id"]},
+                )
+            )
+            send_response: dict[str, Any] | None = None
+            approve_response: dict[str, Any] | None = None
+            resolved_seen = False
+            while send_response is None or approve_response is None:
+                msg = json.loads(websocket.receive_text())
+                if msg.get("id") == 2:
+                    send_response = msg
+                elif msg.get("id") == 3:
+                    approve_response = msg
+                if msg.get("method") == "approval.resolved":
+                    resolved_seen = True
+            assert approve_response is not None
+            assert approve_response["result"]["approval"]["status"] == "approved"
+            assert resolved_seen, "应广播 approval.resolved"
+
+            result = _require_result(send_response)
+            assert result["run"]["id"] == run_id
+            assert result["run"]["status"] == "completed"
+            assert result["result"]["messages"]
+
+            # 审批记录持久化，且 Run 保持 RUNNING→COMPLETED（无新 RunStatus）。
+            run = _require_result(
+                _rpc_call(websocket, 4, "run.get", {"run_id": run_id})[0]
+            )["run"]
+            assert run["status"] == "completed"
+
+
+def test_approval_deny_blocks_tool_execution(make_app) -> None:
+    app, application, _ = make_app(
+        responses=[
+            _model_with_tool_call(),
+            _model_response(content="审批被拒绝"),
+        ]
+    )
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            probe = ApprovalProbeTool()
+            client.portal.call(lambda: application.tool_registry.register(probe))
+            conversation_id = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )["conversation"]["id"]
+            websocket.send_text(
+                _rpc_request(
+                    2,
+                    "conversation.send",
+                    {"conversation_id": conversation_id, "content": "执行审批"},
+                )
+            )
+            required = _drain_until(
+                websocket,
+                lambda msg: msg.get("method") == "approval.required",
+            )
+            approval_id = required["params"]["approval"]["id"]
+
+            websocket.send_text(
+                _rpc_request(
+                    3,
+                    "approval.deny",
+                    {"approval_id": approval_id},
+                )
+            )
+            send_response: dict[str, Any] | None = None
+            deny_response: dict[str, Any] | None = None
+            while send_response is None or deny_response is None:
+                msg = json.loads(websocket.receive_text())
+                if msg.get("id") == 2:
+                    send_response = msg
+                elif msg.get("id") == 3:
+                    deny_response = msg
+            assert deny_response["result"]["approval"]["status"] == "denied"
+            result = _require_result(send_response)
+            assert result["run"]["status"] == "completed"
+            # 工具未执行（deny → 工具调用失败）。
+            assert probe.executions == 0
+
+
+def test_approval_duplicate_resolve_rejected(make_app) -> None:
+    app, application, _ = make_app(
+        responses=[
+            _model_with_tool_call(),
+            _model_response(content="审批通过"),
+        ]
+    )
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            client.portal.call(
+                lambda: application.tool_registry.register(ApprovalProbeTool())
+            )
+            conversation_id = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )["conversation"]["id"]
+            websocket.send_text(
+                _rpc_request(
+                    2,
+                    "conversation.send",
+                    {"conversation_id": conversation_id, "content": "执行审批"},
+                )
+            )
+            required = _drain_until(
+                websocket,
+                lambda msg: msg.get("method") == "approval.required",
+            )
+            approval_id = required["params"]["approval"]["id"]
+
+            approved, _ = _rpc_call(
+                websocket, 3, "approval.approve", {"approval_id": approval_id}
+            )
+            assert approved["result"]["approval"]["status"] == "approved"
+
+            # 已 resolved 的 approval 再次 approve / deny → INVALID_STATE。
+            again, _ = _rpc_call(
+                websocket, 4, "approval.approve", {"approval_id": approval_id}
+            )
+            assert again["error"]["code"] == -32001
+            denied, _ = _rpc_call(
+                websocket, 5, "approval.deny", {"approval_id": approval_id}
+            )
+            assert denied["error"]["code"] == -32001
+
+
+def test_approval_list_and_get(make_app) -> None:
+    app, application, _ = make_app(
+        responses=[
+            _model_with_tool_call(),
+            _model_response(content="审批通过"),
+        ]
+    )
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            client.portal.call(
+                lambda: application.tool_registry.register(ApprovalProbeTool())
+            )
+            conversation_id = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )["conversation"]["id"]
+            websocket.send_text(
+                _rpc_request(
+                    2,
+                    "conversation.send",
+                    {"conversation_id": conversation_id, "content": "执行审批"},
+                )
+            )
+            required = _drain_until(
+                websocket,
+                lambda msg: msg.get("method") == "approval.required",
+            )
+            approval_id = required["params"]["approval"]["id"]
+
+            listed = _require_result(
+                _rpc_call(websocket, 3, "approval.list")[0]
+            )
+            assert any(
+                item["id"] == approval_id for item in listed["approvals"]
+            )
+            pending = _require_result(
+                _rpc_call(
+                    websocket, 4, "approval.list", {"status": "pending"}
+                )[0]
+            )
+            assert any(item["id"] == approval_id for item in pending["approvals"])
+
+            detail = _require_result(
+                _rpc_call(
+                    websocket, 5, "approval.get", {"approval_id": approval_id}
+                )[0]
+            )["approval"]
+            assert detail["id"] == approval_id
+            assert detail["arguments"]["value"] == 7
+
+
+def test_approval_not_auto_resolved_on_disconnect(make_app) -> None:
+    """Desktop 断线不会自动 approve / deny：审批保持 PENDING，可事后显式决定。"""
+
+    app, application, _ = make_app(
+        responses=[
+            _model_with_tool_call(),
+            _model_response(content="审批通过"),
+        ]
+    )
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            client.portal.call(
+                lambda: application.tool_registry.register(ApprovalProbeTool())
+            )
+            conversation_id = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )["conversation"]["id"]
+            websocket.send_text(
+                _rpc_request(
+                    2,
+                    "conversation.send",
+                    {"conversation_id": conversation_id, "content": "执行审批"},
+                )
+            )
+            required = _drain_until(
+                websocket,
+                lambda msg: msg.get("method") == "approval.required",
+            )
+            approval_id = required["params"]["approval"]["id"]
+            run_id = required["params"]["approval"]["run_id"]
+        # WS 已断开：没有自动 approve / deny，记录仍是 PENDING。
+        pending = client.portal.call(
+            lambda: application.approval_store.get(approval_id)
+        )
+        assert pending is not None
+        assert pending.status.value == "pending"
+        # 断线后仍可显式决定（持久化记录可恢复）。
+        approved = client.portal.call(
+            lambda: application.approval_gate.approve(approval_id)
+        )
+        assert approved.status.value == "approved"
+        # 清理：cancel 阻塞中的 Run。
+        client.portal.call(lambda: application.run_manager.cancel(run_id))
+
+
+def test_automation_run_can_produce_approval(make_app) -> None:
+    """Automation 触发的 Run 也走审批链路（approval.required → approve）。"""
+
+    app, application, _ = make_app(
+        responses=[
+            _model_with_tool_call(),
+            _model_response(content="自动化审批完成"),
+        ]
+    )
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            client.portal.call(
+                lambda: application.tool_registry.register(ApprovalProbeTool())
+            )
+            conversation_id = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )["conversation"]["id"]
+            run_at = (datetime.now(UTC) + timedelta(seconds=1)).isoformat()
+            created = _require_result(
+                _rpc_call(
+                    websocket,
+                    2,
+                    "automation.create",
+                    {
+                        "title": "自动审批任务",
+                        "prompt": "执行审批",
+                        "kind": "once",
+                        "run_at": run_at,
+                        "conversation_id": conversation_id,
+                    },
+                )[0]
+            )
+            automation_id = created["automation"]["id"]
+
+            # 等 APScheduler 触发 → Run 停在审批 → 广播 approval.required。
+            required = _drain_until(
+                websocket,
+                lambda msg: msg.get("method") == "approval.required",
+            )
+            approval = required["params"]["approval"]
+            assert approval["status"] == "pending"
+            assert approval["tool_name"] == "approval_probe"
+
+            # 批准 → 自动化 Run 继续并完成。
+            websocket.send_text(
+                _rpc_request(
+                    3,
+                    "approval.approve",
+                    {"approval_id": approval["id"]},
+                )
+            )
+            completed = _drain_until(
+                websocket,
+                lambda msg: (
+                    msg.get("method") == "agent.event"
+                    and msg["params"].get("type") == "agent_completed"
+                ),
+            )
+            run_id = completed["params"]["run_id"]
+
+            # agent_completed 事件先于 Run DB 终态写入，轮询到 completed。
+            detail: dict[str, Any] = {}
+            for _ in range(200):
+                detail = _require_result(
+                    _rpc_call(websocket, 4, "run.get", {"run_id": run_id})[0]
+                )["run"]
+                if detail["status"] == "completed":
+                    break
+                time.sleep(0.02)
+            assert detail["status"] == "completed"
+            assert detail["source"] == "automation"
+            assert detail["source_id"] == automation_id
+
+
+# ---------------------------------------------------------------------------
+# Plan Mode V1（conversation.send mode + task RPC）
+# ---------------------------------------------------------------------------
+
+
+def test_plan_mode_send_creates_pending_task_and_accept(make_app) -> None:
+    app, _, _ = make_app(
+        responses=[
+            _model_response(
+                tool_calls=(
+                    ToolCall(
+                        id="plan-1",
+                        name="task_create",
+                        arguments={
+                            "title": "实现 Computer Runtime",
+                            "goal": "实现 Computer Runtime V1",
+                            "steps": [
+                                {"title": "定义 protocol"},
+                                {"title": "实现 observe"},
+                                {"title": "实现 click/type"},
+                            ],
+                        },
+                    ),
+                )
+            ),
+            _model_response(content="计划已形成"),
+        ]
+    )
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            conversation_id = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )["conversation"]["id"]
+            message, _ = _rpc_call(
+                websocket,
+                2,
+                "conversation.send",
+                {
+                    "conversation_id": conversation_id,
+                    "content": "帮我实现 Computer Runtime",
+                    "mode": "plan",
+                },
+            )
+            result = _require_result(message)
+            assert result["run"]["mode"] == "plan"
+            assert result["plan_task_id"]
+            plan_task_id = result["plan_task_id"]
+
+            # Plan Mode 生成的 Task 为 PENDING。
+            detail = _require_result(
+                _rpc_call(websocket, 3, "task.get", {"task_id": plan_task_id})[0]
+            )["task"]
+            assert detail["status"] == "pending"
+            assert detail["goal"] == "实现 Computer Runtime V1"
+            assert len(detail["steps"]) == 3
+
+            # accept: PENDING → ACTIVE。
+            accepted = _require_result(
+                _rpc_call(
+                    websocket, 4, "task.plan_accept", {"task_id": plan_task_id}
+                )[0]
+            )["task"]
+            assert accepted["status"] == "active"
+
+            # 已 ACTIVE 不能再次 accept / reject。
+            again = _rpc_call(
+                websocket, 5, "task.plan_accept", {"task_id": plan_task_id}
+            )[0]
+            assert again["error"]["code"] == -32001
+            reject = _rpc_call(
+                websocket, 6, "task.plan_reject", {"task_id": plan_task_id}
+            )[0]
+            assert reject["error"]["code"] == -32001
+
+
+def test_plan_mode_send_reject_task(make_app) -> None:
+    app, _, _ = make_app(
+        responses=[
+            _model_response(
+                tool_calls=(
+                    ToolCall(
+                        id="plan-1",
+                        name="task_create",
+                        arguments={"title": "另一个计划"},
+                    ),
+                )
+            ),
+            _model_response(content="计划已形成"),
+        ]
+    )
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            conversation_id = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )["conversation"]["id"]
+            result = _require_result(
+                _rpc_call(
+                    websocket,
+                    2,
+                    "conversation.send",
+                    {
+                        "conversation_id": conversation_id,
+                        "content": "规划",
+                        "mode": "plan",
+                    },
+                )[0]
+            )
+            plan_task_id = result["plan_task_id"]
+            rejected = _require_result(
+                _rpc_call(
+                    websocket, 3, "task.plan_reject", {"task_id": plan_task_id}
+                )[0]
+            )["task"]
+            assert rejected["status"] == "cancelled"
+
+
+def test_plan_mode_send_blocks_side_effect_tool(make_app) -> None:
+    app, _, _ = make_app(
+        responses=[
+            _model_response(
+                tool_calls=(
+                    ToolCall(
+                        id="bad-1",
+                        name="write_file",
+                        arguments={"path": "evil.txt", "content": "x"},
+                    ),
+                )
+            ),
+            _model_response(content="不应能写文件"),
+        ]
+    )
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            conversation_id = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )["conversation"]["id"]
+            result = _require_result(
+                _rpc_call(
+                    websocket,
+                    2,
+                    "conversation.send",
+                    {
+                        "conversation_id": conversation_id,
+                        "content": "写个文件",
+                        "mode": "plan",
+                    },
+                )[0]
+            )
+            assert result["run"]["mode"] == "plan"
+            # 副作用工具被阻断：tool 结果失败。
+            tool_result = result["result"]["tool_calls"][0]["result"]
+            assert tool_result["success"] is False
+            assert "not allowed in plan mode" in (tool_result["error"] or "")
+            # 未创建 Task → 明确提示。
+            assert result["plan_task_id"] is None
+
+
+def test_conversation_send_default_mode_is_normal(make_app) -> None:
+    app, _, _ = make_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            conversation_id = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )["conversation"]["id"]
+            result = _require_result(
+                _rpc_call(
+                    websocket,
+                    2,
+                    "conversation.send",
+                    {"conversation_id": conversation_id, "content": "你好"},
+                )[0]
+            )
+            assert result["run"]["mode"] == "normal"
+
+
+def test_conversation_send_invalid_mode(make_app) -> None:
+    app, _, _ = make_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/rpc") as websocket:
+            conversation_id = _require_result(
+                _rpc_call(websocket, 1, "conversation.create")[0]
+            )["conversation"]["id"]
+            message, _ = _rpc_call(
+                websocket,
+                2,
+                "conversation.send",
+                {
+                    "conversation_id": conversation_id,
+                    "content": "hi",
+                    "mode": "bogus",
+                },
+            )
+            assert message["error"]["code"] == -32602
 
 
 # ---------------------------------------------------------------------------

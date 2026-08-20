@@ -19,6 +19,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.models.types import AgentMode
+
 
 class RunStatus(StrEnum):
     """Run 的生命周期状态。
@@ -43,11 +45,14 @@ class RunStatus(StrEnum):
 
 # 允许的状态转换。
 # - PENDING → RUNNING：start() 创建后立即开始执行；
+# - PENDING → FAILED：仅进程重启 reconciliation 使用 —— 进程崩溃前创建但
+#   从未开始执行的 PENDING Run 不可能再启动，也没有 Checkpoint 可恢复，
+#   统一归入 FAILED 终态（不留 PENDING 永久卡住）。
 # - RUNNING → 终态 / INTERRUPTED：执行结束、失败、取消、进程中断。
 # INTERRUPTED 也是终态：中断后该 attempt 结束；恢复 = recover() 创建新的
 # execution attempt（旧 Run 永远保持 INTERRUPTED），不会重新进入 RUNNING。
 _ALLOWED_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
-    RunStatus.PENDING: frozenset({RunStatus.RUNNING}),
+    RunStatus.PENDING: frozenset({RunStatus.RUNNING, RunStatus.FAILED}),
     RunStatus.RUNNING: frozenset(
         {
             RunStatus.COMPLETED,
@@ -98,6 +103,8 @@ class Run(BaseModel):
     source_id: str | None = None
     scheduled_for: datetime | None = None
     triggered_at: datetime | None = None
+    # 一次执行的模式（NORMAL / PLAN）。不是生命周期状态，只是输入语义。
+    mode: AgentMode = AgentMode.NORMAL
 
     @field_validator("id", "conversation_id", "recovered_from_run_id", "source_id")
     @classmethod

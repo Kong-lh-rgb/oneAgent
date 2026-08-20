@@ -18,7 +18,6 @@ from app.agent.events import (
     AgentEvent,
     AgentEventHandler,
     AgentEventType,
-    CompositeEventHandler,
 )
 from app.application import Application, title_from_content
 from app.checkpoint import RunCheckpoint
@@ -54,10 +53,7 @@ from app.tools import (
 )
 from app.tools.builtin import WebSearchTool
 from app.tools.search import SearchError
-from app.trace import (
-    AgentRunTrace,
-    SQLiteTraceEventHandler,
-)
+from app.trace import AgentRunTrace
 
 from .types import Message, MessageRole, ModelProvider
 
@@ -626,7 +622,6 @@ async def _run(args: argparse.Namespace) -> int:
     skill_learning = app.skill_learning
     mcp_manager = app.mcp_manager
     tool_registry = app.tool_registry
-    trace_handler = SQLiteTraceEventHandler(trace_store)
     try:
         conversation, history, resumed = await _load_or_create_conversation(
             conversation_store,
@@ -811,27 +806,18 @@ async def _run(args: argparse.Namespace) -> int:
                             f"Run {updated.id[:8]} 已取消：{updated.status.value}"
                         )
                     else:
+                        # recover 完整链路由 ConversationService 统一收口。
                         try:
-                            new_run_id, _task = await run_manager.recover(
+                            dispatch = await conversation_service.recover(
                                 run.id,
-                                history=history,
-                                summary_state=(
-                                    await summary_store.load(conversation.id)
-                                    if summary_store is not None
-                                    else None
-                                ),
-                                event_handler=CompositeEventHandler(
-                                    trace_handler,
-                                    _CliEventHandler(),
-                                ),
+                                event_handler=_CliEventHandler(),
                             )
                         except (KeyError, ValueError) as exc:
                             print(exc)
                             continue
-                        recovered_run = await run_manager.wait(new_run_id)
-                        new_result = run_manager.result(new_run_id)
-                        if new_result is not None:
-                            history[:] = new_result.messages
+                        recovered_run = dispatch.run
+                        if dispatch.result is not None:
+                            history[:] = dispatch.result.messages
                         print(
                             f"Run {recovered_run.id[:8]} 恢复自 "
                             f"{run.id[:8]} · {recovered_run.status.value}"

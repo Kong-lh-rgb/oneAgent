@@ -92,6 +92,7 @@ export default function RunDetailPage({
           {field('source', run.source)}
           {run.source === 'automation' ? field('Triggered by Automation', run.source_id) : null}
           {field('source_id', run.source_id)}
+          {field('mode', run.mode)}
           {field('scheduled_for', run.scheduled_for)}
           {field('triggered_at', run.triggered_at)}
           {field('recovered_from_run_id', run.recovered_from_run_id)}

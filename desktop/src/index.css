@@ -269,6 +269,26 @@ textarea:focus {
   padding: 40px 16px;
 }
 
+/* Pending Approvals */
+.approval-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--bg-elevated, rgba(255, 255, 255, 0.02));
+}
+
+.approval-args {
+  margin: 8px 0 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.25);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow: auto;
+}
+
 .spinner {
   display: inline-block;
   width: 14px;

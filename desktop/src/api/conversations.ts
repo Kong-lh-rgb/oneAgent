@@ -2,7 +2,12 @@
 
 import { rpcClient } from '../rpc'
 import { RpcMethods } from '../rpc/methods'
-import type { Conversation, Message, SendMessageResponse } from './types'
+import type {
+  AgentMode,
+  Conversation,
+  Message,
+  SendMessageResponse,
+} from './types'
 
 export async function listConversations(limit = 50): Promise<Conversation[]> {
   const data = await rpcClient.call<{ conversations: Conversation[] }>(
@@ -31,9 +36,11 @@ export async function createConversation(): Promise<Conversation> {
 export async function sendMessage(
   conversationId: string,
   content: string,
+  mode: AgentMode = 'normal',
 ): Promise<SendMessageResponse> {
   return rpcClient.call(RpcMethods.conversationSend, {
     conversation_id: conversationId,
     content,
+    mode,
   })
 }

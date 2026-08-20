@@ -17,6 +17,13 @@ export const RpcMethods = {
   automationPause: 'automation.pause',
   automationResume: 'automation.resume',
   automationCancel: 'automation.cancel',
+  approvalList: 'approval.list',
+  approvalGet: 'approval.get',
+  approvalApprove: 'approval.approve',
+  approvalDeny: 'approval.deny',
+  taskGet: 'task.get',
+  taskPlanAccept: 'task.plan_accept',
+  taskPlanReject: 'task.plan_reject',
 } as const
 
 export type RpcMethodName = (typeof RpcMethods)[keyof typeof RpcMethods]

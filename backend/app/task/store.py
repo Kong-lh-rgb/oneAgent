@@ -36,6 +36,9 @@ logger = logging.getLogger("oneagent.task.store")
 _TERMINAL_STATUSES = frozenset(
     {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
 )
+# 会被当作“正在执行的活动任务”注入模型上下文的非终态状态。
+# PENDING（计划已生成但尚未开始执行）不算 active task —— 不应注入上下文。
+_CONTEXT_TASK_STATUSES = frozenset({TaskStatus.ACTIVE, TaskStatus.PAUSED})
 _TASK_ID_RE = re.compile(rf"^[0-9a-f]{{{TASK_ID_LENGTH}}}$")
 _TASK_PREFIX_RE = re.compile(rf"^[0-9a-f]{{4,{TASK_ID_LENGTH}}}$")
 
@@ -284,6 +287,56 @@ class FileTaskStore:
 
         return await self._update(task_id, TaskPatch(status=status))
 
+    async def plan_accept(self, task_id: str) -> Task:
+        """接受一个 PENDING 计划：PENDING → ACTIVE。
+
+        只允许 PENDING 任务被接受；已 ACTIVE / COMPLETED / CANCELLED 的
+        任务不接受（补状态校验）。
+        """
+
+        return await self._transition_from_pending(
+            task_id,
+            TaskStatus.ACTIVE,
+        )
+
+    async def plan_reject(self, task_id: str) -> Task:
+        """拒绝一个 PENDING 计划：PENDING → CANCELLED。
+
+        只允许 PENDING 任务被拒绝；已 ACTIVE / COMPLETED / CANCELLED 的
+        任务不允许再次拒绝。
+        """
+
+        return await self._transition_from_pending(
+            task_id,
+            TaskStatus.CANCELLED,
+        )
+
+    async def _transition_from_pending(
+        self,
+        task_id: str,
+        status: TaskStatus,
+    ) -> Task:
+        """在任务锁内原子地做“仅 PENDING 可转换”的校验与写入。"""
+
+        normalized = _validate_task_id(task_id)
+        async with self._lock_for(normalized):
+            task = await self._require(normalized)
+            if task.status is not TaskStatus.PENDING:
+                raise ValueError(
+                    f"only pending task can be transitioned: {task_id} "
+                    f"({task.status.value})"
+                )
+            now = datetime.now(UTC)
+            data = task.model_dump(mode="python")
+            data["status"] = status
+            if status in _TERMINAL_STATUSES:
+                data["completed_at"] = now
+            data["revision"] = task.revision + 1
+            data["updated_at"] = now
+            updated = Task.model_validate(data)
+            await self._write(updated)
+            return updated
+
     async def attach_run(self, task_id: str, run_id: str) -> Task:
         """把一次 Agent 运行关联到任务。"""
 
@@ -296,7 +349,12 @@ class FileTaskStore:
         self,
         conversation_id: str,
     ) -> Task | None:
-        """返回会话最近更新的非终态任务。"""
+        """返回会话最近更新的活动任务（ACTIVE / PAUSED）。
+
+        PENDING 不算活动任务：计划已生成但尚未开始执行，不应作为“正在执行的
+        任务”注入模型上下文（Plan Mode 产生的 PENDING 计划由用户接受后才算
+        开始执行）。
+        """
 
         normalized = _normalize_required_entry(
             conversation_id,
@@ -306,7 +364,7 @@ class FileTaskStore:
             task
             for task in await self._all_tasks()
             if normalized == task.owner_conversation_id
-            and task.status not in _TERMINAL_STATUSES
+            and task.status in _CONTEXT_TASK_STATUSES
         ]
         tasks.sort(key=lambda task: task.updated_at, reverse=True)
         return tasks[0] if tasks else None

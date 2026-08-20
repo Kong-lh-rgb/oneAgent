@@ -51,6 +51,7 @@ class StubRuntime:
         summary_state: ConversationSummaryState | None = None,
         run_id: str | None = None,
         recovery_run_id: str | None = None,
+        mode=None,
     ) -> AgentResult:
         self.seen_summary_state = summary_state
         user_message = Message(role=MessageRole.USER, content=user_input)
@@ -74,6 +75,7 @@ class StubRuntime:
         summary_state: ConversationSummaryState | None = None,
         run_id: str | None = None,
         recovery_run_id: str | None = None,
+        mode=None,
     ):
         result = await self.run(
             user_input,
@@ -82,6 +84,7 @@ class StubRuntime:
             summary_state=summary_state,
             run_id=run_id,
             recovery_run_id=recovery_run_id,
+            mode=mode,
         )
         events = (
             AgentEvent(
@@ -304,6 +307,7 @@ async def test_cli_persists_and_restores_complete_tool_protocol_history(
             summary_state: ConversationSummaryState | None = None,
             run_id: str | None = None,
             recovery_run_id: str | None = None,
+            mode=None,
         ) -> AgentResult:
             user_message = Message(role=MessageRole.USER, content=user_input)
             tool_call_message = Message(

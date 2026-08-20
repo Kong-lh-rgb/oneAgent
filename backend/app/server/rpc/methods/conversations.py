@@ -10,6 +10,7 @@ from typing import Any
 
 from app.application import title_from_content
 from app.conversation import ConversationSource, TriggerContext
+from app.models.types import AgentMode
 
 from ..dispatcher import RpcContext, RpcDispatcher
 from ..protocol import RESOURCE_NOT_FOUND, JsonRpcError, RpcErrorCode
@@ -59,6 +60,18 @@ async def conversation_send(
     if not content.strip():
         raise JsonRpcError(RpcErrorCode.INVALID_PARAMS, "content must be non-empty")
 
+    # 可选执行模式：normal（默认）/ plan。
+    mode = AgentMode.NORMAL
+    raw_mode = params.get("mode")
+    if raw_mode is not None:
+        try:
+            mode = AgentMode(raw_mode)
+        except ValueError as exc:
+            raise JsonRpcError(
+                RpcErrorCode.INVALID_PARAMS,
+                f"invalid mode: {raw_mode}",
+            ) from exc
+
     application = ctx.application
     conversation = await application.conversation_store.get(conversation_id)
     if conversation is None:
@@ -69,6 +82,7 @@ async def conversation_send(
         conversation_id=conversation_id,
         content=content,
         trigger=TriggerContext(source=ConversationSource.MANUAL),
+        mode=mode,
     )
     # 新会话第一次手动发送 → 复用现有标题生成逻辑。
     if conversation.title == "新会话":
@@ -81,6 +95,8 @@ async def conversation_send(
         "run": dispatch.run,
         "result": dispatch.result,
         "content": dispatch.result.content,
+        # Plan Mode：本轮创建 / 更新的 PENDING Task ID（normal 为 null）。
+        "plan_task_id": dispatch.result.plan_task_id,
     }
 
 

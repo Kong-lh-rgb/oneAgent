@@ -650,7 +650,15 @@ async def test_runtime_uses_rolling_summary_but_returns_complete_history() -> No
 
 
 @pytest.mark.asyncio
-async def test_runtime_injects_task_created_in_current_run(tmp_path) -> None:
+async def test_runtime_does_not_inject_pending_task_created_in_current_run(
+    tmp_path,
+) -> None:
+    """Normal Mode 下 task_create 生成 PENDING 任务：不作为 active task 注入。
+
+    Plan Mode V1 语义：PENDING = 计划已生成但尚未开始执行；只有用户接受
+    （PENDING → ACTIVE）后才注入模型上下文。
+    """
+
     task_store = FileTaskStore(tmp_path / "tasks")
     await task_store.initialize()
     registry, adapter = fake_registry(
@@ -690,20 +698,21 @@ async def test_runtime_injects_task_created_in_current_run(tmp_path) -> None:
     assert len(tasks) == 1
     assert tasks[0].owner_conversation_id == "conversation-1"
     assert result.run_id in tasks[0].run_ids
+    # 创建后任务仍为 PENDING，不作为 active task 注入（任何一步都不注入）。
+    assert tasks[0].status.value == "pending"
+    for request in adapter.requests:
+        assert not any(
+            message.name == TASK_CONTEXT_MESSAGE_NAME
+            for message in request.messages
+        )
     assert not any(
         message.name == TASK_CONTEXT_MESSAGE_NAME for message in result.messages
     )
-    assert not any(
-        message.name == TASK_CONTEXT_MESSAGE_NAME
-        for message in adapter.requests[0].messages
-    )
-    injected = next(
-        message
-        for message in adapter.requests[1].messages
-        if message.name == TASK_CONTEXT_MESSAGE_NAME
-    )
-    assert tasks[0].id in (injected.content or "")
-    assert "expected_revision" in (injected.content or "")
+
+    # 用户接受后（PENDING → ACTIVE）才注入模型上下文。
+    await task_store.plan_accept(tasks[0].id)
+    injected = await TaskContextProvider(task_store).message_for("conversation-1")
+    assert injected is not None and tasks[0].id in (injected.content or "")
 
 
 @pytest.mark.asyncio
@@ -715,6 +724,8 @@ async def test_runtime_refreshes_task_context_after_step_update(tmp_path) -> Non
         steps=(TaskStep(id="step-1", title="完成实现"),),
         owner_conversation_id="conversation-1",
     )
+    # 只有 ACTIVE（已接受）任务才会作为活动任务注入并跨步刷新。
+    task = await task_store.plan_accept(task.id)
     registry, adapter = fake_registry(
         [
             model_response(
@@ -756,9 +767,10 @@ async def test_runtime_refreshes_task_context_after_step_update(tmp_path) -> Non
         for message in adapter.requests[1].messages
         if message.name == TASK_CONTEXT_MESSAGE_NAME
     )
-    assert '"revision":1' in (first_context.content or "")
+    # 接受后 revision=2；跨步刷新后 revision=3，且步骤状态 todo → done。
+    assert '"revision":2' in (first_context.content or "")
     assert '"status":"todo"' in (first_context.content or "")
-    assert '"revision":2' in (second_context.content or "")
+    assert '"revision":3' in (second_context.content or "")
     assert '"status":"done"' in (second_context.content or "")
 
 

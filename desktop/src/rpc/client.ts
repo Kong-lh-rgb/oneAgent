@@ -32,7 +32,6 @@ interface OpenWaiter {
   timer: ReturnType<typeof setTimeout>
 }
 
-const WS_CONNECTING = 0
 const WS_OPEN = 1
 
 export class RpcClient {
@@ -200,6 +199,7 @@ export class RpcClient {
     let message: {
       id?: number
       method?: string
+      params?: unknown
       result?: unknown
       error?: { code: number; message: string; data?: unknown }
     }

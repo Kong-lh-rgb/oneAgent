@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
-from app.models.types import ToolDefinition
+from app.models.types import AgentMode, ToolDefinition
 
 from ..tools.base import BaseTool
 from ..tools.hooks import ToolExecutionContext
@@ -286,6 +286,21 @@ class TaskUpdateTool(BaseTool):
             raise ValueError(
                 "task_update requires at least one update field besides task_id"
             )
+
+        # Plan Mode：只允许更新计划内容（goal/steps/state/constraints/facts），
+        # 不允许改变任务状态或推进步骤状态（步骤完成是执行期的事）。
+        if context is not None and context.mode is AgentMode.PLAN:
+            if "status" in arguments:
+                raise ValueError(
+                    "plan mode 下不能直接改变任务状态；任务由用户接受后才开始"
+                )
+            if (
+                arguments.get("step_id") is not None
+                or arguments.get("step_status") is not None
+            ):
+                raise ValueError(
+                    "plan mode 下不能推进步骤状态；只允许更新计划内容"
+                )
 
         # 先验证全部字段，再执行一次原子写入。
         step_id = arguments.get("step_id")

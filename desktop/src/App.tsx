@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 
 import { useEventsStore } from './stores/events'
+import ApprovalsPage from './pages/ApprovalsPage'
 import AutomationsPage from './pages/AutomationsPage'
 import ChatPage from './pages/ChatPage'
 import RunDetailPage from './pages/RunDetailPage'
 import RunsPage from './pages/RunsPage'
 import SettingsPage from './pages/SettingsPage'
 
-export type PageKey = 'chat' | 'runs' | 'automations' | 'settings'
+export type PageKey = 'chat' | 'runs' | 'automations' | 'approvals' | 'settings'
 
 export interface AppState {
   page: PageKey
@@ -50,6 +51,7 @@ export default function App(): React.JSX.Element {
             <RunsPage openRun={openRun} />
           ))}
         {page === 'automations' && <AutomationsPage />}
+        {page === 'approvals' && <ApprovalsPage />}
         {page === 'settings' && <SettingsPage />}
       </div>
     </div>
@@ -68,6 +70,7 @@ function Sidebar({
     { key: 'chat', label: 'Chat' },
     { key: 'runs', label: 'Runs' },
     { key: 'automations', label: 'Automations' },
+    { key: 'approvals', label: 'Approvals' },
     { key: 'settings', label: 'Settings' },
   ]
   return (

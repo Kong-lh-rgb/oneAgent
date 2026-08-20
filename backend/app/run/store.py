@@ -16,6 +16,7 @@ from uuid import uuid4
 import aiosqlite
 
 from app.conversation import DEFAULT_DATABASE_PATH
+from app.models.types import AgentMode
 
 from .models import (
     _ALLOWED_TRANSITIONS,
@@ -40,7 +41,8 @@ CREATE TABLE IF NOT EXISTS runs (
     source TEXT,
     source_id TEXT,
     scheduled_for TEXT,
-    triggered_at TEXT
+    triggered_at TEXT,
+    mode TEXT NOT NULL DEFAULT 'normal'
 );
 
 CREATE INDEX IF NOT EXISTS idx_runs_conversation_updated
@@ -56,6 +58,7 @@ _PROVENANCE_COLUMNS = (
     "source_id TEXT",
     "scheduled_for TEXT",
     "triggered_at TEXT",
+    "mode TEXT NOT NULL DEFAULT 'normal'",
 )
 
 
@@ -88,6 +91,7 @@ class SQLiteRunStore:
         source_id: str | None = None,
         scheduled_for: datetime | None = None,
         triggered_at: datetime | None = None,
+        mode: AgentMode = AgentMode.NORMAL,
     ) -> Run:
         """创建一个 PENDING Run，并返回完整记录。"""
 
@@ -100,8 +104,8 @@ class SQLiteRunStore:
                 INSERT INTO runs (
                     run_id, conversation_id, status, user_message,
                     created_at, updated_at, recovered_from_run_id,
-                    source, source_id, scheduled_for, triggered_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source, source_id, scheduled_for, triggered_at, mode
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -123,12 +127,12 @@ class SQLiteRunStore:
                         if triggered_at is not None
                         else None
                     ),
+                    AgentMode(mode).value,
                 ),
             )
             await database.commit()
         run = await self.require(run_id)
         return run
-
 
     async def get(self, run_id: str) -> Run | None:
         async with self._connect() as database:
@@ -356,6 +360,11 @@ def _run_from_row(row: aiosqlite.Row) -> Run:
             if "triggered_at" in row.keys()
             and row["triggered_at"] is not None
             else None
+        ),
+        mode=(
+            AgentMode(row["mode"])
+            if "mode" in row.keys() and row["mode"] is not None
+            else AgentMode.NORMAL
         ),
     )
 

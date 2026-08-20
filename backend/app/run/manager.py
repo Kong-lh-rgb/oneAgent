@@ -20,11 +20,13 @@ from app.agent.result import AgentResult
 from app.agent.runtime import AgentRuntime
 from app.checkpoint import CheckpointStatus, SQLiteCheckpointStore
 from app.context import ConversationSummaryState
+from app.models.types import AgentMode
 
 from .models import Run, RunStatus
 from .store import SQLiteRunStore
 
 _STALE_RUN_ERROR = "process restarted; run did not reach a terminal state"
+_STALE_PENDING_ERROR = "process restarted; run never started"
 
 
 class RunManager:
@@ -64,17 +66,27 @@ class RunManager:
         顺序：
         1. Checkpoint 层：先把所有遗留 RUNNING Checkpoint 转 INTERRUPTED
            （checkpoint.recover_running 不区分会话，处理全部遗留记录）；
-        2. Run 层：基于 Checkpoint 事实修正 RUNNING Run：
-           - 有 Checkpoint（已转 INTERRUPTED）→ Run 转 INTERRUPTED；
-           - Checkpoint 已是 COMPLETED / FAILED → Run 同步为对应终态
-             （Checkpoint 是“执行边界”的事实源，说明 Run 状态更新滞后）；
-           - 不存在 Checkpoint → Run 转 FAILED（没有可恢复状态）。
+        2. Run 层：
+           - 遗留 PENDING：创建后从未开始执行，进程重启后不可能再启动，
+             也没有 Checkpoint 可恢复 → 直接归入 FAILED 终态；
+           - 遗留 RUNNING：基于 Checkpoint 事实修正 ——
+             * 有 Checkpoint（已转 INTERRUPTED）→ Run 转 INTERRUPTED；
+             * Checkpoint 已是 COMPLETED / FAILED → Run 同步为对应终态
+               （Checkpoint 是“执行边界”的事实源，说明 Run 状态更新滞后）；
+             * 不存在 Checkpoint → Run 转 FAILED（没有可恢复状态）。
         """
 
         if self._checkpoint_store is not None:
             await self._checkpoint_store.recover_running()
-        stale = await self._run_store.list_runs(status=RunStatus.RUNNING)
+        stale_pending = await self._run_store.list_runs(status=RunStatus.PENDING)
         reconciled: list[Run] = []
+        for run in stale_pending:
+            updated = await self._run_store.mark_failed(
+                run.id,
+                error=_STALE_PENDING_ERROR,
+            )
+            reconciled.append(updated)
+        stale = await self._run_store.list_runs(status=RunStatus.RUNNING)
         for run in stale:
             checkpoint = await self._checkpoint_store.get(run.id)
             if checkpoint is None:
@@ -124,6 +136,7 @@ class RunManager:
         source_id: str | None = None,
         scheduled_for: datetime | None = None,
         triggered_at: datetime | None = None,
+        mode: AgentMode = AgentMode.NORMAL,
     ) -> tuple[str, asyncio.Task[None]]:
         """创建一个新 Run 并开始异步执行，返回 (run_id, task)。
 
@@ -132,7 +145,8 @@ class RunManager:
         ``cancel()`` 主动取消。
 
         ``source / source_id / scheduled_for / triggered_at`` 是触发来源
-        provenance（如 automation_id），随 Run 一起持久化。
+        provenance（如 automation_id），随 Run 一起持久化；``mode`` 是本次
+        执行的模式（NORMAL / PLAN），一并持久化。
         """
 
         run = await self._run_store.create(
@@ -143,6 +157,7 @@ class RunManager:
             source_id=source_id,
             scheduled_for=scheduled_for,
             triggered_at=triggered_at,
+            mode=mode,
         )
         await self._run_store.mark_started(run.id)
         task = asyncio.create_task(
@@ -154,6 +169,7 @@ class RunManager:
                 summary_state=summary_state,
                 event_handler=event_handler,
                 recovery_run_id=recovery_run_id,
+                mode=mode,
             )
         )
         self._active_tasks[run.id] = task
@@ -284,6 +300,8 @@ class RunManager:
             event_handler=event_handler,
             recovery_run_id=run_id,
             recovered_from_run_id=run_id,
+            # 恢复后的新 Run 沿用旧 Run 的执行模式。
+            mode=run.mode,
         )
 
     # ------------------------------------------------------------------
@@ -300,6 +318,7 @@ class RunManager:
         summary_state: ConversationSummaryState | None,
         event_handler: AgentEventHandler | None,
         recovery_run_id: str | None,
+        mode: AgentMode,
     ) -> None:
         try:
             result: AgentResult | None = None
@@ -312,6 +331,7 @@ class RunManager:
                     summary_state=summary_state,
                     run_id=run_id,
                     recovery_run_id=recovery_run_id,
+                    mode=mode,
                 ):
                     if event.result is not None:
                         result = event.result

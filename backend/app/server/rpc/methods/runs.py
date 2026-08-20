@@ -8,9 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.agent.events import CompositeEventHandler
 from app.run import RunStatus
-from app.trace import SQLiteTraceEventHandler
 
 from ..dispatcher import RpcContext, RpcDispatcher
 from ..protocol import (
@@ -79,39 +77,16 @@ async def run_recover(params: dict[str, Any], ctx: RpcContext) -> dict[str, Any]
     if run is None:
         raise JsonRpcError(RESOURCE_NOT_FOUND, "run not found")
 
-    # 加载该会话最新 history / summary，与 CLI recover 路径一致。
-    history: tuple[Any, ...] = ()
-    summary_state = None
-    if run.conversation_id is not None:
-        history = tuple(
-            await application.conversation_store.load_messages(run.conversation_id)
-        )
-        if application.summary_store is not None:
-            summary_state = await application.summary_store.load(run.conversation_id)
-
-    # Trace + 全局共享观察者（RPC 广播）都接上，恢复后的 Run 也能实时展示。
-    handlers = [SQLiteTraceEventHandler(application.trace_store)]
-    if application.shared_event_handler is not None:
-        handlers.append(application.shared_event_handler)
-    event_handler = (
-        CompositeEventHandler(*handlers) if len(handlers) > 1 else handlers[0]
-    )
-
+    # recover 的完整执行链（load history/summary → recover → wait → 写回
+    # Conversation → Summary）统一由 ConversationService 收口，与 CLI 同路径。
     try:
-        new_run_id, _task = await application.run_manager.recover(
-            run.id,
-            history=history,
-            summary_state=summary_state,
-            event_handler=event_handler,
-        )
-    except ValueError as exc:
+        dispatch = await application.conversation_service.recover(run_id)
+    except (KeyError, ValueError) as exc:
         raise JsonRpcError(INVALID_STATE, str(exc)) from exc
-    recovered_run = await application.run_manager.wait(new_run_id)
-    result = application.run_manager.result(new_run_id)
     return {
         "recovered_from_run_id": run.id,
-        "run": recovered_run,
-        "result": result,
+        "run": dispatch.run,
+        "result": dispatch.result,
     }
 
 

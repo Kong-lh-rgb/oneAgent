@@ -38,12 +38,15 @@ def _message(role: MessageRole, content: str) -> Message:
 
 
 class StubRunManager:
-    """记录 start；返回固定 AgentResult；可配置 get_run 状态。"""
+    """记录 start / recover；返回固定 AgentResult；可配置 get_run 状态。"""
 
     def __init__(self, agent_result: AgentResult) -> None:
         self._agent_result = agent_result
         self.started: list[dict] = []
+        self.recovered: list[dict] = []
         self.run_status = "completed"
+        self.conversation_id: str | None = "conv-stub"
+        self.missing_run = False
 
     async def start(
         self,
@@ -58,6 +61,7 @@ class StubRunManager:
         source_id=None,
         scheduled_for=None,
         triggered_at=None,
+        mode=None,
     ) -> tuple[str, None]:
         self.started.append(
             {
@@ -70,9 +74,28 @@ class StubRunManager:
                 "source_id": source_id,
                 "scheduled_for": scheduled_for,
                 "triggered_at": triggered_at,
+                "mode": mode,
             }
         )
         return "run-1", None
+
+    async def recover(
+        self,
+        run_id: str,
+        *,
+        history=(),
+        summary_state=None,
+        event_handler=None,
+    ) -> tuple[str, None]:
+        self.recovered.append(
+            {
+                "run_id": run_id,
+                "history": history,
+                "summary_state": summary_state,
+                "event_handler": event_handler,
+            }
+        )
+        return "run-2", None
 
     async def wait(self, run_id: str):
         return SimpleNamespace(
@@ -86,7 +109,13 @@ class StubRunManager:
         return self._agent_result
 
     async def get_run(self, run_id: str):
-        return SimpleNamespace(status=SimpleNamespace(value=self.run_status))
+        if self.missing_run:
+            return None
+        return SimpleNamespace(
+            id=run_id,
+            conversation_id=self.conversation_id,
+            status=SimpleNamespace(value=self.run_status),
+        )
 
 
 def _result_with(messages: tuple[Message, ...], *, summary=None) -> AgentResult:
@@ -388,6 +417,7 @@ class ConcurrentRunManager:
         source_id=None,
         scheduled_for=None,
         triggered_at=None,
+        mode=None,
     ) -> tuple[str, None]:
         self.active += 1
         self.max_active = max(self.max_active, self.active)
@@ -396,6 +426,7 @@ class ConcurrentRunManager:
                 "conversation_id": conversation_id,
                 "content": user_message,
                 "history": tuple(history),
+                "mode": mode,
             }
         )
         return f"run-{len(self.calls)}", None
@@ -522,6 +553,7 @@ class ProvenanceRuntime:
         summary_state=None,
         run_id=None,
         recovery_run_id=None,
+        mode=None,
     ):
         final = _message(MessageRole.ASSISTANT, "完成")
         user = _message(MessageRole.USER, user_input)
@@ -587,3 +619,98 @@ async def test_run_provenance_persisted_across_restart(
     assert run.source_id == "auto-9"
     assert run.scheduled_for is not None
     assert run.triggered_at is not None
+
+
+# ---------------------------------------------------------------------------
+# 10. recover 收口：load → recover → wait → 写回 Conversation + Summary
+# ---------------------------------------------------------------------------
+
+
+async def test_recover_writes_back_conversation_and_summary(
+    service_factory,
+) -> None:
+    """recover 后最终 messages 写回 Conversation，summary_state 写回 SummaryStore。"""
+
+    state = ConversationSummaryState(
+        summary=RollingConversationSummary(current_objective="恢复后继续"),
+        covered_message_count=4,
+    )
+    service, conversation_store, summary_store, _, manager = await service_factory(
+        _result_with(
+            (
+                _message(MessageRole.USER, "A"),
+                _message(MessageRole.ASSISTANT, "B"),
+                _message(MessageRole.USER, "C"),
+                _message(MessageRole.ASSISTANT, "D-恢复"),
+            ),
+            summary=state,
+        )
+    )
+    conversation = await conversation_store.create(
+        messages=(
+            _message(MessageRole.USER, "A"),
+            _message(MessageRole.ASSISTANT, "B"),
+        )
+    )
+    manager.conversation_id = conversation.id
+
+    dispatch = await service.recover("old-run")
+
+    # 恢复时把最新持久化 history（A B）交给 RunManager.recover。
+    recovered = manager.recovered[0]
+    assert recovered["run_id"] == "old-run"
+    assert [m.content for m in recovered["history"]] == ["A", "B"]
+
+    # 写回后持久化 Conversation 为完整结果。
+    persisted = await conversation_store.load_messages(conversation.id)
+    assert [m.content for m in persisted] == [
+        "A",
+        "B",
+        "C",
+        "D-恢复",
+    ]
+    # summary_state 正确写回 SummaryStore。
+    saved = await summary_store.load(conversation.id)
+    assert saved is not None
+    assert saved.summary.current_objective == "恢复后继续"
+    assert saved.covered_message_count == 4
+    assert dispatch.run.id == "run-2"
+
+
+async def test_recover_missing_run_raises(service_factory) -> None:
+    service, _, _, _, manager = await service_factory(
+        _result_with((_message(MessageRole.USER, "A"),))
+    )
+    manager.missing_run = True
+
+    with pytest.raises(KeyError):
+        await service.recover("no-such-run")
+    assert manager.recovered == []
+
+
+async def test_recover_uses_latest_summary(service_factory) -> None:
+    """recover 加载会话最新 Summary 交给 RunManager，而非空 state。"""
+
+    state = ConversationSummaryState(
+        summary=RollingConversationSummary(current_objective="旧目标"),
+        covered_message_count=2,
+    )
+    service, conversation_store, summary_store, _, manager = await service_factory(
+        _result_with(
+            (
+                _message(MessageRole.USER, "A"),
+                _message(MessageRole.ASSISTANT, "B"),
+            )
+        )
+    )
+    conversation = await conversation_store.create(
+        messages=(_message(MessageRole.USER, "A"),)
+    )
+    await summary_store.save(conversation.id, state)
+    manager.conversation_id = conversation.id
+
+    await service.recover("old-run")
+
+    recovered = manager.recovered[0]
+    assert recovered["summary_state"] is not None
+    assert recovered["summary_state"].summary.current_objective == "旧目标"

@@ -1,6 +1,6 @@
 /** notification 的 params 类型（复用现有 AgentEvent / Run status）。 */
 
-import type { AgentEvent } from '../api/types'
+import type { AgentEvent, ApprovalRequest } from '../api/types'
 
 export interface AgentEventNotificationParams {
   /** JSON-RPC notification：method=agent.event，params=AgentEvent */
@@ -13,4 +13,10 @@ export interface RunStatusNotificationParams {
   jsonrpc?: '2.0'
   method?: string
   params: { run_id: string; status: string }
+}
+
+export interface ApprovalNotificationParams {
+  jsonrpc?: '2.0'
+  method?: string
+  params: { approval: ApprovalRequest }
 }

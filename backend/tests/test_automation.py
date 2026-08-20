@@ -681,6 +681,7 @@ class _IntegrationRunManager:
         source_id=None,
         scheduled_for=None,
         triggered_at=None,
+        mode=None,
     ) -> tuple[str, None]:
         self.started.append(user_message)
         return "run-auto", None

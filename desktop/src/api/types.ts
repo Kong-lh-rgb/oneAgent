@@ -32,6 +32,8 @@ export type RunStatus =
   | 'cancelled'
   | 'interrupted'
 
+export type AgentMode = 'normal' | 'plan'
+
 export interface Run {
   id: string
   conversation_id: string | null
@@ -48,6 +50,7 @@ export interface Run {
   source_id: string | null
   scheduled_for: string | null
   triggered_at: string | null
+  mode: AgentMode
 }
 
 export interface ModelUsage {
@@ -64,6 +67,7 @@ export interface AgentResult {
   stop_reason: string
   usage: ModelUsage
   error: { type: string; message: string } | null
+  plan_task_id: string | null
 }
 
 export interface SendMessageResponse {
@@ -71,6 +75,41 @@ export interface SendMessageResponse {
   content: string | null
   run: Run
   result: AgentResult
+  plan_task_id: string | null
+}
+
+export type TaskStatus =
+  | 'pending'
+  | 'active'
+  | 'paused'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+
+export interface TaskStep {
+  id: string
+  title: string
+  status: 'todo' | 'in_progress' | 'done' | 'blocked'
+  note: string | null
+}
+
+export interface Task {
+  id: string
+  title: string
+  description: string | null
+  goal: string | null
+  status: TaskStatus
+  priority: string
+  constraints: string[]
+  state: string[]
+  key_facts: string[]
+  steps: TaskStep[]
+  owner_conversation_id: string
+  run_ids: string[]
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+  revision: number
 }
 
 export interface AgentRunTrace {
@@ -138,6 +177,21 @@ export interface Automation {
   last_run_id: string | null
   created_at: string
   updated_at: string
+}
+
+export type ApprovalStatus = 'pending' | 'approved' | 'denied'
+
+export interface ApprovalRequest {
+  id: string
+  run_id: string | null
+  conversation_id: string | null
+  tool_name: string
+  tool_call_id: string
+  arguments: Record<string, unknown>
+  reason: string
+  status: ApprovalStatus
+  created_at: string
+  resolved_at: string | null
 }
 
 export interface Health {

@@ -427,6 +427,49 @@ async def test_reconcile_running_without_checkpoint_becomes_failed(
     assert "no recoverable checkpoint" in (reconciled[0].error or "")
 
 
+async def test_reconcile_stale_pending_becomes_failed(
+    tmp_path,
+    manager_factory,
+) -> None:
+    """进程重启：遗留 PENDING Run（创建后从未开始）→ FAILED 终态，不留卡住。
+
+    PENDING 不是终态；进程崩溃后它不可能再被启动，也没有 Checkpoint 可恢复，
+    统一归入 FAILED，避免永久卡在 PENDING。
+    """
+
+    build_manager = manager_factory
+    database = tmp_path / "oneagent.db"
+    run_store = SQLiteRunStore(database)
+    await run_store.initialize()
+    pending = await run_store.create(
+        conversation_id="conv-1",
+        user_message="从未开始的运行",
+    )
+    # 模拟进程在 create 之后、mark_started 之前崩溃：Run 停在 PENDING。
+    assert pending.status is RunStatus.PENDING
+
+    registry, _ = fake_registry([model_response(content="完成")])
+    checkpoint_store = SQLiteCheckpointStore(database)
+    await checkpoint_store.initialize()
+    manager, _, _ = await build_manager(
+        registry,
+        run_store=run_store,
+        checkpoint_store=checkpoint_store,
+    )
+
+    reconciled = await manager.initialize()
+
+    assert [item.id for item in reconciled] == [pending.id]
+    assert reconciled[0].status is RunStatus.FAILED
+    assert "never started" in (reconciled[0].error or "")
+    # 不再有 PENDING Run 残留。
+    still_pending = await run_store.list_runs(status=RunStatus.PENDING)
+    assert still_pending == ()
+    # 已转终态，不能再被 recover。
+    with pytest.raises(ValueError):
+        await manager.recover(pending.id)
+
+
 # ---------------------------------------------------------------------------
 # 5. recover INTERRUPTED Run → 使用 Checkpoint → 继续执行 → COMPLETED
 # ---------------------------------------------------------------------------
@@ -579,9 +622,11 @@ async def test_invalid_state_transitions_rejected(tmp_path) -> None:
     # PENDING → COMPLETED 非法（必须先 RUNNING）。
     with pytest.raises(ValueError, match="invalid run transition"):
         await store.mark_completed(run.id)
-    # PENDING → FAILED 非法。
+    # PENDING → FAILED 只允许出现在进程重启 reconciliation（stale PENDING
+    # 归入 FAILED 终态），见 test_reconcile_stale_pending_becomes_failed。
+    # 这里 PENDING → CANCELLED 仍非法。
     with pytest.raises(ValueError, match="invalid run transition"):
-        await store.mark_failed(run.id)
+        await store.mark_cancelled(run.id)
 
     await store.mark_started(run.id)
     await store.mark_completed(run.id)

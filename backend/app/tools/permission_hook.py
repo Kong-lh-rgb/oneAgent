@@ -94,6 +94,8 @@ class PermissionHook(ToolHook):
             tool_name=context.tool_call.name,
             arguments=context.arguments or {},
             description=definition.description,
+            run_id=context.run_id,
+            conversation_id=context.conversation_id,
         )
 
         if self._policy is not None:

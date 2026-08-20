@@ -35,10 +35,14 @@ def create_app(application: Application | None = None) -> FastAPI:
 
     ``application`` 为 None 时自动用默认配置创建（provider 从 .env 选择）。
     调用方也可传入已配置的 Application（例如测试注入离线 fake registry）。
+    Server 是 Desktop 的 Host：无论哪种方式都启用 DesktopApprovalGate
+    （Async Approval V1），CLI 仍用 ConsoleApprovalGate。
     """
 
     if application is None:
-        application = Application()
+        application = Application(desktop_approval=True)
+    else:
+        application.desktop_approval = True
 
     # 全局共享事件观察者：在 application.start() 之前注入，
     # ConversationService 构造时会把 RPC 广播与 Trace 一起组合。
@@ -51,6 +55,11 @@ def create_app(application: Application | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await application.start()
+        # Async Approval：把 WebSocket hub 注入审批门作为通知广播器
+        # （approval.required / approval.resolved）。
+        approval_gate = application.desktop_approval_gate
+        if approval_gate is not None:
+            approval_gate.set_broadcaster(hub.broadcast)
         logger.info(
             "oneagent server started · provider=%s · model=%s",
             application.provider,

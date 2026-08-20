@@ -343,7 +343,7 @@ async def test_revision_conflict_does_not_overwrite_task(
     assert current == updated
 
 
-async def test_active_task_is_latest_non_terminal_for_conversation(
+async def test_active_task_is_latest_active_or_paused_for_conversation(
     store: FileTaskStore,
 ) -> None:
     first = await store.create(
@@ -356,10 +356,23 @@ async def test_active_task_is_latest_non_terminal_for_conversation(
     )
     await store.set_status(first.id, TaskStatus.COMPLETED)
 
-    active = await store.active_for_conversation("conv-1")
+    # 两个任务都还是 PENDING：不算 active task。
+    assert await store.active_for_conversation("conv-1") is None
 
+    # 用户接受第二个 → ACTIVE 成为活动任务。
+    await store.plan_accept(second.id)
+    active = await store.active_for_conversation("conv-1")
     assert active is not None
     assert active.id == second.id
+    assert active.status is TaskStatus.ACTIVE
+
+    # PENDING 计划（未接受）不能被当作正在执行的任务。
+    pending_only = await store.create(
+        title="未接受计划",
+        owner_conversation_id="conv-2",
+    )
+    assert pending_only.status is TaskStatus.PENDING
+    assert await store.active_for_conversation("conv-2") is None
 
 
 async def test_task_context_provider_reads_only_current_owner(
@@ -373,6 +386,8 @@ async def test_task_context_provider_reads_only_current_owner(
         title="B 私有任务",
         owner_conversation_id="conv-b",
     )
+    await store.plan_accept(task_a.id)
+    await store.plan_accept(task_b.id)
     provider = TaskContextProvider(store)
 
     message_a = await provider.message_for("conv-a")
@@ -383,6 +398,26 @@ async def test_task_context_provider_reads_only_current_owner(
     assert message_b is not None and task_b.id in (message_b.content or "")
     assert task_a.id not in (message_b.content or "")
     assert await provider.message_for(None) is None
+
+
+async def test_pending_task_not_injected_as_active_context(
+    store: FileTaskStore,
+) -> None:
+    """PENDING 计划不被当作正在执行的活动任务注入 Normal Mode 上下文。"""
+
+    task = await store.create(
+        title="未接受计划",
+        owner_conversation_id="conv-a",
+    )
+    assert task.status is TaskStatus.PENDING
+    provider = TaskContextProvider(store)
+
+    assert await provider.message_for("conv-a") is None
+
+    # 接受后才会被注入。
+    await store.plan_accept(task.id)
+    message = await provider.message_for("conv-a")
+    assert message is not None and task.id in (message.content or "")
 
 
 async def test_task_context_folds_old_done_steps_but_keeps_working_steps(
@@ -402,6 +437,7 @@ async def test_task_context_folds_old_done_steps_but_keeps_working_steps(
         )
         + (TaskStep(id="step-next", title="下一步"),),
     )
+    await store.plan_accept(task.id)  # 只有 ACTIVE 任务才作为活动任务注入
     provider = TaskContextProvider(store, recent_done_steps=2)
 
     message = await provider.message_for("conv-a")

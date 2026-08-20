@@ -21,6 +21,17 @@ class ApiStyle(StrEnum):
     ANTHROPIC_MESSAGES = "anthropic_messages"
 
 
+class AgentMode(StrEnum):
+    """一次 Agent 执行的模式（输入语义，不是 Run 生命周期状态）。
+
+    - NORMAL：默认模式，模型自行判断是否需要 Task；
+    - PLAN：只读 / 规划模式，只分析调查并形成一个 PENDING Task，不修改环境。
+    """
+
+    NORMAL = "normal"
+    PLAN = "plan"
+
+
 class MessageRole(StrEnum):
     SYSTEM = "system"
     USER = "user"

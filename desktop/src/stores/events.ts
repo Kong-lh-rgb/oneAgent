@@ -3,7 +3,7 @@
 不再自己 new WebSocket —— 全 Renderer 只有一个共享 RpcClient（src/rpc）。
 WebSocket notification 只用于实时 UI 更新；SQLite 才是 durable source of truth，
 断线重连后由页面通过 query/refetch 恢复。
-"""
+*/
 
 import { create } from 'zustand'
 

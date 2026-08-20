@@ -3,7 +3,15 @@
 from __future__ import annotations
 
 from ..dispatcher import RpcDispatcher
-from . import automations, conversations, runs, system, trace
+from . import (
+    approvals,
+    automations,
+    conversations,
+    runs,
+    system,
+    tasks,
+    trace,
+)
 
 
 def build_dispatcher() -> RpcDispatcher:
@@ -15,6 +23,8 @@ def build_dispatcher() -> RpcDispatcher:
     runs.register(dispatcher)
     trace.register(dispatcher)
     automations.register(dispatcher)
+    approvals.register(dispatcher)
+    tasks.register(dispatcher)
     return dispatcher
 
 

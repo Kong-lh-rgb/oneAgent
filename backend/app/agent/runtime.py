@@ -28,6 +28,7 @@ from app.memory import (
 )
 from app.models.registry import ModelAdapterRegistry
 from app.models.types import (
+    AgentMode,
     Message,
     MessageRole,
     ModelProvider,
@@ -82,6 +83,19 @@ from .result import (
 from .tool_hooks import AgentEventHook
 
 _LEGACY_DATE_PATTERN = re.compile(r"当前日期是 \d{4}-\d{2}-\d{2}。")
+
+# Plan Mode 系统指令（补充；真正的限制由工具过滤 + 执行层硬阻断保证）。
+_PLAN_MODE_SYSTEM_MESSAGE = (
+    "你现在处于 PLAN MODE（规划模式）：只分析、调查并形成计划，不要修改用户环境。\n"
+    "你可以使用只读 / 搜索工具（read_file、list_files、web_search、current_time、"
+    "memory_read）与任务工具（task_create、task_update、task_get、task_list）。\n"
+    "完成必要调查后，必须创建（task_create）或更新（task_update）一个 PENDING 任务"
+    "作为本轮计划，至少包含 title、goal 与具体可执行的 steps；不要伪造 DONE 步骤、"
+    "已完成 state 或已验证 key_facts。\n"
+    "最后返回简洁的计划说明。"
+)
+
+_PLAN_NO_TASK_MESSAGE = "Plan mode finished without creating a task."
 
 
 class AgentRuntime:
@@ -164,6 +178,7 @@ class AgentRuntime:
         summary_state: ConversationSummaryState | None = None,
         run_id: str | None = None,
         recovery_run_id: str | None = None,
+        mode: AgentMode = AgentMode.NORMAL,
     ) -> AgentResult:
         """处理一次用户输入并返回完整的运行结果（AgentResult）。
 
@@ -175,6 +190,7 @@ class AgentRuntime:
         ``recovery_run_id`` 可选：显式指定要恢复的旧中断 Checkpoint（对应旧 Run）。
         只有显式传入 ``recovery_run_id`` 时本 Run 才会加载恢复证据；普通调用
         永远不隐式自动恢复 —— 恢复哪个 Run 的决定权属于 RunManager.recover()。
+        ``mode`` 可选：一次执行的模式（NORMAL / PLAN），默认 NORMAL。
         """
 
         run_id = run_id or uuid4().hex
@@ -209,6 +225,7 @@ class AgentRuntime:
                     emitter=emitter,
                     summary_state=summary_state,
                     recovery_checkpoint=recovery_checkpoint,
+                    mode=mode,
                 )
             except BaseException as exc:
                 if self._checkpoint_store is not None:
@@ -275,6 +292,7 @@ class AgentRuntime:
         emitter: _EventEmitter,
         summary_state: ConversationSummaryState | None,
         recovery_checkpoint: RunCheckpoint | None,
+        mode: AgentMode,
     ) -> AgentResult:
         """执行一次已分配 Run ID 的 Agent 循环。"""
 
@@ -296,6 +314,9 @@ class AgentRuntime:
         catalog_metadata: tuple[SkillMetadata, ...] = ()
         activated_tools: set[str] = set()
         ensure_tool_search_registered(self._tool_registry)
+        # Plan Mode：本轮是否创建/更新了 PENDING Task，以及最新 Task ID。
+        plan_task_created = False
+        plan_task_id: str | None = None
 
         await emitter.emit(
             AgentEventType.AGENT_STARTED,
@@ -339,8 +360,9 @@ class AgentRuntime:
             request_tools = (
                 ()
                 if force_final_answer
-                else self._tool_registry.model_definitions(
-                    activated_names=activated_tools
+                else self._tool_registry.model_definitions_for_mode(
+                    mode,
+                    activated_names=activated_tools,
                 )
             )
             # 先解析实际使用的模型和输出上限，确保预算与请求完全一致。
@@ -408,6 +430,14 @@ class AgentRuntime:
                     )
                     if task_message is not None:
                         ephemeral_messages.append(task_message)
+                if mode is AgentMode.PLAN:
+                    ephemeral_messages.append(
+                        Message(
+                            role=MessageRole.SYSTEM,
+                            name="oneagent_plan_mode",
+                            content=_PLAN_MODE_SYSTEM_MESSAGE,
+                        )
+                    )
                 if ephemeral_messages:
                     request_messages = (
                         *request_messages[:historical_message_count],
@@ -573,15 +603,21 @@ class AgentRuntime:
             )
             tool_calls_in_message = assistant_message.tool_calls
             if not tool_calls_in_message:
+                final_message = assistant_message
+                if mode is AgentMode.PLAN and not plan_task_created:
+                    # Plan Mode 未产生 Task：Run 正常完成，但明确提示。
+                    final_message = _plan_no_task_message(assistant_message)
+                    messages[-1] = final_message
                 return self._result(
                     run_id=run_id,
-                    final_message=assistant_message,
+                    final_message=final_message,
                     messages=messages,
                     steps=step,
                     stop_reason=AgentStopReason.FINAL_ANSWER,
                     tool_rounds=tool_rounds,
                     tool_calls=tool_calls,
                     usage=usage,
+                    plan_task_id=plan_task_id,
                     summary_state=current_summary_state,
                 )
 
@@ -623,8 +659,29 @@ class AgentRuntime:
                     step=step,
                     tool_call=tool_call,
                     metadata={"active_skill_names": tuple(active_skills)},
+                    mode=mode,
                 )
                 if (
+                    mode is AgentMode.PLAN
+                    and not self._tool_registry.is_allowed_for_mode(
+                        tool_call.name,
+                        mode,
+                    )
+                ):
+                    # Plan Mode 能力过滤：硬性阻断副作用工具（即使模型伪造调用）。
+                    await tool_event_hook.before_execute(execution_context)
+                    result = ToolResult(
+                        tool_call_id=tool_call.id,
+                        tool_name=tool_call.name,
+                        success=False,
+                        error=(
+                            "Tool is not allowed in plan mode "
+                            "(read-only / planning tools only)."
+                        ),
+                        duration_ms=0,
+                    )
+                    await tool_event_hook.after_execute(execution_context, result)
+                elif (
                     self._tool_registry.is_deferred(tool_call.name)
                     and tool_call.name not in activated_tools
                 ):
@@ -647,6 +704,16 @@ class AgentRuntime:
                     )
                 if self._checkpoint_store is not None:
                     await self._checkpoint_store.complete_tool(run_id, result)
+                if (
+                    mode is AgentMode.PLAN
+                    and result.success
+                    and tool_call.name in ("task_create", "task_update")
+                ):
+                    # Plan Mode 完成条件：成功创建 / 更新了 PENDING Task。
+                    plan_task_created = True
+                    task_id = _plan_task_id_from_output(result.output)
+                    if task_id:
+                        plan_task_id = task_id
                 record = ToolCallRecord(
                     round_index=len(tool_rounds),
                     tool_call=tool_call,
@@ -1180,6 +1247,7 @@ class AgentRuntime:
         summary_state: ConversationSummaryState | None = None,
         run_id: str | None = None,
         recovery_run_id: str | None = None,
+        mode: AgentMode = AgentMode.NORMAL,
     ) -> AsyncIterator[AgentEvent]:
         """以事件流方式执行任务，内部复用同一个 ``run()`` 循环。"""
 
@@ -1198,6 +1266,7 @@ class AgentRuntime:
                     summary_state=summary_state,
                     run_id=run_id,
                     recovery_run_id=recovery_run_id,
+                    mode=mode,
                 )
             finally:
                 await queue_handler.finish()
@@ -1270,6 +1339,7 @@ class AgentRuntime:
         usage: ModelUsage,
         error: AgentRuntimeError | None = None,
         summary_state: ConversationSummaryState | None = None,
+        plan_task_id: str | None = None,
     ) -> AgentResult:
         complete_messages = tuple(messages)
         if not complete_messages or complete_messages[-1] != final_message:
@@ -1290,6 +1360,7 @@ class AgentRuntime:
                 else None
             ),
             summary_state=summary_state,
+            plan_task_id=plan_task_id,
         )
 
     @staticmethod
@@ -1326,6 +1397,32 @@ def _skill_read_activated_name(output: object) -> str | None:
         return None
     name = payload.get("name")
     return name if isinstance(name, str) and name else None
+
+
+def _plan_no_task_message(message: Message) -> Message:
+    """Plan Mode 未产生 Task 时，在最终回复前附加明确提示。"""
+
+    content = message.content or ""
+    prefix = f"{_PLAN_NO_TASK_MESSAGE}\n\n"
+    return message.model_copy(update={"content": prefix + content})
+
+
+def _plan_task_id_from_output(output: object) -> str | None:
+    """从 task_create / task_update 的工具输出 JSON 中提取任务 ID。"""
+
+    if isinstance(output, str):
+        try:
+            payload = json.loads(output)
+        except (ValueError, TypeError):
+            return None
+    elif isinstance(output, dict):
+        payload = output
+    else:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    task_id = payload.get("id")
+    return task_id if isinstance(task_id, str) and task_id else None
 
 
 def _add_usage(total: ModelUsage, current: ModelUsage) -> ModelUsage:

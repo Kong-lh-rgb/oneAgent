@@ -44,12 +44,18 @@ class ApprovalResponse(BaseModel):
 
 @dataclass(frozen=True)
 class ApprovalRequest:
-    """提交给人工审核的请求上下文。"""
+    """提交给人工审核的请求上下文。
+
+    ``run_id / conversation_id`` 是可选溯源：桌面等异步审批门需要它们把
+    ApprovalRequest 关联到对应 Run / Conversation（持久化为 ApprovalRequest 记录）。
+    """
 
     tool_call_id: str
     tool_name: str
     arguments: dict[str, Any]
     description: str = ""
+    run_id: str | None = None
+    conversation_id: str | None = None
 
     def summary(self, *, max_arguments: int = 500) -> str:
         serialized = json.dumps(

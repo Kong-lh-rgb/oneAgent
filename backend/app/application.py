@@ -24,6 +24,10 @@ from typing import Any
 
 from app.agent.events import AgentEventHandler
 from app.agent.runtime import AgentRuntime
+from app.approval import (
+    DesktopApprovalGate,
+    SQLiteApprovalStore,
+)
 from app.automation import (
     AutomationScheduler,
     SQLiteAutomationStore,
@@ -185,6 +189,7 @@ class Application:
         memory_reflection_config: MemoryReflectionConfig | None = None,
         memory_maintenance_config: MemoryMaintenanceConfig | None = None,
         skill_learning_settings: SkillLearningSettings | None = None,
+        desktop_approval: bool = False,
     ) -> None:
         self.database = Path(database).expanduser().resolve()
         self.tasks_dir = Path(tasks_dir).expanduser().resolve()
@@ -209,6 +214,8 @@ class Application:
         self._memory_reflection_config = memory_reflection_config
         self._memory_maintenance_config = memory_maintenance_config
         self._skill_learning_settings = skill_learning_settings
+        # True = DesktopApprovalGate（Server）；False = ConsoleApprovalGate（CLI）。
+        self.desktop_approval = desktop_approval
 
         self.settings = settings or ModelSettings()
         if registry is not None:
@@ -238,6 +245,9 @@ class Application:
         self.checkpoint_store: SQLiteCheckpointStore | None = None
         self.rule_store: SQLitePermissionRuleStore | None = None
         self.policy_engine: PermissionPolicyEngine | None = None
+        self.approval_store: SQLiteApprovalStore | None = None
+        self.approval_gate: Any | None = None
+        self.desktop_approval_gate: DesktopApprovalGate | None = None
         self.tool_registry: ToolRegistry | None = None
         self.task_store: FileTaskStore | None = None
         self.memory_manager: MemoryManager | None = None
@@ -284,6 +294,15 @@ class Application:
         rule_store = SQLitePermissionRuleStore(database)
         await rule_store.initialize()
         policy_engine = PermissionPolicyEngine(rule_store)
+
+        approval_store = SQLiteApprovalStore(database)
+        await approval_store.initialize()
+        if self.desktop_approval:
+            approval_gate: Any = DesktopApprovalGate(approval_store)
+        else:
+            approval_gate = ConsoleApprovalGate(
+                rule_label_factory=describe_safe_rule,
+            )
 
         tool_registry = build_builtin_tool_registry()
         task_store = FileTaskStore(self.tasks_dir)
@@ -374,9 +393,7 @@ class Application:
             max_steps=self.max_steps,
             max_tool_rounds=self.max_tool_rounds,
             max_output_tokens=self.max_output_tokens,
-            approval_gate=ConsoleApprovalGate(
-                rule_label_factory=describe_safe_rule,
-            ),
+            approval_gate=approval_gate,
             policy_engine=policy_engine,
             rule_store=rule_store,
             context_manager=ContextManager(
@@ -432,6 +449,11 @@ class Application:
         self.checkpoint_store = checkpoint_store
         self.rule_store = rule_store
         self.policy_engine = policy_engine
+        self.approval_store = approval_store
+        self.approval_gate = approval_gate
+        self.desktop_approval_gate = (
+            approval_gate if isinstance(approval_gate, DesktopApprovalGate) else None
+        )
         self.tool_registry = tool_registry
         self.task_store = task_store
         self.memory_manager = memory_manager

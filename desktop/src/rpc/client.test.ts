@@ -58,7 +58,8 @@ function makeClient(
     url: 'ws://127.0.0.1:8000/rpc',
     reconnectDelayMs: 2000,
     requestTimeoutMs,
-    socketFactory: factory,
+    // FakeWebSocket 只实现客户端使用的最小结构，注入时做类型转换。
+    socketFactory: factory as unknown as () => WebSocket,
   })
   return { client, fakes, factory }
 }

@@ -13,5 +13,6 @@ export * from './errors'
 export * from './protocol'
 export type {
   AgentEventNotificationParams,
+  ApprovalNotificationParams,
   RunStatusNotificationParams,
 } from './notifications'
