@@ -274,11 +274,99 @@ do {
         "basic_observe 后仍能 ping",
         (afterObserve["result"] as? [String: Any])?["ok"] as? Bool == true
     )
+
+    // 14. observe 缺 observation_id → invalid_params（不依赖权限，先校验参数）
+    let observeNoId = try request(["id": 40, "method": "observe", "params": [:]])
+    check(
+        "observe 缺 observation_id → invalid_params",
+        (observeNoId["error"] as? [String: Any])?["code"] as? String
+            == "invalid_params"
+    )
+
+    // 15. observe：未授权 → accessibility_permission_required；
+    //     已授权 → 校验返回结构合法（elements 数组 / truncated bool）。
+    let observeRes = try request([
+        "id": 41, "method": "observe",
+        "params": ["observation_id": "test-obs-1"],
+    ])
+    if trusted == true {
+        let result = observeRes["result"] as? [String: Any]
+        check("observe(已授权) 返回 result 对象", result != nil)
+        check("observe elements 是数组", result?["elements"] is [Any])
+        check("observe truncated 是 bool", result?["truncated"] is Bool)
+    } else {
+        check(
+            "observe 未授权 → accessibility_permission_required",
+            (observeRes["error"] as? [String: Any])?["code"] as? String
+                == "accessibility_permission_required"
+        )
+    }
+
+    // 16. __test_ax_logic：role / action normalize、value 截断、限制、ref 顺序
+    let axLogic = try request(["id": 42, "method": "__test_ax_logic", "params": [:]])
+    let logic = axLogic["result"] as? [String: Any]
+    let roles = logic?["roles"] as? [[String]]
+    check("role AXButton → button", roles?.contains(["AXButton", "button"]) == true)
+    check(
+        "role AXTextField → text_field",
+        roles?.contains(["AXTextField", "text_field"]) == true
+    )
+    check(
+        "role AXMenuItem → menu_item",
+        roles?.contains(["AXMenuItem", "menu_item"]) == true
+    )
+    check(
+        "role AXUnknownWidget → unknown_widget",
+        roles?.contains(["AXUnknownWidget", "unknown_widget"]) == true
+    )
+    let axActions = logic?["actions"] as? [[String]]
+    check("action AXPress → press", axActions?.contains(["AXPress", "press"]) == true)
+    check(
+        "action AXShowMenu → show_menu",
+        axActions?.contains(["AXShowMenu", "show_menu"]) == true
+    )
+    let truncation = logic?["value_truncation"] as? [String: Any]
+    check("value 短文本保留", truncation?["plain"] as? String == "hello")
+    check("value 长文本截断到 1000", truncation?["long_len"] as? Int == 1000)
+    let limits = logic?["limits"] as? [String: Any]
+    check("max_elements == 300", limits?["max_elements"] as? Int == 300)
+    check("max_depth == 12", limits?["max_depth"] as? Int == 12)
+    check("ref 顺序 e1/e2/e3", (logic?["refs"] as? [String]) == ["e1", "e2", "e3"])
+
+    // 17. __test_element_mapping：新 observation 替换旧 mapping
+    let mapA = try request([
+        "id": 43, "method": "__test_element_mapping",
+        "params": ["observation_id": "obs-a", "refs": ["e1", "e2", "e3"]],
+    ])
+    check(
+        "mapping obs-a 生效",
+        (mapA["result"] as? [String: Any])?["observation_id"] as? String
+            == "obs-a"
+    )
+    check(
+        "mapping obs-a refs == [e1,e2,e3]",
+        (mapA["result"] as? [String: Any])?["refs"] as? [String]
+            == ["e1", "e2", "e3"]
+    )
+    let mapB = try request([
+        "id": 44, "method": "__test_element_mapping",
+        "params": ["observation_id": "obs-b", "refs": ["e4", "e5"]],
+    ])
+    check(
+        "mapping 替换为 obs-b",
+        (mapB["result"] as? [String: Any])?["observation_id"] as? String
+            == "obs-b"
+    )
+    check(
+        "mapping obs-b refs == [e4,e5]（旧 refs 失效）",
+        (mapB["result"] as? [String: Any])?["refs"] as? [String]
+            == ["e4", "e5"]
+    )
 } catch {
     check("协议用例执行无异常", false, "\(error)")
 }
 
-// 14. stdin EOF → 正常退出
+// 18. stdin EOF → 正常退出
 try? stdinPipe.fileHandleForWriting.close()
 process.waitUntilExit()
 check("stdin EOF 后 exit code == 0", process.terminationStatus == 0)

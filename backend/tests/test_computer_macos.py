@@ -1,4 +1,4 @@
-"""MacOSComputerRuntime（V1 open_app + V2 observe）测试。
+"""MacOSComputerRuntime（V1 open_app + V2/V3 observe）测试。
 
 使用 stub HelperClient，不启动真实 GUI App、不调用 NSWorkspace /
 AXUIElement、不需要 Accessibility / Screen Recording 权限。
@@ -10,11 +10,13 @@ V1 open_app：
 3. helper error 正确向上传播
 4. 空 app 在 runtime 层被拒绝
 
-V2 observe：
-5. observe 调用 basic_observe 且正确转换 active_app / active_window / bounds
-6. windows 包含 active_window、elements 为空、screenshot_ref=None
-7. helper permission error 正确向上传播
-8. open_app 现有实现不受影响
+V2/V3 observe：
+5. observe 生成 observation_id 并传给 helper，且回填 Observation.id
+6. active_app / active_window / bounds 正确转换
+7. helper elements 正确转成 Element（role/title/value/enabled/focused/bounds/actions）
+8. windows 包含 active_window、空 elements、screenshot_ref=None
+9. helper permission error 正确向上传播
+10. open_app 现有实现不受影响
 
 其它 click/type/key/scroll/focus_window 仍然 NotImplementedError
 """
@@ -173,7 +175,7 @@ async def test_open_app_rejects_empty_app() -> None:
 
 
 # ---------------------------------------------------------------------------
-# V2 observe
+# V2/V3 observe
 # ---------------------------------------------------------------------------
 
 
@@ -191,14 +193,76 @@ def _observe_result() -> dict:
     }
 
 
-async def test_observe_calls_basic_observe() -> None:
+def _observe_result_with_elements() -> dict:
+    result = _observe_result()
+    result["elements"] = [
+        {
+            "ref": "e1",
+            "role": "text_area",
+            "value": "hello world",
+            "enabled": True,
+            "focused": True,
+            "bounds": {"x": 10, "y": 20, "width": 300, "height": 200},
+            "actions": [],
+        },
+        {
+            "ref": "e2",
+            "role": "button",
+            "title": "Save",
+            "enabled": True,
+            "focused": False,
+            "bounds": {"x": 100, "y": 100, "width": 80, "height": 30},
+            "actions": ["press"],
+        },
+    ]
+    return result
+
+
+async def test_observe_generates_and_passes_observation_id() -> None:
     stub = StubHelperClient(result=_observe_result())
     runtime = _runtime(stub)
 
     obs = await runtime.observe()
 
-    assert stub.calls == [("basic_observe", {})]
-    assert obs.id  # observation id 由 Python model 生成，不由 helper 提供
+    assert len(stub.calls) == 1
+    method, params = stub.calls[0]
+    assert method == "observe"
+    observation_id = params["observation_id"]
+    assert isinstance(observation_id, str) and len(observation_id) == 32
+    # observation id 由 Python 生成并回填 Observation.id。
+    assert obs.id == observation_id
+
+
+async def test_observe_converts_elements() -> None:
+    runtime = _runtime(
+        StubHelperClient(result=_observe_result_with_elements())
+    )
+
+    obs = await runtime.observe()
+
+    assert len(obs.elements) == 2
+    e1, e2 = obs.elements
+    assert e1.ref == "e1"
+    assert e1.role == "text_area"
+    assert e1.value == "hello world"
+    assert e1.title is None
+    assert e1.enabled is True
+    assert e1.focused is True
+    assert e1.actions == ()
+    assert e1.bounds is not None
+    assert (
+        e1.bounds.x, e1.bounds.y, e1.bounds.width, e1.bounds.height
+    ) == (10, 20, 300, 200)
+
+    assert e2.ref == "e2"
+    assert e2.role == "button"
+    assert e2.title == "Save"
+    assert e2.value is None
+    assert e2.focused is False
+    assert e2.actions == ("press",)
+    assert e2.bounds is not None
+    assert e2.bounds.x == 100 and e2.bounds.y == 100
+    assert e2.bounds.width == 80 and e2.bounds.height == 30
 
 
 async def test_observe_converts_active_app() -> None:
@@ -293,7 +357,7 @@ async def test_observe_no_active_window() -> None:
 async def test_open_app_still_works_after_observe() -> None:
     stub = StubHelperClient(
         per_method={
-            "basic_observe": _observe_result(),
+            "observe": _observe_result(),
             "open_app": {
                 "app": "TextEdit",
                 "bundle_id": "com.apple.TextEdit",
@@ -309,7 +373,7 @@ async def test_open_app_still_works_after_observe() -> None:
     result = await runtime.open_app("TextEdit")
     assert result.success is True
     assert result.metadata["process_id"] == 5
-    assert [m for m, _ in stub.calls] == ["basic_observe", "open_app"]
+    assert [m for m, _ in stub.calls] == ["observe", "open_app"]
 
 
 # ---------------------------------------------------------------------------

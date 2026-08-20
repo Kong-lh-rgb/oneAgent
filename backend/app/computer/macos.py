@@ -1,15 +1,16 @@
-"""MacOSComputerRuntime：真实 macOS ComputerRuntime（V2）。
+"""MacOSComputerRuntime：真实 macOS ComputerRuntime（V3）。
 
-V2 实现 ``open_app``（NSWorkspace 打开应用）与 ``observe``（读取当前前台
-App / 窗口的结构化观察，NSWorkspace + AXUIElement），其余契约方法
-（click/type/key/scroll/focus_window）仍抛 ``NotImplementedError``，
-不返回假的成功。
+V3 实现 ``open_app``（NSWorkspace 打开应用）与 ``observe``（读取当前前台
+App / 窗口及其可交互 AX UI 元素），其余契约方法（click/type/key/scroll/
+focus_window）仍抛 ``NotImplementedError``，不返回假的成功。
 
 真实电脑控制（完整 AX Tree / ScreenCaptureKit / CGEvent 等）留到后续轮次；
 FakeComputerRuntime 继续用于 Agent Tool 测试。
 """
 
 from __future__ import annotations
+
+import uuid
 
 from .helper_client import MacOSHelperClient
 from .models import (
@@ -18,6 +19,7 @@ from .models import (
     ActiveApp,
     Bounds,
     CoordinateTarget,
+    Element,
     ElementTarget,
     Observation,
     Window,
@@ -29,6 +31,31 @@ _NOT_IMPLEMENTED = (
     "macOS Computer Runtime 本轮只实现 open_app / observe，"
     "该操作尚未实现真实电脑控制"
 )
+
+
+def _element_from_dict(data: dict) -> Element:
+    """把 Swift helper 返回的 element dict 转成现有 Element 模型。"""
+
+    bounds_data = data.get("bounds")
+    bounds: Bounds | None = None
+    if isinstance(bounds_data, dict):
+        bounds = Bounds(
+            x=bounds_data.get("x", 0),
+            y=bounds_data.get("y", 0),
+            width=bounds_data.get("width", 0),
+            height=bounds_data.get("height", 0),
+        )
+    actions = data.get("actions") or ()
+    return Element(
+        ref=data.get("ref") or "",
+        role=data.get("role") or "",
+        title=data.get("title"),
+        value=data.get("value"),
+        enabled=data.get("enabled", True),
+        focused=data.get("focused", False),
+        bounds=bounds,
+        actions=tuple(actions),
+    )
 
 
 class MacOSComputerRuntime:
@@ -77,13 +104,14 @@ class MacOSComputerRuntime:
         )
 
     async def observe(self, include_screenshot: bool = True) -> Observation:
-        """获取当前前台 App / 窗口的结构化观察（V2）。
+        """获取当前前台 App / 窗口及其可交互 UI 元素（V3）。
 
-        调用 Swift helper 的 ``basic_observe``：前台 App 来自
-        NSWorkspace.frontmostApplication，窗口来自 AXUIElement 的
-        AXFocusedWindow（title / position / size）。
+        调用 Swift helper 的 ``observe``：前台 App 来自
+        NSWorkspace.frontmostApplication，窗口与元素来自 AXUIElement
+        （AXFocusedWindow + AXChildren 递归遍历，role / value 已
+        normalize，element ref 只在当前 observation_id 内有效）。
 
-        V2 只提供 structured observation，**不做截图**：
+        V3 只提供 structured observation，**不做截图**：
         ``include_screenshot`` 当前被忽略，``screenshot_ref`` 恒为 None
         （ScreenCaptureKit 留到下一阶段），不抛错以保持
         computer_observe 默认参数可用。
@@ -92,7 +120,10 @@ class MacOSComputerRuntime:
         ``ComputerHelperError("accessibility_permission_required: ...")``。
         """
 
-        result = await self.helper_client.call("basic_observe", {})
+        observation_id = uuid.uuid4().hex
+        result = await self.helper_client.call(
+            "observe", {"observation_id": observation_id}
+        )
 
         active_app: ActiveApp | None = None
         app_data = result.get("active_app")
@@ -108,7 +139,7 @@ class MacOSComputerRuntime:
         if isinstance(window_data, dict):
             bounds = window_data.get("bounds") or {}
             active_window = Window(
-                # V2 只返回 active window，ref 用当前 observation 内的临时值。
+                # V3 只返回 active window，ref 用当前 observation 内的临时值。
                 ref="w1",
                 title=window_data.get("title", ""),
                 bounds=Bounds(
@@ -119,11 +150,19 @@ class MacOSComputerRuntime:
                 ),
             )
 
+        elements_data = result.get("elements") or []
+        elements = tuple(
+            _element_from_dict(data)
+            for data in elements_data
+            if isinstance(data, dict)
+        )
+
         return Observation(
+            id=observation_id,
             active_app=active_app,
             active_window=active_window,
             windows=(active_window,) if active_window is not None else (),
-            elements=(),
+            elements=elements,
             screenshot_ref=None,
         )
 

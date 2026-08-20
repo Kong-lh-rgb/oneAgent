@@ -1,8 +1,8 @@
-// macOS Computer Helper V2 —— 长驻 subprocess。
+// macOS Computer Helper V3 —— 长驻 subprocess。
 //
 // 职责：从 stdin 按行读 JSON，向 stdout 按行写 JSON（JSON Lines 协议）。
 // 本轮实现 ping / system_info / open_app / accessibility_status /
-// basic_observe。
+// basic_observe / observe（AX Element Observation）。
 //
 // 关键边界：
 // - stdout 只允许输出协议 JSON；日志一律写 stderr；
@@ -10,9 +10,11 @@
 // - stdin EOF 时正常退出（exit 0）；
 // - open_app 用 NSWorkspace 原生 API 打开应用，不用 shell / osascript /
 //   subprocess，不模拟鼠标点 Dock；
-// - basic_observe 只读 frontmost app + focused window（NSWorkspace +
-//   AXUIElement），不读完整 AX Tree、不截图、不点击；未授权返回
-//   accessibility_permission_required。
+// - basic_observe / observe 只读 frontmost app + focused window + 其 AX
+//   children（NSWorkspace + AXUIElement），不截图、不 OCR、不点击；未授权
+//   返回 accessibility_permission_required；
+// - observe 返回可交互/有信息元素（role normalize + ref 归属当前
+//   observation_id），限制 max_elements / max_depth 并防循环。
 
 import AppKit
 import ApplicationServices
@@ -157,9 +159,9 @@ func frontmostAppDict(_ app: NSRunningApplication) -> [String: Any] {
     return dict
 }
 
-/// 通过 AX 读取 focused window 的 title / bounds。
+/// 读取 focused window 的 AX 信息（dict）+ AX 元素本身。
 /// 读不到 focused window 时返回 nil（不返回假数据）。
-func focusedWindowDict(pid: pid_t) -> [String: Any]? {
+func focusedWindow(pid: pid_t) -> (info: [String: Any], element: AXUIElement)? {
     let appElement = AXUIElementCreateApplication(pid)
     var windowRef: CFTypeRef?
     guard
@@ -172,53 +174,30 @@ func focusedWindowDict(pid: pid_t) -> [String: Any]? {
     else {
         return nil
     }
+    let element = windowElement as! AXUIElement
+    return (windowInfoDict(element), element)
+}
 
-    // AXTitle
+/// 通过 AX 读取 focused window 的 title / bounds（仅 dict 形式）。
+func focusedWindowDict(pid: pid_t) -> [String: Any]? {
+    return focusedWindow(pid: pid)?.info
+}
+
+/// 从 AX 窗口元素读取 title / bounds。
+func windowInfoDict(_ windowElement: AXUIElement) -> [String: Any] {
     var title = ""
-    var titleRef: CFTypeRef?
-    if AXUIElementCopyAttributeValue(
-        windowElement as! AXUIElement,
-        kAXTitleAttribute as CFString,
-        &titleRef
-    ) == .success, let value = titleRef as? String {
+    if let value = readAXString(windowElement, kAXTitleAttribute as CFString) {
         title = value
     }
-
-    // AXPosition
-    var position = CGPoint.zero
-    var positionRef: CFTypeRef?
-    if AXUIElementCopyAttributeValue(
-        windowElement as! AXUIElement,
-        kAXPositionAttribute as CFString,
-        &positionRef
-    ) == .success,
-        let value = positionRef,
-        AXValueGetType(value as! AXValue) == .cgPoint
-    {
-        AXValueGetValue(value as! AXValue, .cgPoint, &position)
-    }
-
-    // AXSize
-    var size = CGSize.zero
-    var sizeRef: CFTypeRef?
-    if AXUIElementCopyAttributeValue(
-        windowElement as! AXUIElement,
-        kAXSizeAttribute as CFString,
-        &sizeRef
-    ) == .success,
-        let value = sizeRef,
-        AXValueGetType(value as! AXValue) == .cgSize
-    {
-        AXValueGetValue(value as! AXValue, .cgSize, &size)
-    }
-
+    let position = readAXPoint(windowElement, kAXPositionAttribute as CFString)
+    let size = readAXSize(windowElement, kAXSizeAttribute as CFString)
     return [
         "title": title,
         "bounds": [
-            "x": Int(position.x.rounded()),
-            "y": Int(position.y.rounded()),
-            "width": Int(size.width.rounded()),
-            "height": Int(size.height.rounded()),
+            "x": Int(position?.x ?? 0),
+            "y": Int(position?.y ?? 0),
+            "width": Int(size?.width ?? 0),
+            "height": Int(size?.height ?? 0),
         ],
     ]
 }
@@ -262,6 +241,428 @@ func handleBasicObserve(params: Any?, id: Any?) {
     ])
 }
 
+// ---------------------------------------------------------------------------
+// V3：AX Element Observation
+// ---------------------------------------------------------------------------
+
+/// 全局元素映射：当前 observation_id → element_ref → AXUIElement。
+/// 只保留最近一次 observation 的映射；新 observe 到来时整体替换。
+/// 不要把 AX pointer/address 暴露给 Python。
+var currentObservationID: String? = nil
+var currentElements: [String: AXUIElement] = [:]
+
+/// AX 遍历上限。
+private let kMaxElements = 300
+private let kMaxDepth = 12
+/// value 字符串截断上限。
+private let kMaxValueLength = 1000
+
+/// 纯容器角色：本身没有信息就不返回，但仍继续遍历 children。
+private let kContainerRoles: Set<String> = [
+    "group", "split_group", "scroll_area", "splitter", "layout_area",
+    "drawer", "tab_group",
+]
+
+/// 截断长字符串。
+func truncateText(_ text: String, limit: Int) -> String {
+    if text.count <= limit { return text }
+    return String(text.prefix(limit))
+}
+
+/// "AXPress" → "press"，"AXShowMenu" → "show_menu"。
+func normalizeActionName(_ raw: String) -> String {
+    let stripped = raw.hasPrefix("AX") ? String(raw.dropFirst(2)) : raw
+    return snakeCase(stripped)
+}
+
+/// "AXButton" → "button"；未知 role 做简单 normalize（去 AX 前缀 + snake_case）。
+func normalizeRole(_ raw: String) -> String {
+    switch raw {
+    case "AXButton": return "button"
+    case "AXTextField": return "text_field"
+    case "AXTextArea": return "text_area"
+    case "AXCheckBox": return "checkbox"
+    case "AXRadioButton": return "radio_button"
+    case "AXPopUpButton": return "pop_up_button"
+    case "AXComboBox": return "combo_box"
+    case "AXMenu": return "menu"
+    case "AXMenuItem": return "menu_item"
+    case "AXTab", "AXTabGroup": return "tab"
+    case "AXLink": return "link"
+    case "AXSlider": return "slider"
+    case "AXTable": return "table"
+    case "AXRow": return "row"
+    case "AXGroup": return "group"
+    case "AXSplitGroup": return "split_group"
+    case "AXScrollArea": return "scroll_area"
+    default:
+        let stripped = raw.hasPrefix("AX") ? String(raw.dropFirst(2)) : raw
+        return snakeCase(stripped)
+    }
+}
+
+/// "AXButton" → "button"；大写字母前插下划线并小写。
+func snakeCase(_ raw: String) -> String {
+    var result = ""
+    for (index, char) in raw.enumerated() {
+        if char.isUppercase && index > 0 {
+            result.append("_")
+        }
+        result.append(char.lowercased())
+    }
+    return result
+}
+
+/// 读取 AX 字符串属性（title/description/value）；复杂对象不进入字符串。
+func readAXString(_ element: AXUIElement, _ attribute: CFString) -> String? {
+    var valueRef: CFTypeRef?
+    guard
+        AXUIElementCopyAttributeValue(element, attribute, &valueRef) == .success,
+        let value = valueRef
+    else { return nil }
+    if let string = value as? String {
+        return truncateText(string, limit: kMaxValueLength)
+    }
+    if let number = value as? NSNumber {
+        return truncateText(number.stringValue, limit: kMaxValueLength)
+    }
+    return nil
+}
+
+/// 读取 AX 布尔属性（enabled/focused）。
+func readAXBool(_ element: AXUIElement, _ attribute: CFString) -> Bool? {
+    var valueRef: CFTypeRef?
+    guard
+        AXUIElementCopyAttributeValue(element, attribute, &valueRef) == .success,
+        let value = valueRef
+    else { return nil }
+    return value as? Bool ?? (value as? NSNumber)?.boolValue
+}
+
+/// 读取 AX CGPoint 属性（position）。
+func readAXPoint(_ element: AXUIElement, _ attribute: CFString) -> CGPoint? {
+    var valueRef: CFTypeRef?
+    guard
+        AXUIElementCopyAttributeValue(element, attribute, &valueRef) == .success,
+        let value = valueRef,
+        CFGetTypeID(value) == AXValueGetTypeID(),
+        AXValueGetType(value as! AXValue) == .cgPoint
+    else { return nil }
+    var point = CGPoint.zero
+    AXValueGetValue(value as! AXValue, .cgPoint, &point)
+    return point
+}
+
+/// 读取 AX CGSize 属性（size）。
+func readAXSize(_ element: AXUIElement, _ attribute: CFString) -> CGSize? {
+    var valueRef: CFTypeRef?
+    guard
+        AXUIElementCopyAttributeValue(element, attribute, &valueRef) == .success,
+        let value = valueRef,
+        CFGetTypeID(value) == AXValueGetTypeID(),
+        AXValueGetType(value as! AXValue) == .cgSize
+    else { return nil }
+    var size = CGSize.zero
+    AXValueGetValue(value as! AXValue, .cgSize, &size)
+    return size
+}
+
+/// 读取 AXActionNames 并规范化（排序保证输出稳定）。
+func readAXActions(_ element: AXUIElement) -> [String] {
+    var namesRef: CFArray?
+    guard
+        AXUIElementCopyActionNames(element, &namesRef) == .success,
+        let names = namesRef as? [String]
+    else { return [] }
+    return names.map { normalizeActionName($0) }.sorted()
+}
+
+/// 判断一个元素是否值得保留。
+/// - 有 title/description/value/focused → 保留；
+/// - 纯容器（group/scroll_area 等）无信息 → 不保留（但仍遍历 children）；
+/// - 其它非容器角色 → 保留。
+func isUsefulElement(
+    role: String,
+    title: String?,
+    description: String?,
+    value: String?,
+    focused: Bool
+) -> Bool {
+    if focused { return true }
+    let hasText =
+        !(title ?? "").isEmpty || !(description ?? "").isEmpty
+            || !(value ?? "").isEmpty
+    if hasText { return true }
+    if kContainerRoles.contains(role) { return false }
+    return true
+}
+
+/// 遍历中的一个元素（ref 由本次观察内编号生成）。
+struct AXElementInfo {
+    let ref: String
+    let role: String
+    let title: String?
+    let value: String?
+    let enabled: Bool
+    let focused: Bool
+    let bounds: [String: Int]
+    let actions: [String]
+    let axElement: AXUIElement
+
+    func toJSON() -> [String: Any] {
+        var dict: [String: Any] = [
+            "ref": ref,
+            "role": role,
+            "enabled": enabled,
+            "focused": focused,
+            "bounds": bounds,
+            "actions": actions,
+        ]
+        if let title = title { dict["title"] = title }
+        if let value = value { dict["value"] = value }
+        return dict
+    }
+}
+
+/// 供 visited 集合使用的 AX 元素包装（按 CFEqual/CFHash 判等，防循环）。
+private struct AXNode: Hashable {
+    let element: AXUIElement
+
+    static func == (lhs: AXNode, rhs: AXNode) -> Bool {
+        return CFEqual(lhs.element, rhs.element)
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(CFHash(element))
+    }
+}
+
+/// 构造单个元素（带 ref）；不适合保留则返回 nil。
+func buildElementInfo(_ element: AXUIElement, ref: String) -> AXElementInfo? {
+    let role = normalizeRole(
+        readAXString(element, kAXRoleAttribute as CFString) ?? ""
+    )
+    let title = readAXString(element, kAXTitleAttribute as CFString)
+    let description = readAXString(
+        element, kAXDescriptionAttribute as CFString
+    )
+    let value = readAXString(element, kAXValueAttribute as CFString)
+    let enabled = readAXBool(element, kAXEnabledAttribute as CFString) ?? true
+    let focused = readAXBool(element, kAXFocusedAttribute as CFString) ?? false
+
+    guard isUsefulElement(
+        role: role,
+        title: title,
+        description: description,
+        value: value,
+        focused: focused
+    ) else { return nil }
+
+    let position = readAXPoint(element, kAXPositionAttribute as CFString)
+    let size = readAXSize(element, kAXSizeAttribute as CFString)
+    return AXElementInfo(
+        ref: ref,
+        role: role,
+        title: title,
+        value: value,
+        enabled: enabled,
+        focused: focused,
+        bounds: [
+            "x": Int(position?.x ?? 0),
+            "y": Int(position?.y ?? 0),
+            "width": Int(size?.width ?? 0),
+            "height": Int(size?.height ?? 0),
+        ],
+        actions: readAXActions(element),
+        axElement: element
+    )
+}
+
+/// 递归遍历 AX children，保留有用元素，限制数量与深度，防循环。
+func collectElements(
+    root: AXUIElement,
+    maxElements: Int,
+    maxDepth: Int
+) -> (elements: [AXElementInfo], truncated: Bool) {
+    var result: [AXElementInfo] = []
+    var visited = Set<AXNode>()
+    var truncated = false
+
+    func visit(_ element: AXUIElement, _ depth: Int) {
+        if truncated { return }
+        if depth > maxDepth { return }
+
+        let node = AXNode(element: element)
+        if visited.contains(node) { return }
+        visited.insert(node)
+
+        if result.count < maxElements {
+            let ref = "e\(result.count + 1)"
+            if let info = buildElementInfo(element, ref: ref) {
+                result.append(info)
+            }
+        } else {
+            truncated = true
+            return
+        }
+
+        var childrenRef: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(
+                element,
+                kAXChildrenAttribute as CFString,
+                &childrenRef
+            ) == .success,
+            let children = childrenRef as? [AXUIElement]
+        else { return }
+        for child in children {
+            visit(child, depth + 1)
+            if truncated { return }
+        }
+    }
+
+    visit(root, 0)
+    return (result, truncated)
+}
+
+/// 处理 observe 请求（V3）。
+///
+/// params: {"observation_id": "..."}。Python 先生成 observation_id，
+/// Swift 用它在本次遍历中生成 e1/e2/e3... 并缓存 observation_id →
+/// element_ref → AXUIElement。新 observe 到来时替换旧缓存。
+func handleObserve(params: Any?, id: Any?) {
+    guard
+        let params = params as? [String: Any],
+        let observationID = params["observation_id"] as? String,
+        !observationID.isEmpty
+    else {
+        writeResponse(
+            makeError(
+                id: id,
+                code: "invalid_params",
+                message: "missing or empty 'observation_id'"
+            )
+        )
+        return
+    }
+
+    guard AXIsProcessTrusted() else {
+        writeResponse(
+            makeError(
+                id: id,
+                code: "accessibility_permission_required",
+                message: "macOS Accessibility permission is required"
+            )
+        )
+        return
+    }
+
+    var activeApp: Any = NSNull()
+    var activeWindow: Any = NSNull()
+    var elements: [[String: Any]] = []
+    var truncated = false
+    var newMapping: [String: AXUIElement] = [:]
+
+    if let frontmost = NSWorkspace.shared.frontmostApplication {
+        activeApp = frontmostAppDict(frontmost)
+        if let window = focusedWindow(pid: frontmost.processIdentifier) {
+            activeWindow = window.info
+            let collected = collectElements(
+                root: window.element,
+                maxElements: kMaxElements,
+                maxDepth: kMaxDepth
+            )
+            elements = collected.elements.map { $0.toJSON() }
+            truncated = collected.truncated
+            newMapping = Dictionary(
+                uniqueKeysWithValues: collected.elements.map {
+                    ($0.ref, $0.axElement)
+                }
+            )
+        }
+    }
+
+    // 新 observe 替换旧缓存。
+    currentObservationID = observationID
+    currentElements = newMapping
+
+    writeResponse([
+        "id": id ?? NSNull(),
+        "result": [
+            "active_app": activeApp,
+            "active_window": activeWindow,
+            "elements": elements,
+            "truncated": truncated,
+        ],
+    ])
+}
+
+/// 测试辅助：返回可独立验证的纯逻辑结果（不需要真实 AX 权限）。
+func handleTestAXLogic(params: Any?, id: Any?) {
+    writeResponse([
+        "id": id ?? NSNull(),
+        "result": [
+            "roles": [
+                ["AXButton", normalizeRole("AXButton")],
+                ["AXTextField", normalizeRole("AXTextField")],
+                ["AXTextArea", normalizeRole("AXTextArea")],
+                ["AXCheckBox", normalizeRole("AXCheckBox")],
+                ["AXRadioButton", normalizeRole("AXRadioButton")],
+                ["AXPopUpButton", normalizeRole("AXPopUpButton")],
+                ["AXMenuItem", normalizeRole("AXMenuItem")],
+                ["AXLink", normalizeRole("AXLink")],
+                ["AXUnknownWidget", normalizeRole("AXUnknownWidget")],
+            ],
+            "actions": [
+                ["AXPress", normalizeActionName("AXPress")],
+                ["AXShowMenu", normalizeActionName("AXShowMenu")],
+            ],
+            "value_truncation": [
+                "plain": truncateText("hello", limit: kMaxValueLength),
+                "long_len": truncateText(
+                    String(repeating: "x", count: 1200),
+                    limit: kMaxValueLength
+                ).count,
+            ],
+            "limits": [
+                "max_elements": kMaxElements,
+                "max_depth": kMaxDepth,
+            ],
+            "refs": ["e1", "e2", "e3"],
+        ],
+    ])
+}
+
+/// 测试辅助：模拟两次 observation 的缓存替换（不需要真实 AX）。
+func handleTestElementMapping(params: Any?, id: Any?) {
+    guard
+        let params = params as? [String: Any],
+        let observationID = params["observation_id"] as? String
+    else {
+        writeResponse(
+            makeError(
+                id: id,
+                code: "invalid_params",
+                message: "missing 'observation_id'"
+            )
+        )
+        return
+    }
+    let refs = (params["refs"] as? [String]) ?? []
+    let fake = AXUIElementCreateApplication(1)
+    var mapping: [String: AXUIElement] = [:]
+    for ref in refs { mapping[ref] = fake }
+    currentObservationID = observationID
+    currentElements = mapping
+    writeResponse([
+        "id": id ?? NSNull(),
+        "result": [
+            "observation_id": observationID,
+            "refs": currentElements.keys.sorted(),
+        ],
+    ])
+}
+
 /// 处理一条已解析的请求，返回响应（或 nil 表示不响应）。
 func handleRequest(_ payload: [String: Any]) {
     let id = payload["id"]
@@ -298,6 +699,15 @@ func handleRequest(_ payload: [String: Any]) {
 
     case "basic_observe":
         handleBasicObserve(params: payload["params"], id: id)
+
+    case "observe":
+        handleObserve(params: payload["params"], id: id)
+
+    case "__test_ax_logic":
+        handleTestAXLogic(params: payload["params"], id: id)
+
+    case "__test_element_mapping":
+        handleTestElementMapping(params: payload["params"], id: id)
 
     default:
         writeResponse(
