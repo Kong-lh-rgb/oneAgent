@@ -313,7 +313,6 @@ async def test_macos_runtime_methods_not_implemented() -> None:
     await runtime.start()
     try:
         for call in (
-            runtime.click(None),  # type: ignore[arg-type]
             runtime.type("hi"),
             runtime.key("enter"),
             runtime.scroll(),

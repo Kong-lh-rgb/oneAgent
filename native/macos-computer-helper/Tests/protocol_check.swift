@@ -362,11 +362,67 @@ do {
         (mapB["result"] as? [String: Any])?["refs"] as? [String]
             == ["e4", "e5"]
     )
+
+    // 18. click_element 生命周期（复用真实校验与成功清理，不需要真实 AX）
+    _ = try request([
+        "id": 50, "method": "__test_element_mapping",
+        "params": ["observation_id": "obs-a", "refs": ["e1", "e2", "e3"]],
+    ])
+
+    // 18a. 旧 observation_id → stale_observation
+    let stale = try request([
+        "id": 51, "method": "__test_click_element",
+        "params": ["observation_id": "obs-old", "element_ref": "e1"],
+    ])
+    check(
+        "click 旧 observation_id → stale_observation",
+        (stale["error"] as? [String: Any])?["code"] as? String
+            == "stale_observation"
+    )
+
+    // 18b. 正确 observation_id 但 ref 不存在 → element_not_found
+    let notFound = try request([
+        "id": 52, "method": "__test_click_element",
+        "params": ["observation_id": "obs-a", "element_ref": "e99"],
+    ])
+    check(
+        "click element_ref 不存在 → element_not_found",
+        (notFound["error"] as? [String: Any])?["code"] as? String
+            == "element_not_found"
+    )
+
+    // 18c. 成功后旧 mapping 被清空（obs-a/e1 成功 → 再点同 obs → stale）
+    let clickOk = try request([
+        "id": 53, "method": "__test_click_element",
+        "params": ["observation_id": "obs-a", "element_ref": "e1"],
+    ])
+    let clickResult = clickOk["result"] as? [String: Any]
+    check("click 成功 action == press", clickResult?["action"] as? String == "press")
+    check(
+        "click 成功回显 element_ref",
+        clickResult?["element_ref"] as? String == "e1"
+    )
+    let afterSuccess = try request([
+        "id": 54, "method": "__test_click_element",
+        "params": ["observation_id": "obs-a", "element_ref": "e1"],
+    ])
+    check(
+        "click 成功后旧 observation 失效 → stale_observation",
+        (afterSuccess["error"] as? [String: Any])?["code"] as? String
+            == "stale_observation"
+    )
+
+    // 18d. 一次错误后 helper 仍能 ping
+    let afterClickPing = try request(["id": 55, "method": "ping", "params": [:]])
+    check(
+        "click 错误后仍能 ping",
+        (afterClickPing["result"] as? [String: Any])?["ok"] as? Bool == true
+    )
 } catch {
     check("协议用例执行无异常", false, "\(error)")
 }
 
-// 18. stdin EOF → 正常退出
+// 19. stdin EOF → 正常退出
 try? stdinPipe.fileHandleForWriting.close()
 process.waitUntilExit()
 check("stdin EOF 后 exit code == 0", process.terminationStatus == 0)

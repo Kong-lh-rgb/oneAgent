@@ -663,6 +663,166 @@ func handleTestElementMapping(params: Any?, id: Any?) {
     ])
 }
 
+// ---------------------------------------------------------------------------
+// V4：Semantic Element Click（ElementTarget → AXPress）
+// ---------------------------------------------------------------------------
+
+/// 清空当前 observation 的 element 映射（成功点击后调用）。
+func clearObservationCache() {
+    currentObservationID = nil
+    currentElements = [:]
+}
+
+/// 成功点击后的响应 payload（同时使旧 Observation 失效）。
+func successPressPayload(observationID: String, elementRef: String) -> [String: Any] {
+    clearObservationCache()
+    return [
+        "observation_id": observationID,
+        "element_ref": elementRef,
+        "action": "press",
+    ]
+}
+
+/// click 目标校验错误（V4）。
+private enum ClickTargetError: Error {
+    case staleObservation
+    case elementNotFound
+
+    var code: String {
+        switch self {
+        case .staleObservation: return "stale_observation"
+        case .elementNotFound: return "element_not_found"
+        }
+    }
+}
+
+/// 校验 click 目标；返回 AXUIElement 或错误。
+/// - observation_id 不匹配 → stale_observation；
+/// - element_ref 不存在 → element_not_found。
+fileprivate func resolveClickTarget(
+    observationID: String,
+    elementRef: String
+) -> Result<AXUIElement, ClickTargetError> {
+    guard observationID == currentObservationID else {
+        return .failure(.staleObservation)
+    }
+    guard let element = currentElements[elementRef] else {
+        return .failure(.elementNotFound)
+    }
+    return .success(element)
+}
+
+/// 处理 click_element 请求（V4，语义点击：只做 AXPress）。
+///
+/// params: {"observation_id": "...", "element_ref": "e1"}
+/// 使用当前缓存（currentObservationID / currentElements），不重新搜索 AX Tree。
+/// 成功：{"observation_id":..., "element_ref":..., "action":"press"} 并清空缓存；
+/// 失败：stale_observation / element_not_found / action_not_supported /
+///       ax_action_failed。
+func handleClickElement(params: Any?, id: Any?) {
+    guard
+        let params = params as? [String: Any],
+        let observationID = params["observation_id"] as? String,
+        !observationID.isEmpty,
+        let elementRef = params["element_ref"] as? String,
+        !elementRef.isEmpty
+    else {
+        writeResponse(
+            makeError(
+                id: id,
+                code: "invalid_params",
+                message: "missing or empty 'observation_id' / 'element_ref'"
+            )
+        )
+        return
+    }
+
+    switch resolveClickTarget(
+        observationID: observationID,
+        elementRef: elementRef
+    ) {
+    case .failure(let error):
+        writeResponse(
+            makeError(id: id, code: error.code, message: error.code)
+        )
+        return
+    case .success(let element):
+        // 优先检查元素是否支持 AXPress。
+        var namesRef: CFArray?
+        let supportsPress =
+            AXUIElementCopyActionNames(element, &namesRef) == .success
+                && (namesRef as? [String])?.contains("AXPress") == true
+        guard supportsPress else {
+            writeResponse(
+                makeError(
+                    id: id,
+                    code: "action_not_supported",
+                    message: "element \(elementRef) does not support AXPress"
+                )
+            )
+            return
+        }
+
+        guard AXUIElementPerformAction(element, kAXPressAction as CFString)
+            == .success else {
+            writeResponse(
+                makeError(
+                    id: id,
+                    code: "ax_action_failed",
+                    message: "AXUIElementPerformAction failed for \(elementRef)"
+                )
+            )
+            return
+        }
+
+        writeResponse([
+            "id": id ?? NSNull(),
+            "result": successPressPayload(
+                observationID: observationID,
+                elementRef: elementRef
+            ),
+        ])
+    }
+}
+
+/// 测试辅助：复用真实校验与成功清理逻辑，验证生命周期（不需要真实 AX）。
+/// 真实 AXPress 不在自动测试中执行。
+func handleTestClickElement(params: Any?, id: Any?) {
+    guard
+        let params = params as? [String: Any],
+        let observationID = params["observation_id"] as? String,
+        let elementRef = params["element_ref"] as? String
+    else {
+        writeResponse(
+            makeError(
+                id: id,
+                code: "invalid_params",
+                message: "missing 'observation_id' / 'element_ref'"
+            )
+        )
+        return
+    }
+
+    switch resolveClickTarget(
+        observationID: observationID,
+        elementRef: elementRef
+    ) {
+    case .failure(let error):
+        writeResponse(
+            makeError(id: id, code: error.code, message: error.code)
+        )
+    case .success:
+        // 模拟成功点击后的清理与响应（复用真实 post-press 逻辑）。
+        writeResponse([
+            "id": id ?? NSNull(),
+            "result": successPressPayload(
+                observationID: observationID,
+                elementRef: elementRef
+            ),
+        ])
+    }
+}
+
 /// 处理一条已解析的请求，返回响应（或 nil 表示不响应）。
 func handleRequest(_ payload: [String: Any]) {
     let id = payload["id"]
@@ -708,6 +868,12 @@ func handleRequest(_ payload: [String: Any]) {
 
     case "__test_element_mapping":
         handleTestElementMapping(params: payload["params"], id: id)
+
+    case "click_element":
+        handleClickElement(params: payload["params"], id: id)
+
+    case "__test_click_element":
+        handleTestClickElement(params: payload["params"], id: id)
 
     default:
         writeResponse(

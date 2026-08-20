@@ -1,8 +1,9 @@
-"""MacOSComputerRuntime：真实 macOS ComputerRuntime（V3）。
+"""MacOSComputerRuntime：真实 macOS ComputerRuntime（V4）。
 
-V3 实现 ``open_app``（NSWorkspace 打开应用）与 ``observe``（读取当前前台
-App / 窗口及其可交互 AX UI 元素），其余契约方法（click/type/key/scroll/
-focus_window）仍抛 ``NotImplementedError``，不返回假的成功。
+V4 实现 ``open_app``（NSWorkspace 打开应用）、``observe``（读取当前前台
+App / 窗口及其可交互 AX UI 元素）与 ``click``（ElementTarget → Swift
+AXPress 语义点击），其余契约方法（type/key/scroll/focus_window）仍抛
+``NotImplementedError``，不返回假的成功。
 
 真实电脑控制（完整 AX Tree / ScreenCaptureKit / CGEvent 等）留到后续轮次；
 FakeComputerRuntime 继续用于 Agent Tool 测试。
@@ -28,8 +29,8 @@ from .models import (
 __all__ = ["MacOSComputerRuntime"]
 
 _NOT_IMPLEMENTED = (
-    "macOS Computer Runtime 本轮只实现 open_app / observe，"
-    "该操作尚未实现真实电脑控制"
+    "macOS Computer Runtime 本轮只实现 open_app / observe / click"
+    "（ElementTarget → AXPress），该操作尚未实现真实电脑控制"
 )
 
 
@@ -170,7 +171,45 @@ class MacOSComputerRuntime:
         self,
         target: ElementTarget | CoordinateTarget,
     ) -> ActionResult:
-        raise NotImplementedError(_NOT_IMPLEMENTED)
+        """语义点击（V4）：只支持 ElementTarget → Swift AXPress。
+
+        通过 ``click_element`` 让 Swift 对当前缓存中对应的 AXUIElement
+        执行 AXPress（不模拟鼠标、不做坐标点击）。成功后 Swift 会使旧
+        Observation 失效（element ref 不再可信，Agent 需重新 observe）。
+
+        ``CoordinateTarget`` 本轮明确拒绝：ScreenCapture / Retina 坐标
+        映射尚未实现，不能把截图坐标当 macOS 全局坐标。
+
+        helper 返回 error（stale_observation / element_not_found /
+        action_not_supported / ax_action_failed）时向上抛出
+        ``ComputerHelperError``。
+        """
+
+        if isinstance(target, ElementTarget):
+            result = await self.helper_client.call(
+                "click_element",
+                {
+                    "observation_id": target.observation_id,
+                    "element_ref": target.element_ref,
+                },
+            )
+            return ActionResult(
+                success=True,
+                action=ActionName.CLICK,
+                observation_id=target.observation_id,
+                metadata={
+                    "element_ref": target.element_ref,
+                    "method": "ax_press",
+                    "action": result.get("action"),
+                },
+            )
+
+        if isinstance(target, CoordinateTarget):
+            raise NotImplementedError(
+                "coordinate click is not implemented yet"
+            )
+
+        raise ValueError("unsupported click target")
 
     async def type(self, text: str) -> ActionResult:
         raise NotImplementedError(_NOT_IMPLEMENTED)

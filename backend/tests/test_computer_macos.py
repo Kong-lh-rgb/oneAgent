@@ -1,7 +1,7 @@
-"""MacOSComputerRuntime（V1 open_app + V2/V3 observe）测试。
+"""MacOSComputerRuntime（V1 open_app + V2/V3 observe + V4 click）测试。
 
 使用 stub HelperClient，不启动真实 GUI App、不调用 NSWorkspace /
-AXUIElement、不需要 Accessibility / Screen Recording 权限。
+AXUIElement / AXPress、不需要 Accessibility / Screen Recording 权限。
 
 覆盖：
 V1 open_app：
@@ -18,7 +18,13 @@ V2/V3 observe：
 9. helper permission error 正确向上传播
 10. open_app 现有实现不受影响
 
-其它 click/type/key/scroll/focus_window 仍然 NotImplementedError
+V4 click：
+11. ElementTarget → click_element（observation_id / element_ref 正确）
+12. helper success → ActionResult（action==CLICK、observation_id 保留、metadata）
+13. stale_observation / element_not_found error 正确向上传播
+14. CoordinateTarget 明确拒绝
+
+其它 type/key/scroll/focus_window 仍然 NotImplementedError
 """
 
 from __future__ import annotations
@@ -29,6 +35,8 @@ from app.computer import (
     ActionName,
     ActionResult,
     ComputerHelperError,
+    CoordinateTarget,
+    ElementTarget,
     MacOSComputerRuntime,
 )
 
@@ -377,6 +385,114 @@ async def test_open_app_still_works_after_observe() -> None:
 
 
 # ---------------------------------------------------------------------------
+# V4 click（ElementTarget → AXPress）
+# ---------------------------------------------------------------------------
+
+
+def _click_result() -> dict:
+    return {"observation_id": "obs-1", "element_ref": "e1", "action": "press"}
+
+
+async def test_click_element_target_sends_request() -> None:
+    stub = StubHelperClient(result=_click_result())
+    runtime = _runtime(stub)
+
+    result = await runtime.click(
+        ElementTarget(observation_id="obs-1", element_ref="e1")
+    )
+
+    assert stub.calls == [
+        ("click_element", {"observation_id": "obs-1", "element_ref": "e1"})
+    ]
+    assert result.success is True
+
+
+async def test_click_converts_to_action_result() -> None:
+    stub = StubHelperClient(result=_click_result())
+    runtime = _runtime(stub)
+
+    result = await runtime.click(
+        ElementTarget(observation_id="obs-1", element_ref="e1")
+    )
+
+    assert isinstance(result, ActionResult)
+    assert result.success is True
+    assert result.action is ActionName.CLICK
+    assert result.observation_id == "obs-1"
+    assert result.metadata["element_ref"] == "e1"
+    assert result.metadata["method"] == "ax_press"
+    assert result.metadata["action"] == "press"
+
+
+async def test_click_stale_observation_error_propagates() -> None:
+    stub = StubHelperClient(
+        error=ComputerHelperError("stale_observation: stale_observation")
+    )
+    runtime = _runtime(stub)
+
+    with pytest.raises(ComputerHelperError, match="stale_observation"):
+        await runtime.click(
+            ElementTarget(observation_id="obs-old", element_ref="e1")
+        )
+
+
+async def test_click_element_not_found_error_propagates() -> None:
+    stub = StubHelperClient(
+        error=ComputerHelperError("element_not_found: element_not_found")
+    )
+    runtime = _runtime(stub)
+
+    with pytest.raises(ComputerHelperError, match="element_not_found"):
+        await runtime.click(
+            ElementTarget(observation_id="obs-1", element_ref="e99")
+        )
+
+
+async def test_click_coordinate_target_rejected() -> None:
+    stub = StubHelperClient(result={})
+    runtime = _runtime(stub)
+
+    with pytest.raises(NotImplementedError, match="coordinate click"):
+        await runtime.click(
+            CoordinateTarget(observation_id="obs-1", x=10, y=20)
+        )
+    # CoordinateTarget 不应发送任何请求。
+    assert stub.calls == []
+
+
+async def test_click_does_not_break_observe_and_open_app() -> None:
+    stub = StubHelperClient(
+        per_method={
+            "observe": _observe_result(),
+            "click_element": _click_result(),
+            "open_app": {
+                "app": "TextEdit",
+                "bundle_id": "com.apple.TextEdit",
+                "process_id": 5,
+            },
+        }
+    )
+    runtime = _runtime(stub)
+
+    obs = await runtime.observe()
+    assert obs.active_app is not None and obs.active_app.name == "TextEdit"
+
+    click_result = await runtime.click(
+        ElementTarget(observation_id="obs-1", element_ref="e1")
+    )
+    assert click_result.action is ActionName.CLICK
+
+    open_result = await runtime.open_app("TextEdit")
+    assert open_result.success is True
+
+    assert [m for m, _ in stub.calls] == [
+        "observe",
+        "click_element",
+        "open_app",
+    ]
+
+
+# ---------------------------------------------------------------------------
 # 其它方法仍然 NotImplementedError
 # ---------------------------------------------------------------------------
 
@@ -385,7 +501,6 @@ async def test_other_runtime_methods_still_not_implemented() -> None:
     runtime = _runtime(StubHelperClient(result={}))
 
     for coro in (
-        runtime.click(None),  # type: ignore[arg-type]
         runtime.type("hi"),
         runtime.key("enter"),
         runtime.scroll(),
