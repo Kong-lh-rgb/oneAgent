@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { approveApproval, denyApproval, listApprovals } from '../api/approvals'
 import { listArtifacts } from '../api/artifacts'
@@ -43,6 +43,9 @@ export default function ChatPage(): React.JSX.Element {
     message: Message
   } | null>(null)
   const [sendError, setSendError] = useState<string | null>(null)
+  // LiveAgentTurn 生命周期：流式中 → 收起动画（settling）→ 原位切换为落库消息。
+  const [liveTurnActive, setLiveTurnActive] = useState(false)
+  const [liveTurnSettling, setLiveTurnSettling] = useState(false)
 
   const conversationsQuery = useQuery({
     queryKey: ['conversations'],
@@ -115,6 +118,8 @@ export default function ChatPage(): React.JSX.Element {
       setLastRunId(null)
       setPlanTask(null)
       setPlanResolved(null)
+      setLiveTurnActive(false)
+      setLiveTurnSettling(false)
       void queryClient.invalidateQueries({ queryKey: ['conversations'] })
     },
   })
@@ -174,6 +179,12 @@ export default function ChatPage(): React.JSX.Element {
     optimisticMessage?.conversationId === selectedId
       ? [...storedMessages, optimisticMessage.message]
       : storedMessages
+  // 流式/收起动画期间，最后一条尚未“正式落库”的 assistant 回复由 LiveAgentTurn
+  // 原位展示，避免落库瞬间与流式回复重复、以及回复重排造成的“跳一下”。
+  const displayMessages =
+    liveTurnActive && messages.at(-1)?.role === 'assistant'
+      ? messages.slice(0, -1)
+      : messages
   const selectedConversation = conversations.find((item) => item.id === selectedId)
   const showNewConversationHome = selectedId !== null && messages.length === 0
   const progressRunId = sendMutation.isPending ? liveRunId : activeRunId
@@ -186,12 +197,103 @@ export default function ChatPage(): React.JSX.Element {
       ? (streamTextByRun[progressRunId]?.[latestModelStep] ?? '')
       : ''
 
+  // 流式限速：字符级平滑呈现，便于人眼观看（不快不慢）。
+  // 每 tick 只新增固定字符数，追上真实文本后自然等待下一批；
+  // 输出完毕/收起时一次性补全，交给落库消息原位切换。
+  const STREAM_TICK_MS = 24
+  const STREAM_CHARS_PER_TICK = 5
+  const [revealedText, setRevealedText] = useState('')
+  const revealedCountRef = useRef(0)
+  const targetRef = useRef('')
+  const textIdentityRef = useRef('')
+
+  // 新 Run / 新 step 开始时重置揭示进度；非流式状态直接显示全部。
+  useEffect(() => {
+    const identity = `${progressRunId}:${latestModelStep ?? ''}`
+    if (textIdentityRef.current !== identity) {
+      textIdentityRef.current = identity
+      revealedCountRef.current = 0
+    }
+    targetRef.current = streamedText
+    if (!(liveTurnActive && !liveTurnSettling && sendMutation.isPending)) {
+      revealedCountRef.current = streamedText.length
+      setRevealedText(streamedText)
+    }
+  }, [
+    liveTurnActive,
+    liveTurnSettling,
+    sendMutation.isPending,
+    streamedText,
+    progressRunId,
+    latestModelStep,
+  ])
+
+  // 流式期间开启揭示循环，输出完毕/收起时由上面的 effect 一次性补全。
+  useEffect(() => {
+    const streaming =
+      liveTurnActive && !liveTurnSettling && sendMutation.isPending
+    if (!streaming) return undefined
+    const interval = window.setInterval(() => {
+      const target = targetRef.current
+      const next = Math.min(
+        target.length,
+        revealedCountRef.current + STREAM_CHARS_PER_TICK,
+      )
+      if (next > revealedCountRef.current) {
+        revealedCountRef.current = next
+        setRevealedText(target.slice(0, next))
+      }
+    }, STREAM_TICK_MS)
+    return () => window.clearInterval(interval)
+  }, [liveTurnActive, liveTurnSettling, sendMutation.isPending])
+
   const chooseExamplePrompt = (prompt: string): void => {
     setDraft(prompt)
     if (selectedId === null && !newConversationMutation.isPending) {
       newConversationMutation.mutate()
     }
   }
+
+  // Agent 回复（流式文本 / 事件 / 新消息 / 结果出现）时自动滚动到底部。
+  // 用聚合 key 而非原始引用，避免轮询 refetch（2s approvals / 3s artifacts）
+  // 每次返回新引用导致空闲时反复拽回底部。
+  const conversationScrollRef = useRef<HTMLDivElement>(null)
+  const autoScrollKey = [
+    messages.length,
+    messages.at(-1)?.content?.length ?? 0,
+    revealedText.length,
+    activeEvents.length,
+    sendMutation.isPending,
+    artifacts.length,
+    pendingApproval?.id ?? null,
+    planTask?.id ?? null,
+    sendError,
+    selectedId,
+    liveTurnActive,
+  ].join('|')
+  useEffect(() => {
+    const el = conversationScrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [autoScrollKey])
+
+  // 输出完毕（isPending 变 false 且会话数据已刷新）后：先让活动块平滑收起，
+  // 再原位切换为正式消息，避免瞬间卸载导致的“跳一下”。
+  useEffect(() => {
+    if (!liveTurnActive) return
+    if (sendMutation.isPending) return
+    if (conversationQuery.isLoading || conversationQuery.isFetching) return
+    setLiveTurnSettling(true)
+    const timer = window.setTimeout(() => {
+      setLiveTurnActive(false)
+      setLiveTurnSettling(false)
+    }, 340)
+    return () => window.clearTimeout(timer)
+  }, [
+    liveTurnActive,
+    sendMutation.isPending,
+    conversationQuery.isLoading,
+    conversationQuery.isFetching,
+  ])
 
   return (
     <div className="chat-workspace">
@@ -208,6 +310,8 @@ export default function ChatPage(): React.JSX.Element {
             setPlanTask(null)
             setPlanResolved(null)
             setActivityOpen(false)
+            setLiveTurnActive(false)
+            setLiveTurnSettling(false)
           }}
           onNew={() => newConversationMutation.mutate()}
         />
@@ -223,7 +327,7 @@ export default function ChatPage(): React.JSX.Element {
           onToggleActivity={() => setActivityOpen((open) => !open)}
         />
 
-        <div className={`conversation-scroll ${showNewConversationHome ? 'conversation-scroll--empty' : ''}`}>
+        <div ref={conversationScrollRef} className={`conversation-scroll ${showNewConversationHome ? 'conversation-scroll--empty' : ''}`}>
           <div className="message-thread">
             {selectedId === null ? (
               <section className="no-conversation">
@@ -242,11 +346,15 @@ export default function ChatPage(): React.JSX.Element {
             ) : showNewConversationHome ? (
               <ChatEmptyState onSelectPrompt={chooseExamplePrompt} />
             ) : (
-              <MessageList messages={messages} />
+              <MessageList messages={displayMessages} />
             )}
 
-            {sendMutation.isPending ? (
-              <LiveAgentTurn events={activeEvents} streamText={streamedText} />
+            {liveTurnActive ? (
+              <LiveAgentTurn
+                events={activeEvents}
+                streamText={revealedText}
+                settling={liveTurnSettling}
+              />
             ) : null}
 
             {sendError ? (
@@ -299,6 +407,8 @@ export default function ChatPage(): React.JSX.Element {
           onSend={async (content) => {
             if (!selectedId) return
             setSendError(null)
+            setLiveTurnActive(true)
+            setLiveTurnSettling(false)
             setOptimisticMessage({
               conversationId: selectedId,
               message: { role: 'user', content },

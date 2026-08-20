@@ -29,12 +29,13 @@ describe('MessageList', () => {
     const html = renderToStaticMarkup(<MessageList messages={[assistantMsg]} />)
     expect(html).toContain('message-assistant')
     expect(html).not.toContain('message-assistant__body" style=')
-    // markdown：粗体 / 行内代码 / 代码块
-    expect(html).toContain('<h3>结论</h3>')
+    // markdown：标题 / 粗体 / 行内代码 / 列表 / 代码块
+    expect(html).toContain('<h2>结论</h2>')
     expect(html).toContain('<strong>重点</strong>')
     expect(html).toContain('<code>code</code>')
-    expect(html).toContain('<pre>')
-    expect(html.match(/message-assistant__list-item/g)).toHaveLength(2)
+    expect(html).toContain('<ul>')
+    expect(html).toContain('<ol>')
+    expect(html).toContain('<pre')
   })
 
   it('过滤 system 消息', () => {

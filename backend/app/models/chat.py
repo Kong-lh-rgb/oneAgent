@@ -701,7 +701,7 @@ async def _run(args: argparse.Namespace) -> int:
                 # 用 to_thread 避免同步 input() 阻塞 asyncio 事件循环，
                 # 确保用户停在输入框时 Scheduler 仍能按时触发 Automation。
                 content = (await asyncio.to_thread(input, "\n你> ")).strip()
-            except EOFError, KeyboardInterrupt:
+            except (EOFError, KeyboardInterrupt):
                 print("\n聊天已结束。")
                 return 0
 
