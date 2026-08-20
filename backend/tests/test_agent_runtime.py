@@ -321,7 +321,7 @@ async def test_runtime_removes_legacy_date_without_injecting_current_time() -> N
     persisted_system = request.messages[0]
     assert "2026-08-04" not in (persisted_system.content or "")
     assert not any(
-        message.name == "oneagent_runtime_environment"
+        message.name == "vesta_runtime_environment"
         or "当前本地日期时间：" in (message.content or "")
         for message in request.messages
     )
@@ -331,7 +331,7 @@ async def test_runtime_removes_legacy_date_without_injecting_current_time() -> N
 @pytest.mark.asyncio
 async def test_runtime_reads_then_writes_and_returns_final_text(tmp_path) -> None:
     (tmp_path / "input.txt").write_text(
-        "OneAgent 可以调用本地工具完成文件任务。",
+        "Vesta 可以调用本地工具完成文件任务。",
         encoding="utf-8",
     )
 
@@ -358,7 +358,7 @@ async def test_runtime_reads_then_writes_and_returns_final_text(tmp_path) -> Non
                         name="write_file",
                         arguments={
                             "path": "output.md",
-                            "content": "# 摘要\nOneAgent 能调用本地文件工具。",
+                            "content": "# 摘要\nVesta 能调用本地文件工具。",
                         },
                     ),
                 ),
@@ -456,7 +456,7 @@ async def test_runtime_reads_then_writes_and_returns_final_text(tmp_path) -> Non
         result.tool_calls[1].result,
     ]
     assert (tmp_path / "output.md").read_text(encoding="utf-8") == (
-        "# 摘要\nOneAgent 能调用本地文件工具。"
+        "# 摘要\nVesta 能调用本地文件工具。"
     )
     assert len(adapter.requests) == 3
     assert all(request.max_output_tokens == 256 for request in adapter.requests)
@@ -470,7 +470,7 @@ async def test_runtime_reads_then_writes_and_returns_final_text(tmp_path) -> Non
     assert read_result_message.tool_call_id == "read-1"
     read_result = json.loads(read_result_message.content or "{}")
     assert read_result["success"] is True
-    assert "OneAgent 可以调用本地工具" in read_result["output"]
+    assert "Vesta 可以调用本地工具" in read_result["output"]
 
     write_result_message = adapter.requests[2].messages[-1]
     assert write_result_message.tool_call_id == "write-1"
@@ -688,7 +688,7 @@ async def test_runtime_uses_rolling_summary_but_returns_complete_history() -> No
     assert result.usage.total_tokens == 17
     request = adapter.requests[0]
     assert any(
-        message.name == "oneagent_rolling_summary" for message in request.messages
+        message.name == "vesta_rolling_summary" for message in request.messages
     )
     assert not any(
         message.content and "旧问题 0" in message.content
@@ -1185,7 +1185,7 @@ async def test_closing_run_stream_cancels_background_model_request() -> None:
 
 @pytest.mark.asyncio
 async def test_runtime_checkpoint_records_completed_tool_run(tmp_path) -> None:
-    checkpoint_store = SQLiteCheckpointStore(tmp_path / "oneagent.db")
+    checkpoint_store = SQLiteCheckpointStore(tmp_path / "vesta.db")
     await checkpoint_store.initialize()
     registry, _ = fake_registry(
         [
@@ -1220,7 +1220,7 @@ async def test_runtime_checkpoint_records_completed_tool_run(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_runtime_checkpoint_records_structured_failure(tmp_path) -> None:
-    checkpoint_store = SQLiteCheckpointStore(tmp_path / "oneagent.db")
+    checkpoint_store = SQLiteCheckpointStore(tmp_path / "vesta.db")
     await checkpoint_store.initialize()
     registry, _ = fake_registry([RuntimeError("offline")])
 
@@ -1243,7 +1243,7 @@ async def test_runtime_checkpoint_records_structured_failure(tmp_path) -> None:
 async def test_runtime_cancellation_preserves_model_request_checkpoint(
     tmp_path,
 ) -> None:
-    checkpoint_store = SQLiteCheckpointStore(tmp_path / "oneagent.db")
+    checkpoint_store = SQLiteCheckpointStore(tmp_path / "vesta.db")
     await checkpoint_store.initialize()
     config = ProviderConfig(
         provider="blocking",
@@ -1278,7 +1278,7 @@ async def test_runtime_cancellation_preserves_model_request_checkpoint(
 
 @pytest.mark.asyncio
 async def test_runtime_cancellation_preserves_uncertain_tool_call(tmp_path) -> None:
-    checkpoint_store = SQLiteCheckpointStore(tmp_path / "oneagent.db")
+    checkpoint_store = SQLiteCheckpointStore(tmp_path / "vesta.db")
     await checkpoint_store.initialize()
     call = ToolCall(id="uncertain-tool", name="blocking_tool", arguments={})
     registry, _ = fake_registry([model_response(tool_calls=(call,))])
@@ -1315,7 +1315,7 @@ async def test_runtime_injects_interrupted_checkpoint_without_persisting_it(
 ) -> None:
     """恢复证据只应在显式指定 recovery_run_id 时注入（隐式自动恢复已移除）。"""
 
-    checkpoint_store = SQLiteCheckpointStore(tmp_path / "oneagent.db")
+    checkpoint_store = SQLiteCheckpointStore(tmp_path / "vesta.db")
     await checkpoint_store.initialize()
     uncertain = ToolCall(
         id="uncertain-1",
@@ -1369,7 +1369,7 @@ async def test_runtime_plain_start_does_not_inject_interrupted_checkpoint(
 ) -> None:
     """普通 start（不传 recovery_run_id）不应隐式加载旧中断 Checkpoint。"""
 
-    checkpoint_store = SQLiteCheckpointStore(tmp_path / "oneagent.db")
+    checkpoint_store = SQLiteCheckpointStore(tmp_path / "vesta.db")
     await checkpoint_store.initialize()
     uncertain = ToolCall(
         id="uncertain-1",

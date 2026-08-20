@@ -1,8 +1,8 @@
-# OneAgent Evaluation
+# Vesta Evaluation
 
 ## 第一部分：通用 Agent Runtime 测评
 
-OneAgent 使用仓库内的轻量 Eval Harness 测量 `AgentRuntime` 的行为。它直接运行
+Vesta 使用仓库内的轻量 Eval Harness 测量 `AgentRuntime` 的行为。它直接运行
 真实 Runtime、工具、Task Store 和 ContextManager；离线自检使用 Fake Model，
 Live Eval 才会调用已配置的模型 API。
 
@@ -81,7 +81,7 @@ Live Eval 存在失败时默认返回退出码 1，可用于 CI 门禁。探索�
 - `skill.survives_compaction: true` 要求存在一次实际压缩，且压缩后的 MODEL_STARTED
   仍带有非空 `active_skill_message_names`（实际注入的 Active Skill 消息名，独立于
   `active_skill_names` run state），并包含声明要激活的 Skill；离线测试还会直接检查
-  FakeModelAdapter 捕获的真实 ModelRequest 在激活后每 Step 都含 `oneagent_active_skill`；
+  FakeModelAdapter 捕获的真实 ModelRequest 在激活后每 Step 都含 `vesta_active_skill`；
 - `initial_skills` 预置目录式 Skill（`<name>/SKILL.md` + 可选 `reference_files`），
   由 Harness 写入临时 skills 目录并装配 `SkillStore` / `SkillContextProvider`；
 - Learning 场景（group=learning）不走普通 Agent Run，由 `tests/eval/learning_harness.py`

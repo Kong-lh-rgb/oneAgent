@@ -1,7 +1,7 @@
-"""基于现有 OneAgent SQLite 文件的 ApprovalRequest 持久化。
+"""基于现有 Vesta SQLite 文件的 ApprovalRequest 持久化。
 
 与 RunStore / CheckpointStore / TraceStore 共用同一个数据库文件（默认
-``backend/.oneagent/oneagent.db``），只新增一张 ``approvals`` 表。所有写入使用
+``backend/.vesta/vesta.db``），只新增一张 ``approvals`` 表。所有写入使用
 ``BEGIN IMMEDIATE`` 原子事务；resolve 只在 PENDING 时可执行一次（并发安全），
 已 resolved 的记录不能再修改。
 """

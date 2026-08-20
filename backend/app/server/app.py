@@ -1,4 +1,4 @@
-"""oneAgent Host 的本地 transport。
+"""Vesta Host 的本地 transport。
 
 FastAPI 不是业务架构，只负责：
 
@@ -34,7 +34,7 @@ from .rpc import (
 )
 from .version import __version__
 
-logger = logging.getLogger("oneagent.server")
+logger = logging.getLogger("vesta.server")
 
 # 只允许 loopback client 读取截图（防止 --host 0.0.0.0 后把桌面截图暴露出去）。
 _ALLOWED_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
@@ -129,7 +129,7 @@ async def artifact_content(artifact_id: str, request: Request) -> FileResponse:
 
 
 def create_app(application: Application | None = None) -> FastAPI:
-    """构造 oneAgent Host 应用。
+    """构造 Vesta Host 应用。
 
     ``application`` 为 None 时自动用默认配置创建（provider 从 .env 选择）。
     调用方也可传入已配置的 Application（例如测试注入离线 fake registry）。
@@ -162,7 +162,7 @@ def create_app(application: Application | None = None) -> FastAPI:
         if artifact_service is not None:
             artifact_service.set_broadcaster(hub.broadcast)
         logger.info(
-            "oneAgent Host started · provider=%s · model=%s",
+            "Vesta Host started · provider=%s · model=%s",
             application.provider,
             application.model,
         )
@@ -170,10 +170,10 @@ def create_app(application: Application | None = None) -> FastAPI:
             yield
         finally:
             await application.close()
-            logger.info("oneAgent Host stopped")
+            logger.info("Vesta Host stopped")
 
     app = FastAPI(
-        title="oneAgent Host",
+        title="Vesta Host",
         version=__version__,
         lifespan=lifespan,
     )

@@ -12,7 +12,7 @@ from threading import Lock
 
 from app.tools.hooks import ToolExecutionContext, ToolHook, ToolHookDecision
 
-logger = logging.getLogger("oneagent.computer.lease")
+logger = logging.getLogger("vesta.computer.lease")
 
 
 class ComputerBusyError(RuntimeError):

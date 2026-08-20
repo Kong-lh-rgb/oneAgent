@@ -1,4 +1,4 @@
-/** 与 oneAgent Host JSON-RPC 对应的 Desktop 类型。 */
+/** 与 Vesta Host JSON-RPC 对应的 Desktop 类型。 */
 
 export interface Conversation {
   id: string

@@ -1,4 +1,4 @@
-# OneAgent Eval 记录
+# Vesta Eval 记录
 
 > 集中的评测记录目录（2026-08-18 建立）。
 > 本目录收录每个模块做过的测试、真实模型 Live Eval 结果与各阶段 Bad Case 分析。

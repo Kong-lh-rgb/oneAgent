@@ -1,4 +1,4 @@
-"""把远端 MCP 工具适配成 OneAgent BaseTool。"""
+"""把远端 MCP 工具适配成 Vesta BaseTool。"""
 
 from __future__ import annotations
 

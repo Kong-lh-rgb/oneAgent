@@ -7,7 +7,7 @@
 
     # 2) 用真实模型跑 AgentRuntime（含人工审批 + 工具执行记录）
     .venv/bin/python scripts/demo_tools.py \
-        --agent "读取 workspace 下的文件，然后用 web 搜索 OneAgent"
+        --agent "读取 workspace 下的文件，然后用 web 搜索 Vesta"
     .venv/bin/python scripts/demo_tools.py --agent "..." --provider qwen
 """
 
@@ -57,7 +57,7 @@ async def _demo_direct() -> None:
             name="write_file",
             arguments={
                 "path": "demo/hello.txt",
-                "content": "OneAgent 本地工具测试",
+                "content": "Vesta 本地工具测试",
             },
         )
     )
@@ -99,7 +99,7 @@ async def _demo_direct() -> None:
         ToolCall(
             id="q1",
             name="web_search",
-            arguments={"query": "OneAgent", "max_results": 3},
+            arguments={"query": "Vesta", "max_results": 3},
         )
     )
 
@@ -138,7 +138,7 @@ async def _demo_agent(query: str, provider: str | None) -> None:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="OneAgent 工具层演示")
+    parser = argparse.ArgumentParser(description="Vesta 工具层演示")
     parser.add_argument(
         "--direct",
         action="store_true",

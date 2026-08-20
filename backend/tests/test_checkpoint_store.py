@@ -17,7 +17,7 @@ _USER_MESSAGE = Message(role=MessageRole.USER, content="继续任务")
 
 @pytest.fixture
 async def store(tmp_path) -> SQLiteCheckpointStore:
-    instance = SQLiteCheckpointStore(tmp_path / "oneagent.db")
+    instance = SQLiteCheckpointStore(tmp_path / "vesta.db")
     await instance.initialize()
     return instance
 

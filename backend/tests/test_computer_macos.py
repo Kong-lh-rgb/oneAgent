@@ -519,12 +519,12 @@ async def test_type_calls_type_text() -> None:
     stub = StubHelperClient(result=_type_result())
     runtime = _runtime(stub)
 
-    result = await runtime.type("Hello oneAgent")
+    result = await runtime.type("Hello Vesta")
 
     assert stub.calls == [
         (
             "type_text",
-            {"text": "Hello oneAgent", "expected_observation_id": "obs-current"},
+            {"text": "Hello Vesta", "expected_observation_id": "obs-current"},
         )
     ]
     assert result.success is True
@@ -534,7 +534,7 @@ async def test_type_converts_to_action_result() -> None:
     stub = StubHelperClient(result=_type_result(14))
     runtime = _runtime(stub)
 
-    result = await runtime.type("Hello oneAgent")
+    result = await runtime.type("Hello Vesta")
 
     assert isinstance(result, ActionResult)
     assert result.action is ActionName.TYPE

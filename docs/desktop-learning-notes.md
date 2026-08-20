@@ -1,4 +1,4 @@
-# oneAgent Desktop 学习记录
+# Vesta Desktop 学习记录
 
 ## 2026-08-20：实时 Agent Turn 与流式输出
 

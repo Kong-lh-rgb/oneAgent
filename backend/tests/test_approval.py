@@ -48,7 +48,7 @@ from app.tools.registry import ToolRegistry
 
 @pytest.fixture
 async def approval_store(tmp_path):
-    store = SQLiteApprovalStore(tmp_path / "oneagent.db")
+    store = SQLiteApprovalStore(tmp_path / "vesta.db")
     await store.initialize()
     return store
 
@@ -277,7 +277,7 @@ async def test_cancel_run_cancels_pending_approval(tmp_path) -> None:
     registry = ModelAdapterRegistry(ModelSettings(_env_file=None))
     registry.register("fake", lambda _: adapter, config=config)
 
-    database = tmp_path / "oneagent.db"
+    database = tmp_path / "vesta.db"
     run_store = SQLiteRunStore(database)
     await run_store.initialize()
     checkpoint_store = SQLiteCheckpointStore(database)
@@ -557,7 +557,7 @@ async def test_agent_waits_for_approval_then_continues(tmp_path) -> None:
     tool = ApprovalProbeTool()
     tools = ToolRegistry()
     tools.register(tool)
-    store = SQLiteApprovalStore(tmp_path / "oneagent.db")
+    store = SQLiteApprovalStore(tmp_path / "vesta.db")
     await store.initialize()
     gate = DesktopApprovalGate(store)
     handler = InMemoryEventHandler()
@@ -630,7 +630,7 @@ async def test_agent_denied_tool_not_executed(tmp_path) -> None:
     tool = ApprovalProbeTool()
     tools = ToolRegistry()
     tools.register(tool)
-    store = SQLiteApprovalStore(tmp_path / "oneagent.db")
+    store = SQLiteApprovalStore(tmp_path / "vesta.db")
     await store.initialize()
     gate = DesktopApprovalGate(store)
 

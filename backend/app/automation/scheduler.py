@@ -39,7 +39,7 @@ from app.conversation.service import ConversationService
 from .models import Automation, AutomationStatus, Schedule, ScheduleKind
 from .store import SQLiteAutomationStore
 
-logger = logging.getLogger("oneagent.automation.scheduler")
+logger = logging.getLogger("vesta.automation.scheduler")
 
 _JOB_PREFIX = "automation-"
 

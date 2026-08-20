@@ -339,7 +339,7 @@ export default function ChatPage(): React.JSX.Element {
               <section className="no-conversation">
                 <div className="chat-empty__mark">oa</div>
                 <h1>Start a conversation</h1>
-                <p>Create a conversation, then give oneAgent something to work on.</p>
+                <p>Create a conversation, then give Vesta something to work on.</p>
                 <button
                   type="button"
                   className="btn btn-primary"

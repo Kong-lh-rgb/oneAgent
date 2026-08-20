@@ -15,8 +15,8 @@ function formatTime(iso: string): string {
 }
 
 function openExternal(url: string): void {
-  if (window.oneagent) {
-    void window.oneagent.openExternal(url)
+  if (window.vesta) {
+    void window.vesta.openExternal(url)
     return
   }
   window.open(url, '_blank', 'noopener,noreferrer')

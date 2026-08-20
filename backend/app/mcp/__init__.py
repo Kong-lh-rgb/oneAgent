@@ -1,4 +1,4 @@
-"""OneAgent MCP Client V1。"""
+"""Vesta MCP Client V1。"""
 
 from .client import MCPClientProtocol, StdioMCPClient, serialize_mcp_result
 from .config import DEFAULT_MCP_CONFIG_PATH, load_mcp_settings

@@ -95,7 +95,7 @@ async def test_trace_handler_does_not_persist_text_deltas(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_trace_survives_restart_and_restores_complete_events(tmp_path) -> None:
-    database_path = tmp_path / "oneagent.db"
+    database_path = tmp_path / "vesta.db"
     store = SQLiteTraceStore(database_path)
     await store.initialize()
     events = _trace_events()
@@ -121,7 +121,7 @@ async def test_trace_survives_restart_and_restores_complete_events(tmp_path) -> 
 async def test_trace_recording_is_idempotent_and_does_not_regress_status(
     tmp_path,
 ) -> None:
-    store = SQLiteTraceStore(tmp_path / "oneagent.db")
+    store = SQLiteTraceStore(tmp_path / "vesta.db")
     await store.initialize()
     events = _trace_events()
     for event in events:
@@ -140,7 +140,7 @@ async def test_trace_recording_is_idempotent_and_does_not_regress_status(
 async def test_memory_post_run_events_do_not_overwrite_main_model_or_usage(
     tmp_path,
 ) -> None:
-    store = SQLiteTraceStore(tmp_path / "oneagent.db")
+    store = SQLiteTraceStore(tmp_path / "vesta.db")
     await store.initialize()
     started_at = datetime(2026, 8, 11, 10, 0, tzinfo=UTC)
     await store.record_event(
@@ -215,7 +215,7 @@ async def test_memory_post_run_events_do_not_overwrite_main_model_or_usage(
 
 @pytest.mark.asyncio
 async def test_trace_delete_removes_run_and_events(tmp_path) -> None:
-    store = SQLiteTraceStore(tmp_path / "oneagent.db")
+    store = SQLiteTraceStore(tmp_path / "vesta.db")
     await store.initialize()
     for event in _trace_events():
         await store.record_event(event)
@@ -229,7 +229,7 @@ async def test_trace_delete_removes_run_and_events(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_failed_event_marks_trace_as_failed(tmp_path) -> None:
-    store = SQLiteTraceStore(tmp_path / "oneagent.db")
+    store = SQLiteTraceStore(tmp_path / "vesta.db")
     await store.initialize()
     final_message = Message(role=MessageRole.ASSISTANT, content="模型调用失败")
     error = AgentError(type="ModelInvocationError", message="连接失败")

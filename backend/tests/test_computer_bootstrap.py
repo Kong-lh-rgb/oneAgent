@@ -31,7 +31,7 @@ def _patch_dev_helper(monkeypatch, tmp_path: Path) -> Path:
 def test_explicit_helper_takes_priority(monkeypatch, tmp_path) -> None:
     explicit = _make_executable(tmp_path, "explicit-helper")
     env_helper = _make_executable(tmp_path, "env-helper")
-    monkeypatch.setenv("ONEAGENT_MACOS_HELPER_PATH", str(env_helper))
+    monkeypatch.setenv("VESTA_MACOS_HELPER_PATH", str(env_helper))
 
     assert resolve_helper_path(explicit) == explicit.resolve()
     # 显式 > 环境变量。
@@ -40,13 +40,13 @@ def test_explicit_helper_takes_priority(monkeypatch, tmp_path) -> None:
 
 def test_env_helper_fallback(monkeypatch, tmp_path) -> None:
     env_helper = _make_executable(tmp_path, "env-helper")
-    monkeypatch.setenv("ONEAGENT_MACOS_HELPER_PATH", str(env_helper))
+    monkeypatch.setenv("VESTA_MACOS_HELPER_PATH", str(env_helper))
 
     assert resolve_helper_path(None) == env_helper.resolve()
 
 
 def test_dev_path_fallback(monkeypatch, tmp_path) -> None:
-    monkeypatch.delenv("ONEAGENT_MACOS_HELPER_PATH", raising=False)
+    monkeypatch.delenv("VESTA_MACOS_HELPER_PATH", raising=False)
     dev = _patch_dev_helper(monkeypatch, tmp_path)
 
     assert resolve_helper_path(None) == dev.resolve()
@@ -54,7 +54,7 @@ def test_dev_path_fallback(monkeypatch, tmp_path) -> None:
 
 def test_missing_helper_is_unavailable_but_returns_none(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.delenv("ONEAGENT_MACOS_HELPER_PATH", raising=False)
+    monkeypatch.delenv("VESTA_MACOS_HELPER_PATH", raising=False)
     # 屏蔽 dev 自动发现路径，避免本机已 build 的 helper 命中。
     import app.computer.bootstrap as bootstrap
 
@@ -111,9 +111,9 @@ def test_computer_enabled_switch_and_env(monkeypatch) -> None:
     assert computer_enabled(enabled=False) is False
     assert computer_enabled(enabled=True) is True
 
-    monkeypatch.setenv("ONEAGENT_COMPUTER_ENABLED", "false")
+    monkeypatch.setenv("VESTA_COMPUTER_ENABLED", "false")
     assert computer_enabled() is False
-    monkeypatch.setenv("ONEAGENT_COMPUTER_ENABLED", "true")
+    monkeypatch.setenv("VESTA_COMPUTER_ENABLED", "true")
     assert computer_enabled() is True
 
 

@@ -437,7 +437,7 @@ class AgentRuntime:
                     ephemeral_messages.append(
                         Message(
                             role=MessageRole.SYSTEM,
-                            name="oneagent_plan_mode",
+                            name="vesta_plan_mode",
                             content=_PLAN_MODE_SYSTEM_MESSAGE,
                         )
                     )

@@ -660,7 +660,7 @@ async def test_run_persists_mode(tmp_path) -> None:
     from app.run import RunManager, SQLiteRunStore
     from app.trace import SQLiteTraceStore
 
-    database = tmp_path / "oneagent.db"
+    database = tmp_path / "vesta.db"
     conversation_store = SQLiteConversationStore(database)
     await conversation_store.initialize()
     conversation = await conversation_store.create()
@@ -752,7 +752,7 @@ async def test_automation_dispatch_defaults_to_normal(tmp_path) -> None:
     from app.run import RunManager, SQLiteRunStore
     from app.trace import SQLiteTraceStore
 
-    database = tmp_path / "oneagent.db"
+    database = tmp_path / "vesta.db"
     conversation_store = SQLiteConversationStore(database)
     await conversation_store.initialize()
     conversation = await conversation_store.create()

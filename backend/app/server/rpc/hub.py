@@ -22,7 +22,7 @@ from app.agent.events import AgentEvent, AgentEventHandler, AgentEventType
 if TYPE_CHECKING:
     from .connection import RpcConnection
 
-logger = logging.getLogger("oneagent.server.rpc.hub")
+logger = logging.getLogger("vesta.server.rpc.hub")
 
 
 class RpcHub:

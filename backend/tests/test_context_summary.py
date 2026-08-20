@@ -280,7 +280,7 @@ async def test_conversation_reducer_summarizes_old_prefix_and_keeps_recent() -> 
     assert result.summary_usage.total_tokens == 40
     assert result.messages[0] == history[0]
     assert result.messages[-5:] == (*history[-4:], *current)
-    assert result.messages[1].name == "oneagent_rolling_summary"
+    assert result.messages[1].name == "vesta_rolling_summary"
     assert len(summarizer.calls[0][1]) == 8
 
 
@@ -417,14 +417,14 @@ async def test_rolling_summary_uses_previous_summary_and_advances_coverage() -> 
     summary_messages = [
         message
         for message in result.messages
-        if message.name == "oneagent_rolling_summary"
+        if message.name == "vesta_rolling_summary"
     ]
     assert len(summary_messages) == 1
 
 
 @pytest.mark.asyncio
 async def test_sqlite_summary_store_round_trip(tmp_path) -> None:
-    database_path = tmp_path / "oneagent.db"
+    database_path = tmp_path / "vesta.db"
     conversation_store = SQLiteConversationStore(database_path)
     await conversation_store.initialize()
     conversation = await conversation_store.create()

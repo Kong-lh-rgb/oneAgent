@@ -166,7 +166,7 @@ def render_report(report: EvalReport) -> str:
     """渲染 Markdown 格式的汇总报告。"""
 
     lines: list[str] = [
-        "# OneAgent Eval Report",
+        "# Vesta Eval Report",
         "",
         "## 汇总",
         "",

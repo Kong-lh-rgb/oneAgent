@@ -1,4 +1,4 @@
-/** oneAgent Desktop 的统一 lucide 图标入口。 */
+/** Vesta Desktop 的统一 lucide 图标入口。 */
 
 import {
   Activity,

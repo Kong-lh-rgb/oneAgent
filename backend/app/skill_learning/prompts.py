@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-_PATTERN_MINING_PROMPT = """You are OneAgent's Completed Task Pattern Miner.
+_PATTERN_MINING_PROMPT = """You are Vesta's Completed Task Pattern Miner.
 
 Your only job: decide whether a batch of COMPLETED tasks contains task types that
 are fundamentally similar, likely to recur, and worth learning as a reusable
@@ -28,7 +28,7 @@ Rules:
   appear in at most one cluster in this batch.
 - id should be a short stable slug for the pattern (e.g. "python-runtime-debug")."""
 
-_DISTILLATION_PROMPT = """You are OneAgent's Procedure Distiller.
+_DISTILLATION_PROMPT = """You are Vesta's Procedure Distiller.
 
 A Pattern Miner found a cluster of similar COMPLETED tasks. Your job: decide
 whether these tasks prove a stable, worth-keeping procedure, and if so produce a
@@ -89,7 +89,7 @@ Rules:
   evidence is too thin to support a stable procedure, return action "none"."""  # noqa: E501
 
 
-_RELEVANCE_PROMPT = """You are OneAgent's Skill Relevance Selector.
+_RELEVANCE_PROMPT = """You are Vesta's Skill Relevance Selector.
 
 A Pattern Miner found a cluster of similar COMPLETED tasks that may be worth
 learning as a procedure. You receive the cluster summary and the catalog of

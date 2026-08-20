@@ -1,4 +1,4 @@
-# OneAgent 任务日志
+# Vesta 任务日志
 
 > 本文件用于记录每日开发任务与进展，作为项目留存。
 > 追加规范：每日一个 `## YYYY-MM-DD` 小节，最新的日期放在最上方；任务用 `- [x] 已完成` / `- [ ] 未完成` 标记。
@@ -29,7 +29,7 @@
 
 - [x] 删除三个误提交的 0 字节 CLI 参数文件，确认无其它同类 tracked 脏文件
 - [x] 清理当前源码、Desktop 文案和规划文档中的 Agent Server / Desktop V0 等过时描述
-- [x] README 准确反映当前能力与 Desktop → WS /rpc → oneAgent Host 架构
+- [x] README 准确反映当前能力与 Desktop → WS /rpc → Vesta Host 架构
 - [x] 新增 Backend、Desktop、Native macOS 三个独立 GitHub Actions job
 - [x] 不修改 Runtime、Run、Task、Memory、Automation、Computer、Artifact 或 RPC 语义
 - [x] Backend 845 tests、Desktop 43 tests、Native protocol check 全部通过
@@ -107,7 +107,7 @@
 - [x] AXWindows + AXFocusedWindow 返回 focused-first 的 windows，并缓存 window_ref
 - [x] focus_window 使用 AXRaise + App activation；scroll 使用 CGEvent scrollWheel
 - [x] screen_capture_status 默认仅 preflight，只有显式 prompt=true 才请求权限
-- [x] ScreenCaptureKit 按 pid+bounds 匹配 active window，PNG 写入 `.oneagent/computer/screenshots`
+- [x] ScreenCaptureKit 按 pid+bounds 匹配 active window，PNG 写入 `.vesta/computer/screenshots`
 - [x] 截图失败不影响 AX structured observation，并清空 screenshot mapping
 - [x] 新增 Retina pixel → global point 纯逻辑映射与 CoordinateTarget 左键单击
 - [x] Swift/Python 对所有成功 UI mutation 统一使 Observation cache 失效；失败与空 type 不失效
@@ -317,7 +317,7 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 ---
 ### 完成：Automation / Scheduler V1（到时间自动启动 Agent Run）
 
-> 让 oneAgent 具备最基本的"长期运行 / 到时间自己启动 Run"能力。
+> 让 Vesta 具备最基本的"长期运行 / 到时间自己启动 Run"能力。
 > 不引入调度平台 / webhook / retry / DAG / 分布式 / Redis / Celery 等。
 > 关键链路：Automation → AutomationScheduler → RunManager.start(prompt) → AgentRuntime；
 > Scheduler 绝不直接调用 AgentRuntime，所有执行统一走 RunManager。
@@ -326,7 +326,7 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 - [x] `models.py`：`AutomationStatus`（active/paused/completed/cancelled）+ `Schedule`
   （once / interval / cron）+ `Automation`（不保存 Trace / Tool Result / Checkpoint）
   - Schedule 显式保留 timezone（IANA），内部 next_run_at 统一 UTC，避免时区转换错
-- [x] `store.py`：`SQLiteAutomationStore`（复用 oneagent.db 新增 automations 表；
+- [x] `store.py`：`SQLiteAutomationStore`（复用 vesta.db 新增 automations 表；
   create/get/resolve/list/update_status/mark_triggered；支持 status / conversation_id 过滤；
   事务写入，重启后仍在）
 - [x] `scheduler.py`：`AutomationScheduler`（APScheduler AsyncIOScheduler；
@@ -395,7 +395,7 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 
 #### 修复 5：CLI Ctrl+C cancel 当前 Run
 - [x] `_send_message` 的 `run_manager.wait(run_id)` 捕获 `KeyboardInterrupt` →
-  调用 `run_manager.cancel(run_id)` → 打印取消结果 → 返回输入循环，不退出 oneAgent
+  调用 `run_manager.cancel(run_id)` → 打印取消结果 → 返回输入循环，不退出 Vesta
   （输入等待时的 Ctrl+C 退出行为保持不变）
 
 #### 测试（新增 5 例，共 563）
@@ -427,7 +427,7 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 - [x] `models.py`：`RunStatus`（PENDING/RUNNING/COMPLETED/FAILED/CANCELLED/INTERRUPTED）
   + `Run`（id/conversation_id/status/user_message/created/started/updated/completed_at/error/stop_reason/
   recovered_from_run_id/recovery_count）；`_ALLOWED_TRANSITIONS` 状态机
-- [x] `store.py`：`SQLiteRunStore`（与 Checkpoint/Trace/Conversation 共用 `oneagent.db`，新增 `runs` 表；
+- [x] `store.py`：`SQLiteRunStore`（与 Checkpoint/Trace/Conversation 共用 `vesta.db`，新增 `runs` 表；
   `BEGIN IMMEDIATE` 原子写入；非法状态转换抛 ValueError；终态不可再转换）
 - [x] `manager.py`：`RunManager`（start/wait/result/get_run/list_runs/cancel/recover/reconcile；
   持有进程内 active task 用于 cancel；`_last_results` 供 CLI 读取最终结果）
@@ -488,11 +488,11 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 
 #### Bad Case 1：skill_read 正文重复与 Budget Bypass
 - [x] **根因**：skill_read 直接返回完整 Skill content；Runtime 又 load 一次并在后续每 Step
-  注入 oneagent_active_skill → 激活后第一轮请求同一正文出现两份；且超大正文先以 ToolResult
+  注入 vesta_active_skill → 激活后第一轮请求同一正文出现两份；且超大正文先以 ToolResult
   进入上下文，Runtime 才发现超预算（budget 无法阻止泄漏）
 - [x] **修复**：skill_read 改为"请求激活"轻量工具，成功结果只返回
   `found/name/description/scope/resources`，不再返回 `content`；完整正文唯一权威注入源是
-  Runtime 成功激活后的 `oneagent_active_skill` system message
+  Runtime 成功激活后的 `vesta_active_skill` system message
 - [x] 新增测试：skill_read 不返回 instructions；激活后第二次 ModelRequest 正文只出现一次；
   超预算 Skill 激活失败后任何 ModelRequest 均无该正文
 
@@ -520,11 +520,11 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 
 #### Bad Case 5：survives_compaction 只验证 run state
 - [x] **根因**：原断言只看 MODEL_STARTED.active_skill_names（Run state），不能证明实际
-  ModelRequest 仍注入 oneagent_active_skill
+  ModelRequest 仍注入 vesta_active_skill
 - [x] **修复**：AgentEvent 新增 `active_skill_message_names`（实际注入消息名，独立于 run
   state）；assertions._check_skill 的 survives_compaction 改为校验压缩后该字段非空且含声明
   Skill；新增离线测试直接检查 FakeModelAdapter 捕获的真实 ModelRequest 在激活后每 Step 都含
-  `oneagent_active_skill` 且正文含目标 Skill 名
+  `vesta_active_skill` 且正文含目标 Skill 名
 - [x] skill-15 场景补 `requires_compaction: true` 并放宽窗口（live 更稳）
 
 #### 边界确认：allowed-tools 只收窄、不扩大
@@ -554,10 +554,10 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 
 #### 设计选择（与规格一致）
 - [x] **目录式布局**：`skills/<name>/SKILL.md`（必选）+ `scripts/`、`references/`、`assets/`（可选）
-- [x] **双层发现**：user（`~/.oneagent/skills`）与 project（`backend/.oneagent/skills`），project 同名覆盖 user，按 name 稳定排序
+- [x] **双层发现**：user（`~/.vesta/skills`）与 project（`backend/.vesta/skills`），project 同名覆盖 user，按 name 稳定排序
 - [x] **metadata 与正文分离**：Discovery 只建轻量 `SkillMetadata`（name+description+来源），激活时才读完整正文
-- [x] **Catalog 每 Step 注入**：只含 name+description 的 system message（`oneagent_skill_catalog`），不进持久历史，模型随时可发现并 `skill_read` 激活
-- [x] **Active 指令每 Step 注入**：`oneagent_active_skill`，独立于普通 ToolResult，不被压缩遗忘；Run-scoped，仅当前 Run 内有效，不污染后续 Run
+- [x] **Catalog 每 Step 注入**：只含 name+description 的 system message（`vesta_skill_catalog`），不进持久历史，模型随时可发现并 `skill_read` 激活
+- [x] **Active 指令每 Step 注入**：`vesta_active_skill`，独立于普通 ToolResult，不被压缩遗忘；Run-scoped，仅当前 Run 内有效，不污染后续 Run
 - [x] **上下文预算**：`skill_context_max_tokens=4096` / `skill_max_active=4`，超预算/超数量按激活顺序确定性拒绝
 - [x] **删除 skill_list**：catalog 自动注入替代；新增 `skill_resource_read` 安全读取资源（限制在 Skill 目录内、拒绝 `..`/绝对路径/符号链接，单文件 ≤64KB）
 - [x] **不做**：向量/LLM 路由、自动生成、Marketplace（边界内）
@@ -627,7 +627,7 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 
 #### Mining Trigger 与 Watermark
 - [x] `SkillLearningSettings`：`skill_learning_enabled=true`、`skill_learning_batch_size=20`、`skill_learning_min_cluster_size=3`、provider/model/temperature/timeout/scope 可配
-- [x] watermark 存 `.oneagent/skill-learning/skill_learning_watermark.json`：`processed_task_ids` + `pending_task_ids` + `last_mining_at`；已处理 Task 永不重复计数，重启后仍在
+- [x] watermark 存 `.vesta/skill-learning/skill_learning_watermark.json`：`processed_task_ids` + `pending_task_ids` + `last_mining_at`；已处理 Task 永不重复计数，重启后仍在
 - [x] 每累计 batch_size 个新 Completed Task 才触发；进入扫描前先把 scan_ids 移入 processed，防止崩溃重扫
 - [x] 20 是"扫描周期"不是"必须生成 Skill"；无 cluster 直接结束
 
@@ -650,7 +650,7 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 - [x] 不自动 create/patch/delete 正式 Skill；pending Candidate 不影响 Skill Runtime
 - [x] CLI：`/skill-candidates`、`/skill-candidate <ID>`（详情）、`/skill-candidate <ID> accept [scope]`、`/skill-candidate <ID> reject`
 - [x] accept CREATE 时按当前 Skill V2 规范写 `<scope>/<name>/SKILL.md`（scope 显式，默认 project）；同名已存在则拒绝（提示走 UPDATE）
-- [x] accept UPDATE 时生成 replacement proposal 到 `.oneagent/skill-learning/proposals/<id>.md`，不静默覆盖正式 Skill
+- [x] accept UPDATE 时生成 replacement proposal 到 `.vesta/skill-learning/proposals/<id>.md`，不静默覆盖正式 Skill
 
 #### 测试与 Eval
 - [x] 单元测试 `tests/test_skill_learning.py`（12 例）：TaskCard 投影、Trigger 19/20、已处理不重复计数、watermark 重启、无 cluster 无候选、相似任务出 candidate、机械操作不沉淀、Evidence 提取失败工具/task_update、缺失 Trace 降级、Candidate 字段与去重、pending/reject/accept Human Gate
@@ -1096,7 +1096,7 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 - [x] 易变事实和身份、约束类常驻上下文混合，会让 Context Provider 边界继续膨胀
 
 #### 修复结果
-- [x] Runtime 不再生成 `oneagent_runtime_environment`，每轮消息上下文不再携带当前时间
+- [x] Runtime 不再生成 `vesta_runtime_environment`，每轮消息上下文不再携带当前时间
 - [x] 新增常驻只读 `get_current_time`，仅在今天、明天、现在、近期、截止日期等相对时间问题中按需调用
 - [x] 工具默认返回进程本地时间，也支持 `Asia/Shanghai` 等 IANA 时区，并返回 ISO 时间、日期、UTC offset 和 Unix 时间戳
 - [x] `web_search` 定义移除动态日期，改为提示模型处理相对日期前调用 `get_current_time`
@@ -1171,7 +1171,7 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 #### Bad Case
 - [x] 如果在 Runtime 内直接识别和调用 MCP，会绕过现有 ToolExecutor 的权限、审批、超时、Hook 与执行日志
 - [x] 多个 MCP Server 可能暴露同名或规范化后重名工具，直接注册会污染本地工具命名空间
-- [x] 单个 Server 启动、工具发现或调用失败不应阻止其他 Server 和 OneAgent 主流程工作
+- [x] 单个 Server 启动、工具发现或调用失败不应阻止其他 Server 和 Vesta 主流程工作
 - [x] MCP 多段内容、structuredContent 与 `isError` 若只取第一段文本，会丢失结果或把远端失败误判为成功
 - [x] 把 API Key 直接写进 MCP JSON 容易误提交；配置又可以启动本地命令，必须明确其受信任边界
 
@@ -1182,7 +1182,7 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 - [x] 默认 MCP 工具权限为 `human_approval`；可信只读 Server 可显式配置 `allowed`，不根据远端 annotations 自动放权
 - [x] 多 Server 逐个隔离启动；失败状态保存错误原因，已成功 Server 继续可用；单 Server 注册中途失败会回滚其工具
 - [x] 保留多段 content 与 structuredContent，远端 `isError` 和协议异常统一转为工具执行失败
-- [x] 支持 `.oneagent/mcp.json` 和 `--mcp-config`，环境值支持 `${ENV_VAR}` 引用；CLI `/mcp` 展示连接与工具状态
+- [x] 支持 `.vesta/mcp.json` 和 `--mcp-config`，环境值支持 `${ENV_VAR}` 引用；CLI `/mcp` 展示连接与工具状态
 - [x] 离线测试覆盖配置、命名、故障隔离、冲突回滚、内容转换、真实 Fake stdio Server、调用错误/超时和 AgentRuntime 端到端闭环
 - [x] 全量验证：`pytest` 388 个用例通过；`ruff`、`compileall` 和 `git diff --check` 通过
 - [ ] V1 暂不支持 Streamable HTTP、Resources、Prompts、OAuth、自动重连与动态工具刷新
@@ -1475,7 +1475,7 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 - [x] 领域模型收口为 FACT / EPISODE / PROCEDURE；namespace 支持 global、user、project、task 等任意隔离边界
 - [x] 生命周期为 candidate / active / superseded / archived；候选只有经过用户确认或真实任务采用后才晋升，确认次数和使用次数分别记录
 - [x] 每条记忆保存 normalized_content、SHA-256 fingerprint、importance、confidence、source session/run/message、访问遥测、替代链和 revision
-- [x] `SQLiteMemoryStore` 在同一个 `oneagent.db` 中维护 memories、FTS5 和 sqlite-vec vec0；事实写入、索引写入和冲突替代共用事务
+- [x] `SQLiteMemoryStore` 在同一个 `vesta.db` 中维护 memories、FTS5 和 sqlite-vec vec0；事实写入、索引写入和冲突替代共用事务
 - [x] 指纹处理精确重复；active FACT 同 namespace/key 的新事实原子替代旧事实，旧记录保留为 superseded
 - [x] `MemoryWriter` 实现 Rule Filter 后的写入边界、每 Run 3 条/Session 5 条/Day 20 条预算、候选确认与使用晋升
 - [x] `HybridMemoryRetriever` 并行使用 FTS5 BM25 Top 20 和 Vector Top 20，以 RRF 合并并加入小幅 importance bonus，最终返回 3–5 条可解释结果
@@ -1522,7 +1522,7 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 
 #### 实现结果
 - [x] 新增 `app/checkpoint/`：`RunCheckpoint`、`CheckpointStatus`、`CheckpointPhase`、`SQLiteCheckpointStore` 与恢复上下文渲染
-- [x] 复用现有 `oneagent.db` 的独立 `run_checkpoints` 表，不新增数据库；保存原始 user message、step、phase、pending ToolCall、已确认 ToolResult、终态、错误、时间和 revision
+- [x] 复用现有 `vesta.db` 的独立 `run_checkpoints` 表，不新增数据库；保存原始 user message、step、phase、pending ToolCall、已确认 ToolResult、终态、错误、时间和 revision
 - [x] Runtime 在 Run 开始、模型请求前、工具批次执行前、每个工具结果后和 Run 终态直接写 Checkpoint；Checkpoint 是关键路径，不依赖可忽略的 Event Handler
 - [x] 状态：running / completed / failed / interrupted；阶段：starting / model_request / tool_execution / tool_results_ready / finished
 - [x] 工具执行前先持久化 pending；只有获得统一 ToolResult 后才移入 completed。中断时保留 pending，明确表达“执行结果未知”
@@ -1592,7 +1592,7 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 ### 完成：任务文件存储（tasks 文件夹，弃用 SQLite）
 - [x] 需求：Task 不写入 SQLite，改为本地 tasks 文件夹存储结构化任务
 - [x] `FileTaskStore` 取代 `SQLiteTaskStore`：每个任务一个 `<id>.json`（缩进 JSON，便于人工查看/备份/版本管理）
-- [x] 默认目录 `backend/.oneagent/tasks/`（`DEFAULT_TASKS_DIR`），构造参数可自定义
+- [x] 默认目录 `backend/.vesta/tasks/`（`DEFAULT_TASKS_DIR`），构造参数可自定义
 - [x] 原子写入：临时文件 + `os.replace`，避免中断产生损坏文件；list 跳过损坏文件
 - [x] 磁盘 IO 用 `asyncio.to_thread` 隔离，保持异步 API；tools.py / chat.py 仅换 store 类型，接口不变
 - [x] 测试更新：`test_task_store.py`（文件往返/可读性/损坏跳过/歧义前缀）、`test_task_tools.py`（fixture 换 FileTaskStore）
@@ -1748,7 +1748,7 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 - [x] Executor 自动从 Store 构造 Policy，并拒绝 Policy 与 Store 指向不同实例的错误接线
 - [x] Agent Run 在正常完成、失败和取消时清理 RUN 临时规则，不在 SQLite 中永久累积
 - [x] `AgentEvent` 增加 `rule_id`/`rule_description`，Trace 记录"审批创建规则"与"规则命中放行"事实
-- [x] CLI 接入 SQLite 规则存储（与会话/Trace 共用 oneagent.db），审批菜单第 3 项由 `describe_safe_rule` 生成
+- [x] CLI 接入 SQLite 规则存储（与会话/Trace 共用 vesta.db），审批菜单第 3 项由 `describe_safe_rule` 生成
 - [x] CLI 新增 `/permissions`、`/permission remove <规则ID>` 和 `/permissions clear`，支持查看与撤销当前会话规则
 - [x] 新增命令拼接、HTTP 权限扩大、空作用域、DENY 优先、旧规则迁移、RUN 清理和 CLI 撤销测试
 - [x] 全量验证：`pytest` 107 个用例全部通过，`ruff`、编译、CLI 参数与 Diff 格式检查通过
@@ -1924,7 +1924,7 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 ### 完成：SQLite 会话持久化与 CLI 恢复
 - [x] 新增 `app/conversation/`，实现会话模型与 SQLite 存储
 - [x] 持久化完整通用消息，包括 system/user/assistant/tool 与 ToolCall 参数
-- [x] 数据库默认保存在 `backend/.oneagent/oneagent.db`，并加入 Git 忽略
+- [x] 数据库默认保存在 `backend/.vesta/vesta.db`，并加入 Git 忽略
 - [x] CLI 启动时默认恢复最近会话，支持完整 ID 或唯一短 ID
 - [x] CLI 新增 `/new`、`/sessions`、`/use <id>`，`/clear` 同步清空数据库历史
 - [x] CLI 每轮使用 `AgentResult.messages` 更新 SQLite，并根据首条输入生成会话标题
@@ -1966,7 +1966,7 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 - [x] Runtime 发射 `TOOL_APPROVAL_REQUIRED` 与 `TOOL_APPROVAL_COMPLETED`
 - [x] 审批完成事件记录 approved / denied，观察者异常不影响授权结果
 - [x] 新增 `app/trace/`，使用 SQLite 保存 Agent Run 摘要和完整事件
-- [x] Trace 与 Conversation 共用 `oneagent.db`，但使用独立数据表
+- [x] Trace 与 Conversation 共用 `vesta.db`，但使用独立数据表
 - [x] Trace 支持 Run 列表、完整/短 ID 查询、事件恢复、按会话过滤和删除
 - [x] 事件写入幂等，完成状态不会因重复旧事件回退为 running
 - [x] CLI 每轮自动持久化 Trace，新增 `/runs` 与 `/trace <run_id>`

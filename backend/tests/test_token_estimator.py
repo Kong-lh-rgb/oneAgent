@@ -52,7 +52,7 @@ def test_estimate_messages_counts_tool_calls() -> None:
                 ToolCall(
                     id="call-1",
                     name="web_search",
-                    arguments={"query": "OneAgent"},
+                    arguments={"query": "Vesta"},
                 ),
             ),
         ),

@@ -18,7 +18,7 @@ export default function ChatEmptyState({
     <section className="chat-empty" aria-label="开始新会话">
       <div className="chat-empty__mark">oa</div>
       <h1>What can I work on for you?</h1>
-      <p>Give oneAgent a goal. It can plan, use tools, and keep working across runs.</p>
+      <p>Give Vesta a goal. It can plan, use tools, and keep working across runs.</p>
       <div className="chat-empty__prompts">
         {EXAMPLE_PROMPTS.map((prompt) => (
           <button key={prompt} type="button" onClick={() => onSelectPrompt(prompt)}>

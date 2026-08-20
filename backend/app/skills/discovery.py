@@ -20,13 +20,13 @@ from .models import (
 )
 from .parser import SkillParseError, parse_skill_document
 
-logger = logging.getLogger("oneagent.skills.discovery")
+logger = logging.getLogger("vesta.skills.discovery")
 
 MAX_SKILL_FILE_BYTES = 512_000
 
-DEFAULT_USER_SKILLS_DIR = Path.home() / ".oneagent" / "skills"
+DEFAULT_USER_SKILLS_DIR = Path.home() / ".vesta" / "skills"
 DEFAULT_PROJECT_SKILLS_DIR = (
-    Path(__file__).resolve().parents[2] / ".oneagent" / "skills"
+    Path(__file__).resolve().parents[2] / ".vesta" / "skills"
 )
 
 

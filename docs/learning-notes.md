@@ -1,12 +1,12 @@
-# OneAgent 学习记录：层次架构与关键设计
+# Vesta 学习记录：层次架构与关键设计
 
-> 本文记录 OneAgent 当前已经落地的架构、设计理由和重要边界。
+> 本文记录 Vesta 当前已经落地的架构、设计理由和重要边界。
 > `docs/task.md` 负责记录每天完成了什么；本文负责解释系统为什么这样设计、
 > 各层如何协作，以及后续开发时不能破坏的约束。
 
 ## 1. 当前系统定位
 
-OneAgent 当前是一个运行在本地终端中的 Tool-Calling Agent，已经具备：
+Vesta 当前是一个运行在本地终端中的 Tool-Calling Agent，已经具备：
 
 - GPT、Qwen、DeepSeek、Claude 模型适配；
 - 多轮 Agent Loop；
@@ -418,7 +418,7 @@ Token 和压缩统计，但不应该记录 API Key 等秘密。
 - Task 生命周期状态：pending / active / paused / completed / failed /
   cancelled；普通 `task_update` 不允许恢复终态，终态记录 completed_at；
 - 持久化：`FileTaskStore`——每个任务一个 `<id>.json` 放在 `tasks/` 目录
-  （默认 `backend/.oneagent/tasks/`），缩进 JSON 便于人工查看与版本管理；
+  （默认 `backend/.vesta/tasks/`），缩进 JSON 便于人工查看与版本管理；
   临时文件 + 原子替换写入，损坏文件在 list 中跳过。任务不写入 SQLite，与会话
   数据库分离。
 
@@ -675,7 +675,7 @@ Memory Index、暴露语义工具、维护元数据、执行容量管理。
 ### 18.2 分层与文件布局
 
 ```text
-.oneagent/memory/
+.vesta/memory/
 ├── CORE.md           每次 Run 注入 System Prompt，仅身份/稳定偏好/长期约束
 ├── INDEX.md          Memory Index（Recall Cue 投影，自动重建）
 ├── active/Mxxx.md    普通长期记忆（最多 25 条，Markdown + Front Matter）
@@ -849,7 +849,7 @@ vec0 表保存 float32 embedding。写入和冲突替代在同一个事务中更
 榜单。最终结果继续接受 ContextManager 的 Token 预算，而不是绕过上下文管理直接塞满
 Prompt。
 
-namespace 是检索隔离边界，可以是 global、user:local、project:oneagent 或未来的
+namespace 是检索隔离边界，可以是 global、user:local、project:vesta 或未来的
 task:id。source session/run/message 只是“为什么知道”的证据锚点，不限制记忆跨会话
 生效。FACT 的 namespace + key 表达当前事实槽位；新事实出现时旧记录进入 superseded，
 新记录通过 supersedes_id 指向旧记录，历史不会被 DELETE。
@@ -1036,7 +1036,7 @@ MCP Server 对 Agent 来说仍然只是工具来源。正确接入方式不是�
 V1 的链路是：
 
 ```text
-.oneagent/mcp.json
+.vesta/mcp.json
 → MCPClientManager 启动每个 stdio Server
 → ClientSession initialize / list_tools
 → MCPToolAdapter 注册为 mcp__<server>__<tool>
@@ -1054,7 +1054,7 @@ Server 名称是稳定命名空间，原始工具名作为 Adapter 元数据保�
 权限归本地 Harness 所有。MCP annotations 是远端提供的信息，不能自动获得信任；默认
 使用 `human_approval`，只有用户明确配置的可信只读 Server 才设为 `allowed`。同样，MCP
 JSON 能启动本地命令，本身就是受信任配置。密钥通过 `${ENV_VAR}` 引用进程环境，缺失时
-只让对应 Server 进入 failed，不应拖垮其他服务器或 OneAgent。
+只让对应 Server 进入 failed，不应拖垮其他服务器或 Vesta。
 
 MCP 内容不只有文本。单文本且无 structuredContent 时可以直接返回文本；多段内容、图片、
 资源或结构化结果必须序列化保留。`CallToolResult.isError=true` 虽然协议请求成功，但领域
@@ -1072,7 +1072,7 @@ stdio 的生命周期由同一个 Manager 持有：启动时进入 transport 与
 变成了错误历史，模型越遵守系统提示反而越稳定地答错“今天”和“明天”。
 
 时间事实不仅不能持久化，也没有必要在每个 Agent Step 常驻。当前 Runtime 不再注入
-`oneagent_runtime_environment`；内置只读工具 `get_current_time` 提供进程本地时间和可选
+`vesta_runtime_environment`；内置只读工具 `get_current_time` 提供进程本地时间和可选
 IANA 时区。模型只有在处理今天、明天、现在、近期、截止日期等相对时间时才调用它，普通
 文件、代码和知识任务不会承担这部分重复上下文。`web_search` 的定义也不再动态拼接日期。
 
@@ -1159,7 +1159,7 @@ Active 指令每 Step 注入与上下文预算约束、路径安全加载。设�
 - V1 是扁平 `<name>.md`，没有 resources；V2 目录式支持 references/scripts/assets。
 - V1 文件名即 Skill 名，无严格校验；V2 name 必须过 `^[a-z0-9]+(?:-[a-z0-9]+)*$`（≤64，
   拒绝大写/下划线/首尾连字符/连续 `--`）再参与路径计算。
-- V1 无分层；V2 分 user（`~/.oneagent/skills`）与 project（`backend/.oneagent/skills`），
+- V1 无分层；V2 分 user（`~/.vesta/skills`）与 project（`backend/.vesta/skills`），
   project 同名覆盖 user。
 
 ### 31.2 目录与数据模型
@@ -1206,11 +1206,11 @@ name 与目录名不一致、YAML 非法都会抛 `SkillParseError`。`metadata:
 
 `SkillContextProvider`（`app/skills/context.py`）：
 
-- **Catalog（每 Step 注入，独立 Token Budget）**：`oneagent_skill_catalog` system 消息，
+- **Catalog（每 Step 注入，独立 Token Budget）**：`vesta_skill_catalog` system 消息，
   只含 `[name] description`，每 Step 重建（发现只做一次，消息每 Step 生成），不进持久历史。
   受 `skill_catalog_max_tokens=2048` 预算约束：按稳定排序逐项加入，达到预算即停止，并在
   末尾提示“还有 N 个未展示”，结果确定性、不依赖模型；
-- **Active 指令（每 Step 注入）**：`oneagent_active_skill` system 消息，渲染
+- **Active 指令（每 Step 注入）**：`vesta_active_skill` system 消息，渲染
   `Skill.render_instructions()`（指令正文 + Resources 清单，提示用 `skill_resource_read`
   按需读取）。去重、按激活顺序。独立于普通 ToolResult，因此不会被 ToolReducer /
   ConversationReducer / Compaction 遗忘；它是 Skill 指令正文的**唯一权威注入源**——
@@ -1266,7 +1266,7 @@ name 与目录名不一致、YAML 非法都会抛 `SkillParseError`。`metadata:
 ### 31.8 工具面
 
 - `skill_read`（常驻）：**轻量激活请求**，按名返回 found/name/description/scope/resources，
-  不返回完整正文；正文只经 `oneagent_active_skill` 注入；
+  不返回完整正文；正文只经 `vesta_active_skill` 注入；
 - `skill_resource_read`（常驻）：按 name + path 安全读取**当前 Run 已激活** Skill 的资源；
 - 不再有 `skill_list` —— Catalog 注入替代了发现职责。
 
@@ -1324,7 +1324,7 @@ Distillation call；Candidate 不自动生效。
 
 ### 32.3 Watermark
 
-`.oneagent/skill-learning/skill_learning_watermark.json`：
+`.vesta/skill-learning/skill_learning_watermark.json`：
 
 ```json
 {"version": 1, "processed_task_ids": [...], "pending_task_ids": [...], "last_mining_at": ...}
@@ -1576,7 +1576,7 @@ Multi-Agent / Task Graph / Planner DAG。Pattern Mining V1 完全用一次结构
 ### 35.5 CLI Ctrl+C cancel 当前 Run
 
 - `_send_message` 的 `run_manager.wait(run_id)` 捕获 `KeyboardInterrupt` →
-  `run_manager.cancel(run_id)` → 打印取消结果 → 返回输入循环，不退出 oneAgent。
+  `run_manager.cancel(run_id)` → 打印取消结果 → 返回输入循环，不退出 Vesta。
 - 输入等待时的 Ctrl+C（`input()` 处）退出行为保持不变。
 
 ### 35.6 测试与结果
@@ -1589,7 +1589,7 @@ Multi-Agent / Task Graph / Planner DAG。Pattern Mining V1 完全用一次结构
 
 ## 36. Automation / Scheduler V1（2026-08-19）
 
-> 目标：让 oneAgent 具备最基本的"长期运行 / 到时间自己启动 Run"能力。
+> 目标：让 Vesta 具备最基本的"长期运行 / 到时间自己启动 Run"能力。
 > 职责：Automation="未来何时以什么 prompt 启动 Run"；RunManager="Run 生命周期"；
 > AgentRuntime="Run 内部怎么执行"。Scheduler 绝不直接调用 AgentRuntime。
 

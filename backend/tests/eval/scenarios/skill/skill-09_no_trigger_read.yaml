@@ -15,7 +15,7 @@ initial_skills:
 user_input: "请读取 workspace 中 notes/hello.txt 的内容并原样告诉我。"
 initial_files:
   - path: notes/hello.txt
-    content: "你好，OneAgent。"
+    content: "你好，Vesta。"
 max_steps: 5
 expect:
   skill:

@@ -17,7 +17,7 @@ from pathlib import Path
 
 from .models import MemoryRecord
 
-logger = logging.getLogger("oneagent.memory.index")
+logger = logging.getLogger("vesta.memory.index")
 
 _INDEX_HEADER = (
     "# Long-term Memory Index\n\n"

@@ -103,7 +103,7 @@ async def _build_application(
     application = Application(
         provider="fake",
         model="fake-model",
-        database=tmp_path / "oneagent.db",
+        database=tmp_path / "vesta.db",
         tasks_dir=tmp_path / "tasks",
         mcp_config=tmp_path / "mcp.json",
         memory_dir=tmp_path / "memory",

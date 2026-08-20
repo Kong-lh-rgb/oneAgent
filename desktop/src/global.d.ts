@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-interface OneAgentDesktopApi {
+interface VestaDesktopApi {
   platform: string
   versions: {
     electron: string
@@ -16,5 +16,5 @@ interface OneAgentDesktopApi {
 }
 
 interface Window {
-  oneagent?: OneAgentDesktopApi
+  vesta?: VestaDesktopApi
 }

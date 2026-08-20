@@ -16,7 +16,7 @@ from .maintenance_models import (
     MemoryMaintenanceProposal,
 )
 
-_MAINTENANCE_PROMPT = """You are OneAgent's long-term memory capacity maintainer.
+_MAINTENANCE_PROMPT = """You are Vesta's long-term memory capacity maintainer.
 
 The active memory store is full or already over capacity. Review only the supplied
 candidates. Choose at most one recoverable ARCHIVE action when a candidate is

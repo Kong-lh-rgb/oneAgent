@@ -65,7 +65,7 @@ describe('computer api', () => {
     expect(url).toBe(`${SERVER_URL}/computer/screenshots/${id}.png`)
     // screenshot_ref 是本地绝对路径，绝不应直接变成 src。
     expect(url).not.toContain('/Users/')
-    expect(url).not.toContain('.oneagent')
+    expect(url).not.toContain('.vesta')
     expect(url).not.toContain('file://')
   })
 

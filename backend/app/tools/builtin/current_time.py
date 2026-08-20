@@ -20,7 +20,7 @@ class CurrentTimeTool(BaseTool):
             "Get the actual current date and time on demand. Use this before "
             "answering questions involving today, tomorrow, yesterday, now, "
             "recent dates, deadlines, or relative time. If no timezone is given, "
-            "the OneAgent process local timezone is used. This is read-only and "
+            "the Vesta process local timezone is used. This is read-only and "
             "does not require approval."
         ),
         parameters={

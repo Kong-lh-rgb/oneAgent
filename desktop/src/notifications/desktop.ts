@@ -54,7 +54,7 @@ export class DesktopNotificationController {
     const id = data.approval?.id
     if (!id || !this.isHidden()) return
     this.deliver(`approval:${id}`, {
-      title: 'oneAgent needs your approval',
+      title: 'Vesta needs your approval',
       body: 'A tool is waiting for your decision.',
       kind: 'approval',
     })
@@ -69,8 +69,8 @@ export class DesktopNotificationController {
       !this.isHidden()
     ) return
     this.deliver(`run:${data.run_id}:${data.status}`, {
-      title: `oneAgent run ${data.status}`,
-      body: 'Open OneAgent to review the result.',
+      title: `Vesta run ${data.status}`,
+      body: 'Open Vesta to review the result.',
       kind: 'run',
     })
   }
@@ -80,8 +80,8 @@ export class DesktopNotificationController {
     const id = data.artifact?.id
     if (!id || !this.isHidden()) return
     this.deliver(`artifact:${id}`, {
-      title: 'oneAgent created a new artifact',
-      body: 'Open OneAgent to view the delivered result.',
+      title: 'Vesta created a new artifact',
+      body: 'Open Vesta to view the delivered result.',
       kind: 'artifact',
     })
   }
@@ -99,7 +99,7 @@ export class DesktopNotificationController {
 }
 
 export function createDesktopNotificationController(): DesktopNotificationController | null {
-  const bridge = window.oneagent
+  const bridge = window.vesta
   if (!bridge) return null
   return new DesktopNotificationController(
     rpcClient,

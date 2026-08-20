@@ -3,7 +3,7 @@
 目录结构：
 
 ```text
-.oneagent/memory/
+.vesta/memory/
 ├── CORE.md
 ├── INDEX.md
 ├── active/M001.md ...
@@ -30,10 +30,10 @@ from .models import (
     parse_memory_markdown,
 )
 
-DEFAULT_MEMORY_DIR = Path(__file__).resolve().parents[2] / ".oneagent" / "memory"
+DEFAULT_MEMORY_DIR = Path(__file__).resolve().parents[2] / ".vesta" / "memory"
 _MAX_MEMORY_FILE_BYTES = 512_000
 
-logger = logging.getLogger("oneagent.memory.store")
+logger = logging.getLogger("vesta.memory.store")
 
 
 class MemoryStore:

@@ -17,7 +17,7 @@ from app.agent.events import AgentEventType
 from ..dispatcher import RpcContext, RpcDispatcher
 from ..protocol import INVALID_STATE, JsonRpcError, RpcErrorCode
 
-logger = logging.getLogger("oneagent.server.rpc.computer")
+logger = logging.getLogger("vesta.server.rpc.computer")
 
 _PERMISSIONS = frozenset({"accessibility", "screen_recording"})
 

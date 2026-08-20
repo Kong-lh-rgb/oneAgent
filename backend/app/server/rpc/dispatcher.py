@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
     from .connection import RpcConnection
 
-logger = logging.getLogger("oneagent.server.rpc.dispatcher")
+logger = logging.getLogger("vesta.server.rpc.dispatcher")
 
 Handler = Callable[[dict[str, Any], "RpcContext"], Awaitable[Any]]
 

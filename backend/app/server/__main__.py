@@ -1,4 +1,4 @@
-"""oneAgent Host 入口：``python -m app.server``。"""
+"""Vesta Host 入口：``python -m app.server``。"""
 
 from __future__ import annotations
 
@@ -9,13 +9,13 @@ import sys
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run the oneAgent Host (FastAPI + JSON-RPC WebSocket)."
+        description="Run the Vesta Host (FastAPI + JSON-RPC WebSocket)."
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument(
         "--database",
-        help="SQLite database path (default: backend/.oneagent/oneagent.db).",
+        help="SQLite database path (default: backend/.vesta/vesta.db).",
     )
     parser.add_argument("--provider", help="Model provider (default: auto-select).")
     parser.add_argument("--model", help="Override the configured model name.")

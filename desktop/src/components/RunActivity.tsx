@@ -198,7 +198,7 @@ export default function RunActivity({
       <div className="activity__header">
         <div>
           <strong>Activity</strong>
-          <span>What oneAgent is doing</span>
+          <span>What Vesta is doing</span>
         </div>
         <div className="activity__header-actions">
           {status ? <StatusDot tone={STATUS_TONE[status] ?? 'offline'} /> : null}

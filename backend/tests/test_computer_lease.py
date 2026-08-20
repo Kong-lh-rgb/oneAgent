@@ -56,7 +56,7 @@ def test_flock_blocks_second_manager(tmp_path) -> None:
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="fcntl/fork is macOS-only")
 def test_flock_blocks_another_host_process(tmp_path) -> None:
-    """子进程模拟第二个 oneAgent Host，真正验证跨进程 flock。"""
+    """子进程模拟第二个 Vesta Host，真正验证跨进程 flock。"""
 
     lock_path = tmp_path / "machine.lock"
     ready_read, ready_write = os.pipe()

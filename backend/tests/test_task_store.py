@@ -29,9 +29,9 @@ async def store(tmp_path) -> FileTaskStore:
     return instance
 
 
-async def test_default_tasks_dir_under_oneagent() -> None:
+async def test_default_tasks_dir_under_vesta() -> None:
     assert DEFAULT_TASKS_DIR.name == "tasks"
-    assert DEFAULT_TASKS_DIR.parent.name == ".oneagent"
+    assert DEFAULT_TASKS_DIR.parent.name == ".vesta"
 
 
 async def test_create_and_get_round_trip(store: FileTaskStore) -> None:

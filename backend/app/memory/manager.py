@@ -35,9 +35,9 @@ from .prompts import (
 )
 from .store import DEFAULT_MEMORY_DIR, MemoryStore
 
-CORE_MEMORY_MESSAGE_NAME = "oneagent_core_memory"
-MEMORY_INDEX_MESSAGE_NAME = "oneagent_memory_index"
-MEMORY_POLICY_MESSAGE_NAME = "oneagent_memory_policy"
+CORE_MEMORY_MESSAGE_NAME = "vesta_core_memory"
+MEMORY_INDEX_MESSAGE_NAME = "vesta_memory_index"
+MEMORY_POLICY_MESSAGE_NAME = "vesta_memory_policy"
 
 
 class MemoryManager:

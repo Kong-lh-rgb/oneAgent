@@ -16,6 +16,9 @@ __pycache__/
 # Local runtime data
 workspace/*
 !workspace/.gitkeep
+.vesta/
+backend/.vesta/
+# 旧数据目录（迁移前仍忽略，避免误提交用户已有数据）
 .oneagent/
 backend/.oneagent/
 

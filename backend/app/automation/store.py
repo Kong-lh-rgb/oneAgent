@@ -1,6 +1,6 @@
 """Automation 的 SQLite 持久化存储。
 
-与 Conversation / Checkpoint / Trace / Run 共用同一个 ``oneagent.db``，
+与 Conversation / Checkpoint / Trace / Run 共用同一个 ``vesta.db``，
 只新增一张 ``automations`` 表，不引入新的数据库体系。写入使用事务。
 """
 

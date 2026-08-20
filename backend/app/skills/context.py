@@ -16,8 +16,8 @@ from app.models.types import Message, MessageRole
 
 from .models import Skill, SkillMetadata
 
-SKILL_CATALOG_MESSAGE_NAME = "oneagent_skill_catalog"
-ACTIVE_SKILL_MESSAGE_NAME = "oneagent_active_skill"
+SKILL_CATALOG_MESSAGE_NAME = "vesta_skill_catalog"
+ACTIVE_SKILL_MESSAGE_NAME = "vesta_active_skill"
 
 _CATALOG_HEADER = (
     "# Available Skills\n\n"

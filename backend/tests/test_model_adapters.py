@@ -290,7 +290,7 @@ async def test_openai_chat_stream_rebuilds_text_and_tool_calls() -> None:
                                     id="call-1",
                                     function=SimpleNamespace(
                                         name="search",
-                                        arguments='{"query":"oneAgent"}',
+                                        arguments='{"query":"Vesta"}',
                                     ),
                                 )
                             ],
@@ -323,7 +323,7 @@ async def test_openai_chat_stream_rebuilds_text_and_tool_calls() -> None:
 
     assert deltas == ["先"]
     assert response.message.content == "先"
-    assert response.message.tool_calls[0].arguments == {"query": "oneAgent"}
+    assert response.message.tool_calls[0].arguments == {"query": "Vesta"}
     assert response.message.reasoning == "思考中"
     assert response.usage.total_tokens == 8
 
@@ -339,7 +339,7 @@ async def test_anthropic_adapter_separates_system_and_tool_messages() -> None:
                 type="tool_use",
                 id="tool_1",
                 name="search",
-                input={"query": "OneAgent"},
+                input={"query": "Vesta"},
             ),
         ],
         stop_reason="tool_use",

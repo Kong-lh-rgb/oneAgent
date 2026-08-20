@@ -33,7 +33,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--lock-path",
         type=Path,
-        default=Path(".oneagent/computer/machine.lock"),
+        default=Path(".vesta/computer/machine.lock"),
     )
     args = parser.parse_args()
     main(args.lock_path.expanduser().resolve())

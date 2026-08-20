@@ -24,7 +24,7 @@ from app.tools.builtin._workspace import (
 from .models import Artifact, ArtifactKind
 from .store import SQLiteArtifactStore
 
-logger = logging.getLogger("oneagent.artifact")
+logger = logging.getLogger("vesta.artifact")
 
 # V1 单文件上限：100 MB（用 mock 测试边界，不真的生成大文件）。
 MAX_ARTIFACT_BYTES = 100 * 1024 * 1024

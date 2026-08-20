@@ -1,6 +1,6 @@
 """Run 生命周期模型。
 
-Run 是 oneAgent 中“一次 Agent 执行”的生命周期索引，不是 Trace、不是
+Run 是 Vesta 中“一次 Agent 执行”的生命周期索引，不是 Trace、不是
 Checkpoint、也不是 Conversation：
 
 - Run      —— “这次执行现在是什么生命周期状态？”（可持久化、可查询、可取消、可恢复）

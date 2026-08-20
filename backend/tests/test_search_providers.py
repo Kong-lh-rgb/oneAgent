@@ -57,7 +57,7 @@ def response(
     snippet: str = "useful content",
 ) -> SearchResponse:
     return SearchResponse(
-        query="OneAgent",
+        query="Vesta",
         provider=provider,
         results=(
             SearchResult(
@@ -181,7 +181,7 @@ async def test_search_service_falls_back_and_reports_reason() -> None:
     fallback = StubSearchProvider("duckduckgo", response("duckduckgo"))
 
     result = await SearchService(primary, fallback).search(
-        SearchRequest(query="OneAgent")
+        SearchRequest(query="Vesta")
     )
 
     assert result.provider == "duckduckgo"
@@ -262,7 +262,7 @@ async def test_web_search_tool_returns_unified_result_without_approval() -> None
             id="search-1",
             name="web_search",
             arguments={
-                "query": "OneAgent",
+                "query": "Vesta",
                 "max_results": 10,
                 "topic": "general",
             },

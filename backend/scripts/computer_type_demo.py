@@ -9,7 +9,7 @@
     cd backend
     PYTHONPATH=. .venv/bin/python scripts/computer_type_demo.py \
         ../native/macos-computer-helper/.build/debug/MacOSComputerHelper \
-        "Hello oneAgent 你好"
+        "Hello Vesta 你好"
 """
 
 from __future__ import annotations
@@ -52,8 +52,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "text",
         nargs="?",
-        default="Hello oneAgent 你好",
-        help="要输入的文本（默认 Hello oneAgent 你好）",
+        default="Hello Vesta 你好",
+        help="要输入的文本（默认 Hello Vesta 你好）",
     )
     args = parser.parse_args()
     asyncio.run(main(args.helper_path.expanduser().resolve(), args.text))

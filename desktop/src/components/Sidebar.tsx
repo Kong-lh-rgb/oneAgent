@@ -34,7 +34,7 @@ export default function Sidebar({
 }: SidebarProps): ReactElement {
   return (
     <nav className="sidebar" aria-label="主导航">
-      <div className="sidebar-brand" aria-label="oneAgent">oa</div>
+      <div className="sidebar-brand" aria-label="Vesta">oa</div>
       <div className="sidebar-nav">
         {SIDEBAR_ITEMS.map((item) => (
           <button

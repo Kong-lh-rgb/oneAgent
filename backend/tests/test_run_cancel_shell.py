@@ -167,7 +167,7 @@ async def test_runmanager_cancel_shell_run_leaves_no_process(
     tools = ToolRegistry()
     tools.register(ShellCommandTool(workspace_root=tmp_path))
 
-    database = tmp_path / "oneagent.db"
+    database = tmp_path / "vesta.db"
     run_store = SQLiteRunStore(database)
     checkpoint_store = SQLiteCheckpointStore(database)
     await run_store.initialize()

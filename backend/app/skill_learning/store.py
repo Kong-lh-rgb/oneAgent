@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .models import SkillCandidate, SkillCandidateStatus
 
-logger = logging.getLogger("oneagent.skill_learning.store")
+logger = logging.getLogger("vesta.skill_learning.store")
 
 WATERMARK_FILE_NAME = "skill_learning_watermark.json"
 WATERMARK_VERSION = 1

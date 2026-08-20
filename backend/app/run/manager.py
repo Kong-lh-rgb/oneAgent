@@ -33,7 +33,7 @@ from .store import SQLiteRunStore
 
 _STALE_RUN_ERROR = "process restarted; run did not reach a terminal state"
 _STALE_PENDING_ERROR = "process restarted; run never started"
-logger = logging.getLogger("oneagent.run.manager")
+logger = logging.getLogger("vesta.run.manager")
 RunFinalizer = Callable[[str], Awaitable[object] | object]
 
 

@@ -128,7 +128,7 @@ async def _send_message(
     content: str,
     model: str,
 ) -> tuple[bool, Conversation]:
-    print("OneAgent 正在思考...", flush=True)
+    print("Vesta 正在思考...", flush=True)
 
     try:
         dispatch = await conversation_service.dispatch(
@@ -139,7 +139,7 @@ async def _send_message(
         )
     except KeyboardInterrupt:
         # 用户 Ctrl+C：ConversationService 已尽力 cancel 当前 Run，
-        # 回到输入循环，不退出 oneAgent。
+        # 回到输入循环，不退出 Vesta。
         print("\n[cancel] 已取消当前 Run。")
         return False, conversation
 
@@ -152,7 +152,7 @@ async def _send_message(
             title_from_content(content),
         )
     answer = result.content or "<模型未返回文本>"
-    print(f"\nOneAgent> {answer.strip()}")
+    print(f"\nVesta> {answer.strip()}")
     stop_reason = dispatch.run.stop_reason or result.stop_reason.value
     provider_name = provider.value if isinstance(provider, ModelProvider) else provider
     print(
@@ -602,7 +602,7 @@ async def _run(args: argparse.Namespace) -> int:
     )
     provider = app.provider
     model = app.model
-    print(f"OneAgent Chat · provider={provider} · model={model}")
+    print(f"Vesta Chat · provider={provider} · model={model}")
 
     try:
         await app.start()
@@ -1030,7 +1030,7 @@ async def _run(args: argparse.Namespace) -> int:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Chat with a configured OneAgent model provider."
+        description="Chat with a configured Vesta model provider."
     )
     parser.add_argument(
         "--provider",

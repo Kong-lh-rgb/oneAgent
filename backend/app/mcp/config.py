@@ -12,7 +12,7 @@ from .errors import MCPConfigurationError
 from .models import MCPSettings
 
 DEFAULT_MCP_CONFIG_PATH = (
-    Path(__file__).resolve().parents[2] / ".oneagent" / "mcp.json"
+    Path(__file__).resolve().parents[2] / ".vesta" / "mcp.json"
 )
 
 

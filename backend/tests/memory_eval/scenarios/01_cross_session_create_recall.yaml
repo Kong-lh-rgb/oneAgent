@@ -4,7 +4,7 @@ tags: [recall, reflection, cross-session]
 phases:
   - id: learn
     conversation: A
-    user_input: "我们已经决定：OneAgent 的普通长期记忆使用 Markdown 文件，不使用向量数据库自动 Top-K。"
+    user_input: "我们已经决定：Vesta 的普通长期记忆使用 Markdown 文件，不使用向量数据库自动 Top-K。"
     bind_reflection_memory_as: storage_decision
     expect:
       reflection_action: create

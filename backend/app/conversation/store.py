@@ -16,7 +16,7 @@ from app.models.types import Message, ToolCall
 from .models import Conversation
 
 DEFAULT_DATABASE_PATH = (
-    Path(__file__).resolve().parents[2] / ".oneagent" / "oneagent.db"
+    Path(__file__).resolve().parents[2] / ".vesta" / "vesta.db"
 )
 
 _SCHEMA = """

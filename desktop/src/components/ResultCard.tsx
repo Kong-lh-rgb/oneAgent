@@ -25,8 +25,8 @@ export default function ResultCard({ artifact }: ResultCardProps): ReactElement 
 
   const openUrl = (): void => {
     if (!artifact.source_url) return
-    if (window.oneagent) {
-      void window.oneagent.openExternal(artifact.source_url)
+    if (window.vesta) {
+      void window.vesta.openExternal(artifact.source_url)
       return
     }
     window.open(artifact.source_url, '_blank', 'noopener,noreferrer')

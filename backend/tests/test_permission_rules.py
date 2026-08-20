@@ -500,7 +500,7 @@ async def test_approval_completed_event_carries_rule_id() -> None:
 
 @pytest.mark.asyncio
 async def test_sqlite_rule_store_persists_and_queries(tmp_path) -> None:
-    database_path = tmp_path / "oneagent.db"
+    database_path = tmp_path / "vesta.db"
     store = SQLitePermissionRuleStore(database_path)
     await store.initialize()
     rule = build_safe_rule(
@@ -525,7 +525,7 @@ async def test_sqlite_rule_store_persists_and_queries(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_sqlite_empty_scope_cannot_read_unrelated_rules(tmp_path) -> None:
-    store = SQLitePermissionRuleStore(tmp_path / "oneagent.db")
+    store = SQLitePermissionRuleStore(tmp_path / "vesta.db")
     await store.initialize()
     rule = build_safe_rule(
         tool_name="run_shell_command",
@@ -546,7 +546,7 @@ async def test_sqlite_empty_scope_cannot_read_unrelated_rules(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_rule_store_get_and_remove_scope(tmp_path) -> None:
-    store = SQLitePermissionRuleStore(tmp_path / "oneagent.db")
+    store = SQLitePermissionRuleStore(tmp_path / "vesta.db")
     await store.initialize()
     first = build_safe_rule(
         tool_name="run_shell_command",
@@ -571,7 +571,7 @@ async def test_rule_store_get_and_remove_scope(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_sqlite_initialize_invalidates_legacy_broad_rules(tmp_path) -> None:
-    database_path = tmp_path / "oneagent.db"
+    database_path = tmp_path / "vesta.db"
     store = SQLitePermissionRuleStore(database_path)
     await store.initialize()
     legacy = PermissionRule(

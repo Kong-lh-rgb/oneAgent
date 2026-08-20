@@ -34,7 +34,7 @@ describe('desktop notifications', () => {
     start()
     handlers.get('approval.required')?.({ approval: { id: 'approval-1' } })
     expect(notify).toHaveBeenCalledWith({
-      title: 'oneAgent needs your approval',
+      title: 'Vesta needs your approval',
       body: 'A tool is waiting for your decision.',
       kind: 'approval',
     })

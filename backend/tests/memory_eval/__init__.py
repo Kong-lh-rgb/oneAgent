@@ -1,4 +1,4 @@
-"""OneAgent 长期记忆的多阶段语义测评框架。"""
+"""Vesta 长期记忆的多阶段语义测评框架。"""
 
 from .assertions import MemoryCheckResult, check_phase
 from .harness import MemoryEvalOutcome, MemoryEvalPhaseOutcome, run_scenario

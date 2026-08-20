@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.types import Message, MessageRole, ModelUsage
 
-SUMMARY_MESSAGE_NAME = "oneagent_rolling_summary"
+SUMMARY_MESSAGE_NAME = "vesta_rolling_summary"
 
 
 class RollingConversationSummary(BaseModel):

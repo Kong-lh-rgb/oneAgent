@@ -36,7 +36,7 @@ function createWindow(): void {
     height: 860,
     minWidth: 980,
     minHeight: 640,
-    title: 'OneAgent',
+    title: 'Vesta',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       // 安全边界：Renderer 不获得任意 Node 权限。
@@ -83,13 +83,13 @@ function isHttpUrl(value: string): boolean {
   }
 }
 
-ipcMain.handle('oneagent:open-external', async (_event, url: unknown) => {
+ipcMain.handle('vesta:open-external', async (_event, url: unknown) => {
   if (typeof url !== 'string' || !isHttpUrl(url)) return false
   await shell.openExternal(url)
   return true
 })
 
-ipcMain.on('oneagent:notify', (_event, payload: unknown) => {
+ipcMain.on('vesta:notify', (_event, payload: unknown) => {
   if (!payload || typeof payload !== 'object' || !Notification.isSupported()) return
   const value = payload as Partial<NotificationPayload>
   if (

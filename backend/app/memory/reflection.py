@@ -16,7 +16,7 @@ from .reflection_models import (
     ReflectionDecision,
 )
 
-_REFLECTION_PROMPT = """You are OneAgent's post-run long-term memory reflector.
+_REFLECTION_PROMPT = """You are Vesta's post-run long-term memory reflector.
 
 The main Agent has already completed the user's task. Do not answer the user,
 continue the task, call tools, change Task, modify Core Memory, or create Skills.

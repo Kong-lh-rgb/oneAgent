@@ -1,4 +1,4 @@
-"""OneAgent 本地工具的基础接口。"""
+"""Vesta 本地工具的基础接口。"""
 
 from __future__ import annotations
 

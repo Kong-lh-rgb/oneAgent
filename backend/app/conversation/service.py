@@ -34,7 +34,7 @@ if TYPE_CHECKING:  # 避免 app.context ↔ app.conversation 循环导入
     from app.context import SQLiteConversationSummaryStore
     from app.run import Run, RunManager
 
-logger = logging.getLogger("oneagent.conversation.service")
+logger = logging.getLogger("vesta.conversation.service")
 
 
 @dataclass

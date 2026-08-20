@@ -161,7 +161,7 @@ async def test_active_skill_message_in_real_requests(tmp_path: Path) -> None:
 
     不依赖事件字段：直接检查 FakeModelAdapter 捕获的真实 ModelRequest。
     skill-01 场景激活 debug-python 后，激活之后的每一步请求都必须包含
-    oneagent_active_skill 且正文含目标 Skill 名。压缩只会压缩历史消息，
+    vesta_active_skill 且正文含目标 Skill 名。压缩只会压缩历史消息，
     Active 指令作为 ephemeral 每 Step 重建，不会因压缩丢失；
     “压缩后仍注入”的判定由 test_skill_check_survives_compaction 覆盖。
     """
@@ -206,9 +206,9 @@ async def test_active_skill_message_in_real_requests(tmp_path: Path) -> None:
         active_msgs = [
             m
             for m in request.messages
-            if getattr(m, "name", None) == "oneagent_active_skill"
+            if getattr(m, "name", None) == "vesta_active_skill"
         ]
-        assert active_msgs, "激活后的请求缺少 oneagent_active_skill message"
+        assert active_msgs, "激活后的请求缺少 vesta_active_skill message"
         for message in active_msgs:
             active_message_seen = True
             assert "debug-python" in (message.content or "")

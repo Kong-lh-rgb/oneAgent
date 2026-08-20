@@ -5,7 +5,7 @@
 
 helper path 解析顺序：
 1. 显式参数（CLI ``--computer-helper``）；
-2. 环境变量 ``ONEAGENT_MACOS_HELPER_PATH``；
+2. 环境变量 ``VESTA_MACOS_HELPER_PATH``；
 3. 开发环境自动寻找 ``native/macos-computer-helper/.build/debug/MacOSComputerHelper``。
 
 不自动 ``swift build``：Host 启动不应依赖本机安装 Swift toolchain。
@@ -23,7 +23,7 @@ from .helper_client import MacOSHelperClient
 from .macos import MacOSComputerRuntime
 from .runtime import ComputerRuntime
 
-logger = logging.getLogger("oneagent.computer.bootstrap")
+logger = logging.getLogger("vesta.computer.bootstrap")
 
 # backend/app/computer/bootstrap.py → 项目根
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -36,8 +36,8 @@ _DEFAULT_DEV_HELPER = (
     / "MacOSComputerHelper"
 )
 
-ENV_HELPER_PATH = "ONEAGENT_MACOS_HELPER_PATH"
-ENV_COMPUTER_ENABLED = "ONEAGENT_COMPUTER_ENABLED"
+ENV_HELPER_PATH = "VESTA_MACOS_HELPER_PATH"
+ENV_COMPUTER_ENABLED = "VESTA_COMPUTER_ENABLED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +81,7 @@ def resolve_helper_path(explicit: str | Path | None = None) -> Path | None:
 
 
 def computer_enabled(enabled: bool | None = None) -> bool:
-    """Computer 开关：显式参数 > ONEAGENT_COMPUTER_ENABLED > 默认启用。
+    """Computer 开关：显式参数 > VESTA_COMPUTER_ENABLED > 默认启用。
 
     默认启用（非 macOS 是否可用由 ``build_macos_computer`` 判定，不会因为
     平台不同而把用户显式启用的意图误判为 disabled）。

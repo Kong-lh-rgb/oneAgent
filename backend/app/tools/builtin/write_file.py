@@ -1,4 +1,4 @@
-"""仅允许写入 OneAgent 工作区的 UTF-8 文本工具。"""
+"""仅允许写入 Vesta 工作区的 UTF-8 文本工具。"""
 
 from __future__ import annotations
 

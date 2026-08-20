@@ -1,4 +1,4 @@
-"""基于现有 OneAgent SQLite 文件的 Run Checkpoint 存储。"""
+"""基于现有 Vesta SQLite 文件的 Run Checkpoint 存储。"""
 
 from __future__ import annotations
 

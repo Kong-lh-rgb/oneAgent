@@ -2,7 +2,7 @@
 
 
 class MCPError(RuntimeError):
-    """OneAgent 可识别的 MCP 基础错误。"""
+    """Vesta 可识别的 MCP 基础错误。"""
 
 
 class MCPConfigurationError(MCPError):

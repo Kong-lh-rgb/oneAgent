@@ -21,7 +21,7 @@ export default function SettingsPage(): React.JSX.Element {
     retry: false,
   })
 
-  const desktop = window.oneagent
+  const desktop = window.vesta
 
   const doRequestPermission = async (
     permission: 'accessibility' | 'screen_recording',
@@ -39,12 +39,12 @@ export default function SettingsPage(): React.JSX.Element {
       <h2 style={{ margin: 0, fontSize: 16, marginBottom: 12 }}>Settings</h2>
 
       <div className="panel" style={{ padding: 14 }}>
-        <h3 style={{ fontSize: 14, marginTop: 0 }}>oneAgent Host</h3>
+        <h3 style={{ fontSize: 14, marginTop: 0 }}>Vesta Host</h3>
         {infoQuery.isLoading ? (
           <div className="text-dim"><span className="spinner" /> 正在检查后端…</div>
         ) : infoQuery.isError ? (
           <div className="error-text">
-            无法连接 oneAgent Host。请先在 backend 启动：
+            无法连接 Vesta Host。请先在 backend 启动：
             <pre style={{ background: 'var(--bg)', padding: 10, borderRadius: 6 }}>{'python -m app.server'}</pre>
           </div>
         ) : (

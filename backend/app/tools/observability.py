@@ -116,7 +116,7 @@ class InMemoryExecutionLogger(ToolExecutionLogger):
 class StructLogExecutionLogger(ToolExecutionLogger):
     """通过 structlog 输出执行记录，失败时记录 error 原因。"""
 
-    def __init__(self, logger_name: str = "oneagent.tools") -> None:
+    def __init__(self, logger_name: str = "vesta.tools") -> None:
         self._log = structlog.get_logger(logger_name)
 
     def record(self, record: ToolExecutionRecord) -> None:

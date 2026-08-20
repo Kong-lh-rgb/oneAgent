@@ -190,7 +190,7 @@ async def manager_factory(tmp_path):
         provider: str = "fake",
         run_finalizers=(),
     ) -> tuple[RunManager, SQLiteRunStore, SQLiteCheckpointStore]:
-        database = tmp_path / "oneagent.db"
+        database = tmp_path / "vesta.db"
         run_store = run_store or SQLiteRunStore(database)
         checkpoint_store = checkpoint_store or SQLiteCheckpointStore(database)
         await run_store.initialize()
@@ -381,7 +381,7 @@ async def _make_stale_running_run(
 ) -> tuple[str, SQLiteRunStore, SQLiteCheckpointStore, str]:
     """模拟进程崩溃前留下的持久化状态：RUNNING Run +（可选）Checkpoint。"""
 
-    database = tmp_path / "oneagent.db"
+    database = tmp_path / "vesta.db"
     run_store = SQLiteRunStore(database)
     checkpoint_store = SQLiteCheckpointStore(database)
     await run_store.initialize()
@@ -473,7 +473,7 @@ async def test_reconcile_stale_pending_becomes_failed(
     """
 
     build_manager = manager_factory
-    database = tmp_path / "oneagent.db"
+    database = tmp_path / "vesta.db"
     run_store = SQLiteRunStore(database)
     await run_store.initialize()
     pending = await run_store.create(
@@ -516,7 +516,7 @@ async def test_recover_interrupted_run_uses_checkpoint_and_completes(
 ) -> None:
     build_manager = manager_factory
     # 模拟一个中断的 Run：已有已完成工具结果 + 一个未决工具调用。
-    database = tmp_path / "oneagent.db"
+    database = tmp_path / "vesta.db"
     run_store = SQLiteRunStore(database)
     checkpoint_store = SQLiteCheckpointStore(database)
     await run_store.initialize()
@@ -599,7 +599,7 @@ def _tool_result(call: ToolCall):
 
 
 async def test_completed_tool_results_are_not_reexecuted(tmp_path) -> None:
-    database = tmp_path / "oneagent.db"
+    database = tmp_path / "vesta.db"
     run_store = SQLiteRunStore(database)
     checkpoint_store = SQLiteCheckpointStore(database)
     await run_store.initialize()
@@ -650,7 +650,7 @@ async def test_completed_tool_results_are_not_reexecuted(tmp_path) -> None:
 
 
 async def test_invalid_state_transitions_rejected(tmp_path) -> None:
-    store = SQLiteRunStore(tmp_path / "oneagent.db")
+    store = SQLiteRunStore(tmp_path / "vesta.db")
     await store.initialize()
 
     run = await store.create(conversation_id="conv-1", user_message="x")
@@ -688,7 +688,7 @@ async def test_invalid_state_transitions_rejected(tmp_path) -> None:
 
     # 终态 Run 在 Manager 层也不能 cancel。
     manager_runtime_registry, _ = fake_registry([model_response(content="完成")])
-    checkpoint_store = SQLiteCheckpointStore(tmp_path / "oneagent.db")
+    checkpoint_store = SQLiteCheckpointStore(tmp_path / "vesta.db")
     await checkpoint_store.initialize()
     manager = RunManager(
         store,
@@ -859,7 +859,7 @@ async def test_reconcile_also_marks_stale_checkpoints(
 ) -> None:
     build_manager = manager_factory
     # 构造一个只有 Checkpoint（无 Run 记录）的遗留 RUNNING Checkpoint。
-    checkpoint_store = SQLiteCheckpointStore(tmp_path / "oneagent.db")
+    checkpoint_store = SQLiteCheckpointStore(tmp_path / "vesta.db")
     await checkpoint_store.initialize()
     await checkpoint_store.start(
         "orphan-cp",
@@ -887,7 +887,7 @@ async def test_reconcile_also_marks_stale_checkpoints(
 async def _make_interrupted_run_with_checkpoint(
     tmp_path,
 ) -> dict[str, object]:
-    database = tmp_path / "oneagent.db"
+    database = tmp_path / "vesta.db"
     run_store = SQLiteRunStore(database)
     checkpoint_store = SQLiteCheckpointStore(database)
     await run_store.initialize()

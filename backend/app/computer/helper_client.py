@@ -32,7 +32,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger("oneagent.computer.helper")
+logger = logging.getLogger("vesta.computer.helper")
 
 
 class ComputerHelperError(RuntimeError):

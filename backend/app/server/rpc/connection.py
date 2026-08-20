@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
     from .hub import RpcHub
 
-logger = logging.getLogger("oneagent.server.rpc.connection")
+logger = logging.getLogger("vesta.server.rpc.connection")
 
 
 def _to_jsonable(obj: Any) -> Any:

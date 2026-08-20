@@ -255,7 +255,7 @@ def _check_skill(
             last_compacted = compacted_indexes[-1]
             after = started[last_compacted + 1 :]
             # 只依赖 run state 的 active_skill_names 不够：这里要求压缩之后的
-            # 实际 ModelRequest 仍然注入了 oneagent_active_skill 消息，并且
+            # 实际 ModelRequest 仍然注入了 vesta_active_skill 消息，并且
             # 该消息对应声明要激活的 Skill。
             wanted = set(expect.activated)
             compaction_ok = any(

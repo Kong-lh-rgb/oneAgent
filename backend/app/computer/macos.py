@@ -26,7 +26,7 @@ from .models import (
 )
 
 __all__ = ["MacOSComputerRuntime"]
-logger = logging.getLogger("oneagent.computer.macos")
+logger = logging.getLogger("vesta.computer.macos")
 
 
 def _bounds(data: object) -> Bounds:
@@ -72,7 +72,7 @@ class MacOSComputerRuntime:
             (
                 screenshot_dir
                 or Path(__file__).resolve().parents[2]
-                / ".oneagent"
+                / ".vesta"
                 / "computer"
                 / "screenshots"
             )

@@ -43,7 +43,7 @@ const observation: ComputerObservation = {
     },
   ],
   // 本地绝对路径，绝不能被当作 img src。
-  screenshot_ref: '/Users/me/.oneagent/computer/screenshots/xxxx.png',
+  screenshot_ref: '/Users/me/.vesta/computer/screenshots/xxxx.png',
 }
 
 describe('ComputerObservationPanel', () => {
@@ -77,7 +77,7 @@ describe('ComputerObservationPanel', () => {
     expect(html).toContain(
       `src="http://127.0.0.1:8000/computer/screenshots/${obsId}.png"`,
     )
-    expect(html).not.toContain('/Users/me/.oneagent')
+    expect(html).not.toContain('/Users/me/.vesta')
     expect(html).not.toContain('file://')
   })
 

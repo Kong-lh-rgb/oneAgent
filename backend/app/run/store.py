@@ -1,7 +1,7 @@
-"""基于现有 OneAgent SQLite 文件的 Run 生命周期存储。
+"""基于现有 Vesta SQLite 文件的 Run 生命周期存储。
 
 与 CheckpointStore / TraceStore 共用同一个数据库文件（默认
-``backend/.oneagent/oneagent.db``），只新增一张 ``runs`` 表，不引入新的
+``backend/.vesta/vesta.db``），只新增一张 ``runs`` 表，不引入新的
 数据库体系。所有写入使用 ``BEGIN IMMEDIATE`` 原子事务，非法状态转换被拒绝。
 """
 

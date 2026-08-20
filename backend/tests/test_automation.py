@@ -108,7 +108,7 @@ async def make_scheduler(tmp_path):
     async def _make(
         service: FakeConversationService | None = None,
     ) -> tuple[SQLiteAutomationStore, AutomationScheduler, FakeConversationService]:
-        store = SQLiteAutomationStore(tmp_path / "oneagent.db")
+        store = SQLiteAutomationStore(tmp_path / "vesta.db")
         await store.initialize()
         service = service or FakeConversationService()
         scheduler = AutomationScheduler(store, service)
@@ -271,7 +271,7 @@ async def test_pause_resume_cancel_lifecycle(make_scheduler) -> None:
 
 
 async def test_restart_reloads_active_automations(tmp_path) -> None:
-    store = SQLiteAutomationStore(tmp_path / "oneagent.db")
+    store = SQLiteAutomationStore(tmp_path / "vesta.db")
     await store.initialize()
     service = FakeConversationService()
     schedule = Schedule(
@@ -302,7 +302,7 @@ async def test_restart_reloads_active_automations(tmp_path) -> None:
 
 
 async def test_missed_once_automation_runs_only_once(tmp_path) -> None:
-    store = SQLiteAutomationStore(tmp_path / "oneagent.db")
+    store = SQLiteAutomationStore(tmp_path / "vesta.db")
     await store.initialize()
     service = FakeConversationService()
     schedule = Schedule(
@@ -345,7 +345,7 @@ async def test_missed_once_automation_runs_only_once(tmp_path) -> None:
 
 
 async def test_recurring_misfire_does_not_batch_catchup(tmp_path) -> None:
-    store = SQLiteAutomationStore(tmp_path / "oneagent.db")
+    store = SQLiteAutomationStore(tmp_path / "vesta.db")
     await store.initialize()
     service = FakeConversationService()
     schedule = Schedule(
@@ -724,7 +724,7 @@ async def test_scheduler_auto_triggers_without_manual_trigger(tmp_path) -> None:
     from app.run import SQLiteRunStore
     from app.trace import SQLiteTraceStore
 
-    database = tmp_path / "oneagent.db"
+    database = tmp_path / "vesta.db"
     conversation_store = SQLiteConversationStore(database)
     await conversation_store.initialize()
     conversation = await conversation_store.create()
@@ -776,7 +776,7 @@ async def test_scheduler_auto_triggers_without_manual_trigger(tmp_path) -> None:
 
 
 async def test_last_run_id_persisted_before_crash(tmp_path) -> None:
-    store = SQLiteAutomationStore(tmp_path / "oneagent.db")
+    store = SQLiteAutomationStore(tmp_path / "vesta.db")
     await store.initialize()
     schedule = Schedule(
         kind=ScheduleKind.ONCE,
@@ -823,7 +823,7 @@ async def test_last_run_id_persisted_before_crash(tmp_path) -> None:
 
 
 async def test_restart_does_not_rerun_started_once_automation(tmp_path) -> None:
-    store = SQLiteAutomationStore(tmp_path / "oneagent.db")
+    store = SQLiteAutomationStore(tmp_path / "vesta.db")
     await store.initialize()
     schedule = Schedule(
         kind=ScheduleKind.ONCE,

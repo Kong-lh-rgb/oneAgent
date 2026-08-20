@@ -8,7 +8,7 @@ from app.models.types import Message, MessageRole
 
 from .models import RunCheckpoint
 
-CHECKPOINT_CONTEXT_MESSAGE_NAME = "oneagent_interrupted_run"
+CHECKPOINT_CONTEXT_MESSAGE_NAME = "vesta_interrupted_run"
 _MAX_ARGUMENT_CHARS = 4_000
 
 

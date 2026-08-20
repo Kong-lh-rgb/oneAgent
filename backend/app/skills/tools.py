@@ -29,7 +29,7 @@ _MAX_RESOURCE_BYTES = 64_000
 class SkillReadTool(BaseTool):
     """请求激活一个 Skill（轻量：不返回完整正文）。
 
-    完整指令只会在 Runtime 成功激活后，通过 ``oneagent_active_skill`` 系统
+    完整指令只会在 Runtime 成功激活后，通过 ``vesta_active_skill`` 系统
     消息在每个 Agent Step 注入；此处只返回 metadata 与资源清单。
     """
 

@@ -1,8 +1,8 @@
 {
-  "name": "oneagent-desktop",
+  "name": "vesta-desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "oneAgent Desktop — Electron + React + TypeScript + Vite",
+  "description": "Vesta Desktop — Electron + React + TypeScript + Vite",
   "main": "dist-electron/electron/main.js",
   "scripts": {
     "dev": "vite",

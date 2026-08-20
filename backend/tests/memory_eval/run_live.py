@@ -60,7 +60,7 @@ async def main(args: argparse.Namespace) -> int:
     root = (
         args.root / f"memory-eval-{invocation}"
         if args.root
-        else Path(tempfile.mkdtemp(prefix="oneagent-memory-eval-"))
+        else Path(tempfile.mkdtemp(prefix="vesta-memory-eval-"))
     )
     report = MemoryEvalReport(provider=provider, model=model, root=str(root))
     modes = (("on", True), ("off", False)) if args.compare_off else (("on", True),)

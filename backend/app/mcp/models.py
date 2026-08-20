@@ -14,7 +14,7 @@ _SERVER_NAME_RE = re.compile(r"^[a-zA-Z0-9_]+$")
 
 
 class MCPTransport(StrEnum):
-    """OneAgent 当前支持的 MCP 传输类型。"""
+    """Vesta 当前支持的 MCP 传输类型。"""
 
     STDIO = "stdio"
 

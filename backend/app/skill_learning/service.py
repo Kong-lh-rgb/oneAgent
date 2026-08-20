@@ -36,7 +36,7 @@ from .models import (
 from .store import InflightBatch, SkillCandidateStore
 from .trace_selector import TaskTraceSelector
 
-logger = logging.getLogger("oneagent.skill_learning.service")
+logger = logging.getLogger("vesta.skill_learning.service")
 
 _MAX_COMPLETED_TASKS = 1_000_000
 

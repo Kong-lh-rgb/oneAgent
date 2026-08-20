@@ -111,8 +111,8 @@ class StubRuntime:
 async def _make_run_manager(tmp_path: Path, runtime: object) -> RunManager:
     """用给定 stub runtime 构造 RunManager（Run 表与其它 Store 共用同一 DB）。"""
 
-    run_store = SQLiteRunStore(tmp_path / "oneagent.db")
-    checkpoint_store = SQLiteCheckpointStore(tmp_path / "oneagent.db")
+    run_store = SQLiteRunStore(tmp_path / "vesta.db")
+    checkpoint_store = SQLiteCheckpointStore(tmp_path / "vesta.db")
     await run_store.initialize()
     await checkpoint_store.initialize()
     return RunManager(run_store, checkpoint_store, runtime)  # type: ignore[arg-type]
@@ -139,7 +139,7 @@ async def _make_conversation_service(
 
 @pytest.mark.asyncio
 async def test_cli_restores_latest_conversation_after_restart(tmp_path) -> None:
-    database_path = tmp_path / "oneagent.db"
+    database_path = tmp_path / "vesta.db"
     store = SQLiteConversationStore(database_path)
     await store.initialize()
     created, history, resumed = await _load_or_create_conversation(
@@ -172,7 +172,7 @@ async def test_cli_restores_latest_conversation_after_restart(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_cli_can_force_new_or_restore_by_short_id(tmp_path) -> None:
-    store = SQLiteConversationStore(tmp_path / "oneagent.db")
+    store = SQLiteConversationStore(tmp_path / "vesta.db")
     await store.initialize()
     first = await store.create(title="已有会话")
 
@@ -201,9 +201,9 @@ async def test_send_message_persists_runtime_history_and_generates_title(
     tmp_path,
     capsys,
 ) -> None:
-    store = SQLiteConversationStore(tmp_path / "oneagent.db")
+    store = SQLiteConversationStore(tmp_path / "vesta.db")
     await store.initialize()
-    trace_store = SQLiteTraceStore(tmp_path / "oneagent.db")
+    trace_store = SQLiteTraceStore(tmp_path / "vesta.db")
     await trace_store.initialize()
     conversation = await store.create(
         messages=(Message(role=MessageRole.SYSTEM, content="系统提示"),)
@@ -236,7 +236,7 @@ async def test_send_message_persists_runtime_history_and_generates_title(
     output = capsys.readouterr().out
     assert "Agent 开始执行" in output
     assert "Agent 执行完成" in output
-    assert "OneAgent> 已完成" in output
+    assert "Vesta> 已完成" in output
     runs = await trace_store.list_runs()
     assert len(runs) == 1
     # run_id 由 RunManager 生成（不再固定为 stub-run），但 conversation 关联与
@@ -248,7 +248,7 @@ async def test_send_message_persists_runtime_history_and_generates_title(
 
 @pytest.mark.asyncio
 async def test_send_message_restores_and_persists_summary_state(tmp_path) -> None:
-    database_path = tmp_path / "oneagent.db"
+    database_path = tmp_path / "vesta.db"
     conversation_store = SQLiteConversationStore(database_path)
     await conversation_store.initialize()
     summary_store = SQLiteConversationSummaryStore(database_path)
@@ -289,9 +289,9 @@ async def test_cli_persists_and_restores_complete_tool_protocol_history(
     tmp_path,
     capsys,
 ) -> None:
-    store = SQLiteConversationStore(tmp_path / "oneagent.db")
+    store = SQLiteConversationStore(tmp_path / "vesta.db")
     await store.initialize()
-    trace_store = SQLiteTraceStore(tmp_path / "oneagent.db")
+    trace_store = SQLiteTraceStore(tmp_path / "vesta.db")
     await trace_store.initialize()
     conversation = await store.create()
     history: list[Message] = []
@@ -375,7 +375,7 @@ async def test_cli_lists_and_removes_conversation_permission_rules(
     tmp_path,
     capsys,
 ) -> None:
-    store = SQLitePermissionRuleStore(tmp_path / "oneagent.db")
+    store = SQLitePermissionRuleStore(tmp_path / "vesta.db")
     await store.initialize()
     rule = build_safe_rule(
         tool_name="run_shell_command",
@@ -404,7 +404,7 @@ async def test_cli_lists_and_removes_conversation_permission_rules(
 def test_cli_uses_provider_default_output_tokens_when_unspecified(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(sys, "argv", ["oneagent-chat"])
+    monkeypatch.setattr(sys, "argv", ["vesta-chat"])
 
     args = _parse_args()
 
@@ -415,7 +415,7 @@ def test_cli_accepts_explicit_output_tokens(monkeypatch) -> None:
     monkeypatch.setattr(
         sys,
         "argv",
-        ["oneagent-chat", "--max-output-tokens", "8192"],
+        ["vesta-chat", "--max-output-tokens", "8192"],
     )
 
     args = _parse_args()
@@ -427,9 +427,9 @@ def test_cli_prints_memory_list_and_details(capsys) -> None:
     now = datetime.now(UTC)
     memory = MemoryRecord(
         id="M001",
-        title="OneAgent 使用 SQLite 历史",
+        title="Vesta 使用 SQLite 历史",
         summary="旧的 SQLite 记忆架构说明",
-        content="OneAgent 不再使用 SQLite + Embedding 作为长期记忆。",
+        content="Vesta 不再使用 SQLite + Embedding 作为长期记忆。",
         created_at=now,
         updated_at=now,
         last_accessed_at=now,
@@ -442,7 +442,7 @@ def test_cli_prints_memory_list_and_details(capsys) -> None:
     output = capsys.readouterr().out
     assert "M001" in output
     assert "[active]" in output
-    assert "OneAgent 使用 SQLite 历史" in output
+    assert "Vesta 使用 SQLite 历史" in output
     assert "访问次数: 3" in output
 
 

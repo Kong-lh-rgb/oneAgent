@@ -5,7 +5,7 @@ initial_memories:
   - alias: architecture
     title: Agent Runtime 架构
     summary: Runtime 使用工具循环和 Post-Run Reflection
-    content: "OneAgent Runtime 在最终回答后运行普通记忆反思。"
+    content: "Vesta Runtime 在最终回答后运行普通记忆反思。"
 phases:
   - id: unrelated
     conversation: A

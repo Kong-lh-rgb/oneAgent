@@ -9,7 +9,7 @@ from app.models.types import Message, MessageRole, ToolCall
 
 @pytest.mark.asyncio
 async def test_reasoning_persists_across_store_restart(tmp_path) -> None:
-    database_path = tmp_path / "oneagent.db"
+    database_path = tmp_path / "vesta.db"
     store = SQLiteConversationStore(database_path)
     await store.initialize()
     messages = (
@@ -76,7 +76,7 @@ async def test_initialize_migrates_legacy_messages_table(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_conversation_messages_survive_store_restart(tmp_path) -> None:
-    database_path = tmp_path / "oneagent.db"
+    database_path = tmp_path / "vesta.db"
     store = SQLiteConversationStore(database_path)
     await store.initialize()
     messages = (
@@ -114,7 +114,7 @@ async def test_conversation_messages_survive_store_restart(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_latest_list_rename_and_prefix_resolution(tmp_path) -> None:
-    store = SQLiteConversationStore(tmp_path / "oneagent.db")
+    store = SQLiteConversationStore(tmp_path / "vesta.db")
     await store.initialize()
     first = await store.create(title="第一个会话")
     second = await store.create(title="第二个会话")
@@ -129,7 +129,7 @@ async def test_latest_list_rename_and_prefix_resolution(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_replace_messages_and_delete_conversation(tmp_path) -> None:
-    store = SQLiteConversationStore(tmp_path / "oneagent.db")
+    store = SQLiteConversationStore(tmp_path / "vesta.db")
     await store.initialize()
     conversation = await store.create(
         messages=(Message(role=MessageRole.USER, content="旧消息"),)
@@ -152,7 +152,7 @@ async def test_replace_messages_and_delete_conversation(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_missing_conversation_cannot_be_updated(tmp_path) -> None:
-    store = SQLiteConversationStore(tmp_path / "oneagent.db")
+    store = SQLiteConversationStore(tmp_path / "vesta.db")
     await store.initialize()
 
     with pytest.raises(KeyError, match="会话不存在"):

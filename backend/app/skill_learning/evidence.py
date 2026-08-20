@@ -19,7 +19,7 @@ from app.task import Task
 
 from .config import SkillLearningSettings
 
-logger = logging.getLogger("oneagent.skill_learning.evidence")
+logger = logging.getLogger("vesta.skill_learning.evidence")
 
 _TASK_TOOL_NAMES = frozenset({"task_create", "task_update"})
 _OBSERVABLE_TOOL_START = AgentEventType.TOOL_STARTED

@@ -21,7 +21,7 @@ describe('Sidebar (App Shell)', () => {
     ]) {
       expect(html).toContain(label)
     }
-    expect(html).toContain('oneAgent')
+    expect(html).toContain('Vesta')
   })
 
   it('当前页有 active 状态', () => {

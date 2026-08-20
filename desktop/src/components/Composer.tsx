@@ -66,7 +66,7 @@ export default function Composer({
               void submit()
             }
           }}
-          placeholder="Ask oneAgent to do something…"
+          placeholder="Ask Vesta to do something…"
           rows={1}
           disabled={busy}
           aria-label="消息输入框"

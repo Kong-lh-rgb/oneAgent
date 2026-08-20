@@ -202,7 +202,7 @@ async def main(args: argparse.Namespace) -> int:
     runs: list[dict] = []
     verdicts: list[ScenarioVerdict] = []
     outcomes: list = []
-    root = Path(tempfile.mkdtemp(prefix="oneagent-skill-learning-live-"))
+    root = Path(tempfile.mkdtemp(prefix="vesta-skill-learning-live-"))
     for scenario in scenarios:
         accept_all = scenario.id in _ACCEPT_ALL_SCENARIOS
         reject_all = scenario.id in _REJECT_ALL_SCENARIOS

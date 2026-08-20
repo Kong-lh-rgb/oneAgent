@@ -1,10 +1,10 @@
-# oneAgent
+# Vesta
 
 > Build agents that remember, continue, and learn.
 
 一个面向长期运行 Agent 的 Harness。
 
-oneAgent 想做的事情很简单：
+Vesta 想做的事情很简单：
 
 让 Agent 不只是完成当前这一轮任务，
 而是能够记住重要的信息、持续推进长期任务，
@@ -27,7 +27,7 @@ oneAgent 想做的事情很简单：
 
 ## 🌱 Agents should learn from doing
 
-oneAgent 里我比较喜欢的一部分是 Task-centric Skill Learning。
+Vesta 里我比较喜欢的一部分是 Task-centric Skill Learning。
 
 它不会在每次聊天结束后都问模型：
 
@@ -53,8 +53,8 @@ oneAgent 里我比较喜欢的一部分是 Task-centric Skill Learning。
 ## 🚀 Quick Start
 
 ```bash
-git clone https://github.com/Kong-lh-rgb/oneAgent.git
-cd oneAgent/backend
+git clone https://github.com/Kong-lh-rgb/vesta.git
+cd Vesta/backend
 
 python -m venv .venv
 pip install -r requirements.txt
@@ -67,10 +67,10 @@ cp .env.example .env
 
 目前支持 OpenAI、Qwen、DeepSeek 和 Anthropic。
 
-### 🖥️ Desktop + oneAgent Host
+### 🖥️ Desktop + Vesta Host
 
 ```bash
-# 终端 1：启动 oneAgent Host
+# 终端 1：启动 Vesta Host
 cd backend
 .venv/bin/python -m app.server            # http://127.0.0.1:8000
 
@@ -80,7 +80,7 @@ npm install
 npm run electron:dev                        # 或 npm run dev（纯 Renderer）
 ```
 
-- Desktop 的正常业务统一通过 `WS /rpc`（JSON-RPC）访问本机 oneAgent Host；
+- Desktop 的正常业务统一通过 `WS /rpc`（JSON-RPC）访问本机 Vesta Host；
   Electron Main 只负责桌面生命周期、受限外链和原生通知。
 - `GET /health`、Computer screenshot 与 Artifact content 端点只是本地 transport，
   不承担业务 CRUD。
@@ -90,7 +90,7 @@ Desktop
   ↓
 WS /rpc (JSON-RPC)
   ↓
-oneAgent Host
+Vesta Host
   ↓
 ConversationService / RunManager / AgentRuntime
 ```
@@ -105,9 +105,9 @@ Trace          → 这次具体怎么执行的
 Checkpoint     → 中断后从哪里继续
 Run            → 这次执行的 Run 生命周期
 Automation     → 未来何时以什么 prompt 再启动一次
-oneAgent Host  → 通过 WS /rpc 组合并暴露应用能力
+Vesta Host  → 通过 WS /rpc 组合并暴露应用能力
 Desktop        → Electron + React 桌面入口
 ```
 
-oneAgent 试着把这些东西真正拆开，
+Vesta 试着把这些东西真正拆开，
 再由 Agent Runtime 在每次模型调用前组合成当前需要的 Context。
