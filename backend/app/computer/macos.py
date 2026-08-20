@@ -1,12 +1,12 @@
-"""MacOSComputerRuntime：真实 macOS ComputerRuntime（V4）。
+"""MacOSComputerRuntime：真实 macOS ComputerRuntime（V5）。
 
-V4 实现 ``open_app``（NSWorkspace 打开应用）、``observe``（读取当前前台
-App / 窗口及其可交互 AX UI 元素）与 ``click``（ElementTarget → Swift
-AXPress 语义点击），其余契约方法（type/key/scroll/focus_window）仍抛
-``NotImplementedError``，不返回假的成功。
+V5 实现 ``open_app``（NSWorkspace 打开应用）、``observe``（读取当前前台
+App / 窗口及其可交互 AX UI 元素）、``click``（ElementTarget → AXPress）与
+``type``（CGEvent Unicode 文本输入到当前焦点），其余契约方法
+（key/scroll/focus_window）仍抛 ``NotImplementedError``，不返回假的成功。
 
-真实电脑控制（完整 AX Tree / ScreenCaptureKit / CGEvent 等）留到后续轮次；
-FakeComputerRuntime 继续用于 Agent Tool 测试。
+真实电脑控制（完整 AX Tree / ScreenCaptureKit / CGEvent 其余能力）留到后续
+轮次；FakeComputerRuntime 继续用于 Agent Tool 测试。
 """
 
 from __future__ import annotations
@@ -29,8 +29,8 @@ from .models import (
 __all__ = ["MacOSComputerRuntime"]
 
 _NOT_IMPLEMENTED = (
-    "macOS Computer Runtime 本轮只实现 open_app / observe / click"
-    "（ElementTarget → AXPress），该操作尚未实现真实电脑控制"
+    "macOS Computer Runtime 本轮只实现 open_app / observe / click / type"
+    "（AXPress / CGEvent 文本输入），该操作尚未实现真实电脑控制"
 )
 
 
@@ -212,7 +212,27 @@ class MacOSComputerRuntime:
         raise ValueError("unsupported click target")
 
     async def type(self, text: str) -> ActionResult:
-        raise NotImplementedError(_NOT_IMPLEMENTED)
+        """向当前 macOS keyboard focus 输入文本（V5，CGEvent Unicode）。
+
+        通过 ``type_text`` 让 Swift 用 CGEvent keyboardSetUnicodeString 把
+        Unicode 文本输入到当前焦点位置（非 clipboard / Cmd+V / osascript）。
+        只面向"当前焦点"：不接受 element_ref / observation_id，也不会自动
+        找文本框。
+
+        不在 metadata 中保存完整 text（避免复制长/敏感内容）。
+        """
+
+        if not isinstance(text, str):
+            raise ValueError("'text' must be a string")
+
+        result = await self.helper_client.call("type_text", {"text": text})
+        return ActionResult(
+            success=True,
+            action=ActionName.TYPE,
+            metadata={
+                "characters": result.get("characters", 0),
+            },
+        )
 
     async def key(
         self,

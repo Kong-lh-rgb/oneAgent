@@ -18,6 +18,7 @@
 
 import AppKit
 import ApplicationServices
+import CoreGraphics
 import Foundation
 
 /// helper 版本号（system_info 返回）。
@@ -823,6 +824,149 @@ func handleTestClickElement(params: Any?, id: Any?) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// V5：Text Input（CGEvent Unicode）
+// ---------------------------------------------------------------------------
+
+/// 计算文本的字符数（grapheme count，用于 characters 响应）。
+func characterCount(_ text: String) -> Int {
+    return text.count
+}
+
+/// 按 UTF-16 code units 切块；每块最多 chunkSize 个 code units。
+func chunkUTF16(_ text: String, chunkSize: Int) -> [[UniChar]] {
+    guard !text.isEmpty else { return [] }
+    let units = Array(text.utf16)
+    var result: [[UniChar]] = []
+    var index = 0
+    while index < units.count {
+        let end = min(index + chunkSize, units.count)
+        result.append(Array(units[index..<end]))
+        index = end
+    }
+    return result
+}
+
+/// 通过 CGEvent 发送一块 Unicode 文本（keyboardSetUnicodeString）。
+/// 失败返回 false；不抛异常、不崩溃。
+func postUnicodeChunk(_ chunk: [UniChar]) -> Bool {
+    guard let source = CGEventSource(stateID: .combinedSessionState) else {
+        return false
+    }
+    guard
+        let down = CGEvent(
+            keyboardEventSource: source,
+            virtualKey: 0,
+            keyDown: true
+        )
+    else {
+        return false
+    }
+    chunk.withUnsafeBufferPointer { buffer in
+        down.keyboardSetUnicodeString(
+            stringLength: buffer.count,
+            unicodeString: buffer.baseAddress
+        )
+    }
+    down.post(tap: .cghidEventTap)
+
+    // 补一个 keyUp（不携带 unicode），让目标输入框正常收尾。
+    if let up = CGEvent(
+        keyboardEventSource: source,
+        virtualKey: 0,
+        keyDown: false
+    ) {
+        up.post(tap: .cghidEventTap)
+    }
+    return true
+}
+
+/// 处理 type_text 请求（V5）。
+///
+/// params: {"text": "..."}。向当前 macOS keyboard focus 输入文本
+/// （CGEvent Unicode，非 clipboard / pbcopy / Cmd+V / osascript）。
+///
+/// - 缺/非字符串 text → invalid_params；
+/// - 空字符串 → {"characters": 0}（不制造系统事件）；
+/// - 未授权 Accessibility → accessibility_permission_required；
+/// - CGEvent 创建失败 → input_event_failed。
+func handleTypeText(params: Any?, id: Any?) {
+    guard
+        let params = params as? [String: Any],
+        let text = params["text"] as? String
+    else {
+        writeResponse(
+            makeError(
+                id: id,
+                code: "invalid_params",
+                message: "missing or non-string 'text'"
+            )
+        )
+        return
+    }
+
+    // 空字符串：直接成功，不发送任何事件。
+    if text.isEmpty {
+        writeResponse([
+            "id": id ?? NSNull(),
+            "result": ["characters": 0],
+        ])
+        return
+    }
+
+    guard AXIsProcessTrusted() else {
+        writeResponse(
+            makeError(
+                id: id,
+                code: "accessibility_permission_required",
+                message: "macOS Accessibility permission is required"
+            )
+        )
+        return
+    }
+
+    let chunks = chunkUTF16(text, chunkSize: 100)
+    for chunk in chunks {
+        guard postUnicodeChunk(chunk) else {
+            writeResponse(
+                makeError(
+                    id: id,
+                    code: "input_event_failed",
+                    message: "failed to create/post CGEvent"
+                )
+            )
+            return
+        }
+    }
+
+    writeResponse([
+        "id": id ?? NSNull(),
+        "result": ["characters": characterCount(text)],
+    ])
+}
+
+/// 测试辅助：返回可独立验证的纯逻辑（chunking / character count，不发送事件）。
+func handleTestTypeLogic(params: Any?, id: Any?) {
+    writeResponse([
+        "id": id ?? NSNull(),
+        "result": [
+            "characters": [
+                "empty": characterCount(""),
+                "hello": characterCount("Hello oneAgent"),
+                "cn": characterCount("你好 oneAgent"),
+            ],
+            "chunks": [
+                "empty": chunkUTF16("", chunkSize: 100).count,
+                "short": chunkUTF16("Hello oneAgent", chunkSize: 100).count,
+                "long_250": chunkUTF16(
+                    String(repeating: "a", count: 250), chunkSize: 100
+                ).count,
+                "chunk_size": 100,
+            ],
+        ],
+    ])
+}
+
 /// 处理一条已解析的请求，返回响应（或 nil 表示不响应）。
 func handleRequest(_ payload: [String: Any]) {
     let id = payload["id"]
@@ -874,6 +1018,12 @@ func handleRequest(_ payload: [String: Any]) {
 
     case "__test_click_element":
         handleTestClickElement(params: payload["params"], id: id)
+
+    case "type_text":
+        handleTypeText(params: payload["params"], id: id)
+
+    case "__test_type_logic":
+        handleTestTypeLogic(params: payload["params"], id: id)
 
     default:
         writeResponse(

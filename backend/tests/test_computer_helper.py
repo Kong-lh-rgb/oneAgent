@@ -313,7 +313,6 @@ async def test_macos_runtime_methods_not_implemented() -> None:
     await runtime.start()
     try:
         for call in (
-            runtime.type("hi"),
             runtime.key("enter"),
             runtime.scroll(),
             runtime.focus_window("w1"),

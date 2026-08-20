@@ -418,11 +418,66 @@ do {
         "click 错误后仍能 ping",
         (afterClickPing["result"] as? [String: Any])?["ok"] as? Bool == true
     )
+
+    // 19. type_text：缺 text → invalid_params；空串 → characters 0（不发送事件）
+    let typeNoText = try request(["id": 60, "method": "type_text", "params": [:]])
+    check(
+        "type_text 缺 text → invalid_params",
+        (typeNoText["error"] as? [String: Any])?["code"] as? String
+            == "invalid_params"
+    )
+    let typeEmpty = try request([
+        "id": 61, "method": "type_text", "params": ["text": ""]
+    ])
+    check(
+        "type_text 空串 → characters == 0",
+        (typeEmpty["result"] as? [String: Any])?["characters"] as? Int == 0
+    )
+
+    // 19b. type_text 非空：未授权 → accessibility_permission_required；
+    //      已授权 → 返回 characters。
+    let typeRes = try request([
+        "id": 62, "method": "type_text", "params": ["text": "Hi"]
+    ])
+    if trusted == true {
+        check(
+            "type_text(已授权) characters == 2",
+            (typeRes["result"] as? [String: Any])?["characters"] as? Int == 2
+        )
+    } else {
+        check(
+            "type_text 未授权 → accessibility_permission_required",
+            (typeRes["error"] as? [String: Any])?["code"] as? String
+                == "accessibility_permission_required"
+        )
+    }
+
+    // 20. __test_type_logic：chunking / character count（不发送真实键盘事件）
+    let typeLogic = try request([
+        "id": 63, "method": "__test_type_logic", "params": [:]
+    ])
+    let tLogic = typeLogic["result"] as? [String: Any]
+    let tChars = tLogic?["characters"] as? [String: Any]
+    check("chars empty == 0", tChars?["empty"] as? Int == 0)
+    check("chars Hello oneAgent == 14", tChars?["hello"] as? Int == 14)
+    check("chars 你好 oneAgent == 11", tChars?["cn"] as? Int == 11)
+    let tChunks = tLogic?["chunks"] as? [String: Any]
+    check("chunks empty == 0", tChunks?["empty"] as? Int == 0)
+    check("chunks short == 1", tChunks?["short"] as? Int == 1)
+    check("chunks long_250 == 3", tChunks?["long_250"] as? Int == 3)
+    check("chunk_size == 100", tChunks?["chunk_size"] as? Int == 100)
+
+    // 21. type_text 出错后 helper 仍能 ping
+    let afterTypePing = try request(["id": 64, "method": "ping", "params": [:]])
+    check(
+        "type_text 后仍能 ping",
+        (afterTypePing["result"] as? [String: Any])?["ok"] as? Bool == true
+    )
 } catch {
     check("协议用例执行无异常", false, "\(error)")
 }
 
-// 19. stdin EOF → 正常退出
+// 22. stdin EOF → 正常退出
 try? stdinPipe.fileHandleForWriting.close()
 process.waitUntilExit()
 check("stdin EOF 后 exit code == 0", process.terminationStatus == 0)

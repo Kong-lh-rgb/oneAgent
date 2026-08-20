@@ -1,7 +1,8 @@
-"""MacOSComputerRuntime（V1 open_app + V2/V3 observe + V4 click）测试。
+"""MacOSComputerRuntime（V1 open_app + V2/V3 observe + V4 click + V5 type）测试。
 
 使用 stub HelperClient，不启动真实 GUI App、不调用 NSWorkspace /
-AXUIElement / AXPress、不需要 Accessibility / Screen Recording 权限。
+AXUIElement / AXPress / CGEvent、不需要 Accessibility / Screen Recording
+权限。
 
 覆盖：
 V1 open_app：
@@ -24,7 +25,14 @@ V4 click：
 13. stale_observation / element_not_found error 正确向上传播
 14. CoordinateTarget 明确拒绝
 
-其它 type/key/scroll/focus_window 仍然 NotImplementedError
+V5 type：
+15. type("hello") 调用 type_text，params.text 正确
+16. helper result → ActionResult（action==TYPE、metadata 只有 characters）
+17. 空字符串 / 非字符串行为正确
+18. permission error 正确向上传播
+19. open_app / observe / click 不受影响
+
+其它 key/scroll/focus_window 仍然 NotImplementedError
 """
 
 from __future__ import annotations
@@ -493,6 +501,104 @@ async def test_click_does_not_break_observe_and_open_app() -> None:
 
 
 # ---------------------------------------------------------------------------
+# V5 type（CGEvent Unicode 文本输入）
+# ---------------------------------------------------------------------------
+
+
+def _type_result(characters: int = 14) -> dict:
+    return {"characters": characters}
+
+
+async def test_type_calls_type_text() -> None:
+    stub = StubHelperClient(result=_type_result())
+    runtime = _runtime(stub)
+
+    result = await runtime.type("Hello oneAgent")
+
+    assert stub.calls == [("type_text", {"text": "Hello oneAgent"})]
+    assert result.success is True
+
+
+async def test_type_converts_to_action_result() -> None:
+    stub = StubHelperClient(result=_type_result(14))
+    runtime = _runtime(stub)
+
+    result = await runtime.type("Hello oneAgent")
+
+    assert isinstance(result, ActionResult)
+    assert result.action is ActionName.TYPE
+    assert result.metadata == {"characters": 14}
+    # 不保存完整 text（避免复制长/敏感内容）。
+    assert "text" not in result.metadata
+
+
+async def test_type_empty_string() -> None:
+    stub = StubHelperClient(result=_type_result(0))
+    runtime = _runtime(stub)
+
+    result = await runtime.type("")
+
+    assert stub.calls == [("type_text", {"text": ""})]
+    assert result.metadata == {"characters": 0}
+
+
+async def test_type_non_string_rejected() -> None:
+    stub = StubHelperClient(result=_type_result())
+    runtime = _runtime(stub)
+
+    with pytest.raises(ValueError, match="must be a string"):
+        await runtime.type(123)  # type: ignore[arg-type]
+    # 校验失败不应发送请求。
+    assert stub.calls == []
+
+
+async def test_type_permission_error_propagates() -> None:
+    stub = StubHelperClient(
+        error=ComputerHelperError(
+            "accessibility_permission_required: "
+            "macOS Accessibility permission is required"
+        )
+    )
+    runtime = _runtime(stub)
+
+    with pytest.raises(
+        ComputerHelperError, match="accessibility_permission_required"
+    ):
+        await runtime.type("hi")
+
+
+async def test_type_does_not_break_others() -> None:
+    stub = StubHelperClient(
+        per_method={
+            "observe": _observe_result(),
+            "click_element": _click_result(),
+            "type_text": _type_result(5),
+            "open_app": {
+                "app": "TextEdit",
+                "bundle_id": "com.apple.TextEdit",
+                "process_id": 5,
+            },
+        }
+    )
+    runtime = _runtime(stub)
+
+    await runtime.observe()
+    await runtime.click(
+        ElementTarget(observation_id="obs-1", element_ref="e1")
+    )
+    type_result = await runtime.type("hello")
+    await runtime.open_app("TextEdit")
+
+    assert type_result.metadata == {"characters": 5}
+    assert [m for m, _ in stub.calls] == [
+        "observe",
+        "click_element",
+        "type_text",
+        "open_app",
+    ]
+
+
+# ---------------------------------------------------------------------------
 # 其它方法仍然 NotImplementedError
 # ---------------------------------------------------------------------------
 
@@ -501,7 +607,6 @@ async def test_other_runtime_methods_still_not_implemented() -> None:
     runtime = _runtime(StubHelperClient(result={}))
 
     for coro in (
-        runtime.type("hi"),
         runtime.key("enter"),
         runtime.scroll(),
         runtime.focus_window("w1"),
