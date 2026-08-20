@@ -26,3 +26,7 @@ backend/tests/eval/reports/*.md
 desktop/node_modules/
 desktop/dist/
 desktop/dist-electron/
+
+# Swift / Swift Package Manager
+native/macos-computer-helper/.build/
+.swiftpm/
