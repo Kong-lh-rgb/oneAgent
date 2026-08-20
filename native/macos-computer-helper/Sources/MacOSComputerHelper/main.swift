@@ -1,9 +1,9 @@
-// macOS Computer Helper V6 —— 长驻 subprocess。
+// macOS Computer Helper V7 —— 长驻 subprocess。
 //
 // 职责：从 stdin 按行读 JSON，向 stdout 按行写 JSON（JSON Lines 协议）。
 // 本轮实现 ping / system_info / open_app / accessibility_status /
 // basic_observe / observe（AX Element Observation）、click_element（AXPress）、
-// type_text（CGEvent Unicode）与 key_press（CGEvent keyDown/keyUp）。
+// type_text、key_press、scroll、focus_window、ScreenCaptureKit 截图与坐标点击。
 //
 // 关键边界：
 // - stdout 只允许输出协议 JSON；日志一律写 stderr；
@@ -106,6 +106,7 @@ func handleOpenApp(params: Any?, id: Any?) {
             options: [],
             configuration: [:]
         )
+        clearObservationCache()
         // bundle id 缺省时用 NSNull，避免在 [String: Any] 里塞 nil。
         var bundleID: Any = NSNull()
         if let resolved =
@@ -253,6 +254,9 @@ func handleBasicObserve(params: Any?, id: Any?) {
 /// 不要把 AX pointer/address 暴露给 Python。
 var currentObservationID: String? = nil
 var currentElements: [String: AXUIElement] = [:]
+var currentWindows: [String: AXUIElement] = [:]
+var currentScreenshotMapping: ScreenshotMapping? = nil
+var currentObservedPID: pid_t? = nil
 
 /// AX 遍历上限。
 private let kMaxElements = 300
@@ -562,16 +566,46 @@ func handleObserve(params: Any?, id: Any?) {
 
     var activeApp: Any = NSNull()
     var activeWindow: Any = NSNull()
+    var activeWindowRef: Any = NSNull()
+    var windows: [[String: Any]] = []
     var elements: [[String: Any]] = []
     var truncated = false
     var newMapping: [String: AXUIElement] = [:]
+    var newWindows: [String: AXUIElement] = [:]
+    var screenshotRef: Any = NSNull()
+    var screenshotError: Any = NSNull()
+    var newScreenshotMapping: ScreenshotMapping? = nil
+    var observedPID: pid_t? = nil
 
     if let frontmost = NSWorkspace.shared.frontmostApplication {
+        observedPID = frontmost.processIdentifier
         activeApp = frontmostAppDict(frontmost)
-        if let window = focusedWindow(pid: frontmost.processIdentifier) {
-            activeWindow = window.info
+        let appElement = AXUIElementCreateApplication(frontmost.processIdentifier)
+        var windowsRef: CFTypeRef?
+        let axWindows = (AXUIElementCopyAttributeValue(
+            appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success
+            ? windowsRef as? [AXUIElement] : nil) ?? []
+        let focused = focusedWindow(pid: frontmost.processIdentifier)
+        var sourceWindows = axWindows
+        if let focused, !sourceWindows.contains(where: { CFEqual($0, focused.element) }) {
+            sourceWindows.insert(focused.element, at: 0)
+        }
+        let sourceFocusedIndex = focused.flatMap { focus in
+            sourceWindows.firstIndex(where: { CFEqual($0, focus.element) })
+        }
+        let ordered = focusedFirstIndices(
+            count: sourceWindows.count, focusedIndex: sourceFocusedIndex
+        ).map { sourceWindows[$0] }
+        for (index, element) in ordered.enumerated() {
+            let ref = "w\(index + 1)"
+            var info = windowInfoDict(element); info["ref"] = ref
+            windows.append(info); newWindows[ref] = element
+        }
+        if let windowElement = ordered.first {
+            var info = windowInfoDict(windowElement); info["ref"] = "w1"
+            activeWindow = info; activeWindowRef = "w1"
             let collected = collectElements(
-                root: window.element,
+                root: windowElement,
                 maxElements: kMaxElements,
                 maxDepth: kMaxDepth
             )
@@ -582,20 +616,49 @@ func handleObserve(params: Any?, id: Any?) {
                     ($0.ref, $0.axElement)
                 }
             )
+            let includeScreenshot = params["include_screenshot"] as? Bool ?? false
+            if includeScreenshot, let path = params["screenshot_path"] as? String {
+                let position = readAXPoint(windowElement, kAXPositionAttribute as CFString) ?? .zero
+                let size = readAXSize(windowElement, kAXSizeAttribute as CFString) ?? .zero
+                if #available(macOS 14.0, *) {
+                    switch captureWindow(pid: frontmost.processIdentifier,
+                                         bounds: CGRect(origin: position, size: size),
+                                         title: readAXString(windowElement, kAXTitleAttribute as CFString) ?? "",
+                                         outputPath: path) {
+                    case .success(let shot):
+                        screenshotRef = shot.path; newScreenshotMapping = shot.mapping
+                    case .failure(.permissionRequired):
+                        screenshotError = ["code": "screen_recording_permission_required"]
+                    case .failure(.unavailable(let message)):
+                        screenshotError = ["code": "screen_capture_unavailable", "message": message]
+                    case .failure(.captureFailed(let message)):
+                        screenshotError = ["code": "screenshot_capture_failed", "message": message]
+                    }
+                } else {
+                    screenshotError = ["code": "screen_capture_unavailable"]
+                }
+            }
         }
     }
 
     // 新 observe 替换旧缓存。
     currentObservationID = observationID
     currentElements = newMapping
+    currentWindows = newWindows
+    currentScreenshotMapping = newScreenshotMapping
+    currentObservedPID = observedPID
 
     writeResponse([
         "id": id ?? NSNull(),
         "result": [
             "active_app": activeApp,
             "active_window": activeWindow,
+            "active_window_ref": activeWindowRef,
+            "windows": windows,
             "elements": elements,
             "truncated": truncated,
+            "screenshot_ref": screenshotRef,
+            "screenshot_error": screenshotError,
         ],
     ])
 }
@@ -674,6 +737,9 @@ func handleTestElementMapping(params: Any?, id: Any?) {
 func clearObservationCache() {
     currentObservationID = nil
     currentElements = [:]
+    currentWindows = [:]
+    currentScreenshotMapping = nil
+    currentObservedPID = nil
 }
 
 /// 成功点击后的响应 payload（同时使旧 Observation 失效）。
@@ -1225,6 +1291,123 @@ func handleTestObservationCache(params: Any?, id: Any?) {
     ])
 }
 
+// ---------------------------------------------------------------------------
+// V7：窗口、滚动、截图坐标点击
+// ---------------------------------------------------------------------------
+
+func handleScreenCaptureStatus(params: Any?, id: Any?) {
+    let prompt = (params as? [String: Any])?["prompt"] as? Bool ?? false
+    if #available(macOS 10.15, *) {
+        writeResponse(["id": id ?? NSNull(), "result": [
+            "granted": screenCaptureGranted(prompt: prompt)
+        ]])
+    } else {
+        writeResponse(makeError(id: id, code: "screen_capture_unavailable",
+                                message: "Screen Recording API is unavailable"))
+    }
+}
+
+func handleFocusWindow(params: Any?, id: Any?) {
+    guard let params = params as? [String: Any],
+          let observationID = params["observation_id"] as? String,
+          let windowRef = params["window_ref"] as? String,
+          !observationID.isEmpty, !windowRef.isEmpty else {
+        writeResponse(makeError(id: id, code: "invalid_params",
+                                message: "missing observation_id/window_ref")); return
+    }
+    guard observationID == currentObservationID else {
+        writeResponse(makeError(id: id, code: "stale_observation",
+                                message: "stale observation")); return
+    }
+    guard AXIsProcessTrusted() else {
+        writeResponse(makeError(id: id, code: "accessibility_permission_required",
+                                message: "macOS Accessibility permission is required")); return
+    }
+    guard let window = currentWindows[windowRef] else {
+        writeResponse(makeError(id: id, code: "window_not_found",
+                                message: "window not found: \(windowRef)")); return
+    }
+    guard AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success else {
+        writeResponse(makeError(id: id, code: "focus_window_failed",
+                                message: "AXRaise failed")); return
+    }
+    if let pid = currentObservedPID {
+        NSRunningApplication(processIdentifier: pid)?.activate(options: [])
+    }
+    clearObservationCache()
+    writeResponse(["id": id ?? NSNull(), "result": ["window_ref": windowRef]])
+}
+
+func handleScroll(params: Any?, id: Any?) {
+    guard let params = params as? [String: Any],
+          let dx = params["delta_x"] as? Int,
+          let dy = params["delta_y"] as? Int,
+          validScroll(deltaX: dx, deltaY: dy) else {
+        writeResponse(makeError(id: id, code: "invalid_params",
+                                message: "scroll deltas must contain a non-zero integer")); return
+    }
+    guard AXIsProcessTrusted() else {
+        writeResponse(makeError(id: id, code: "accessibility_permission_required",
+                                message: "macOS Accessibility permission is required")); return
+    }
+    guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
+                              wheelCount: 2, wheel1: Int32(dy), wheel2: Int32(-dx), wheel3: 0) else {
+        writeResponse(makeError(id: id, code: "input_event_failed",
+                                message: "failed to create scroll event")); return
+    }
+    event.post(tap: .cghidEventTap); clearObservationCache()
+    writeResponse(["id": id ?? NSNull(), "result": ["delta_x": dx, "delta_y": dy]])
+}
+
+func handleClickCoordinate(params: Any?, id: Any?) {
+    guard let params = params as? [String: Any],
+          let observationID = params["observation_id"] as? String,
+          let x = params["x"] as? Int, let y = params["y"] as? Int else {
+        writeResponse(makeError(id: id, code: "invalid_params",
+                                message: "missing observation_id/x/y")); return
+    }
+    guard observationID == currentObservationID else {
+        writeResponse(makeError(id: id, code: "stale_observation",
+                                message: "stale observation")); return
+    }
+    guard let mapping = currentScreenshotMapping else {
+        writeResponse(makeError(id: id, code: "screenshot_unavailable",
+                                message: "current observation has no screenshot mapping")); return
+    }
+    guard let point = mapping.globalPoint(x: x, y: y) else {
+        writeResponse(makeError(id: id, code: "coordinate_out_of_bounds",
+                                message: "coordinate is outside screenshot")); return
+    }
+    guard AXIsProcessTrusted(),
+          let source = CGEventSource(stateID: .combinedSessionState),
+          let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown,
+                             mouseCursorPosition: CGPoint(x: point.x, y: point.y), mouseButton: .left),
+          let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp,
+                           mouseCursorPosition: CGPoint(x: point.x, y: point.y), mouseButton: .left) else {
+        writeResponse(makeError(id: id, code: AXIsProcessTrusted()
+            ? "input_event_failed" : "accessibility_permission_required",
+                                message: "cannot create coordinate click")); return
+    }
+    down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+    clearObservationCache()
+    writeResponse(["id": id ?? NSNull(), "result": [
+        "method": "coordinate", "x": x, "y": y
+    ]])
+}
+
+func handleTestV7Logic(params: Any?, id: Any?) {
+    let mapping = ScreenshotMapping(pixelWidth: 1600, pixelHeight: 1200,
+        bounds: LogicalBounds(x: 100, y: 80, width: 800, height: 600))
+    let point = mapping.globalPoint(x: 800, y: 600)!
+    writeResponse(["id": id ?? NSNull(), "result": [
+        "mapped_x": point.x, "mapped_y": point.y,
+        "out_of_bounds": mapping.globalPoint(x: 1600, y: 0) == nil,
+        "window_order": focusedFirstIndices(count: 3, focusedIndex: 1),
+        "valid_scroll": validScroll(deltaX: 0, deltaY: -1),
+        "invalid_scroll": validScroll(deltaX: 0, deltaY: 0)
+    ]])
+}
+
 /// 处理一条已解析的请求，返回响应（或 nil 表示不响应）。
 func handleRequest(_ payload: [String: Any]) {
     let id = payload["id"]
@@ -1259,6 +1442,9 @@ func handleRequest(_ payload: [String: Any]) {
     case "accessibility_status":
         handleAccessibilityStatus(params: payload["params"], id: id)
 
+    case "screen_capture_status":
+        handleScreenCaptureStatus(params: payload["params"], id: id)
+
     case "basic_observe":
         handleBasicObserve(params: payload["params"], id: id)
 
@@ -1273,6 +1459,18 @@ func handleRequest(_ payload: [String: Any]) {
 
     case "click_element":
         handleClickElement(params: payload["params"], id: id)
+
+    case "click_coordinate":
+        handleClickCoordinate(params: payload["params"], id: id)
+
+    case "scroll":
+        handleScroll(params: payload["params"], id: id)
+
+    case "focus_window":
+        handleFocusWindow(params: payload["params"], id: id)
+
+    case "__test_v7_logic":
+        handleTestV7Logic(params: payload["params"], id: id)
 
     case "__test_click_element":
         handleTestClickElement(params: payload["params"], id: id)

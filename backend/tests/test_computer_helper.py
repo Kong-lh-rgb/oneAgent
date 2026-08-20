@@ -12,7 +12,7 @@ JSON Lines 协议，不需要 Swift 构建、不需要任何 macOS 权限。
 8. helper 意外退出时 pending Future 被 reject
 9. malformed response / 非 JSON / 未知 id 被正确处理
 10. Application close 会关闭已启动的 helper
-+ MacOSComputerRuntime 骨架：7 个真实操作抛 NotImplementedError。
++ MacOSComputerRuntime 生命周期由 Application 正确启动和关闭。
 """
 
 from __future__ import annotations
@@ -305,21 +305,6 @@ async def test_macos_runtime_lifecycle_start_close() -> None:
     assert process is not None and process.returncode is None
     await runtime.close()
     assert process.returncode == 0
-
-
-async def test_macos_runtime_methods_not_implemented() -> None:
-    client = _make_client()
-    runtime = MacOSComputerRuntime(client)
-    await runtime.start()
-    try:
-        for call in (
-            runtime.scroll(),
-            runtime.focus_window("w1"),
-        ):
-            with pytest.raises(NotImplementedError, match="open_app"):
-                await call
-    finally:
-        await runtime.close()
 
 
 # ---------------------------------------------------------------------------

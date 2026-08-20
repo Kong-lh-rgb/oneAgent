@@ -7,6 +7,26 @@
 ---
 ## 2026-08-20
 
+### 完成：macOS Computer V7 - Core Interaction Completion
+
+#### Bad Case
+- [x] observe 只有 focused window，无法用稳定 window_ref 切换同一 App 的其它窗口
+- [x] screenshot、Retina 坐标映射与 CoordinateTarget 未闭环，截图坐标不能安全用于点击
+- [x] scroll / focus_window 仍是占位实现，macOS Runtime 契约不完整
+- [x] Observation cache 只缓存 elements，open_app 等成功变更可能留下半有效引用
+
+#### 实现结果
+- [x] AXWindows + AXFocusedWindow 返回 focused-first 的 windows，并缓存 window_ref
+- [x] focus_window 使用 AXRaise + App activation；scroll 使用 CGEvent scrollWheel
+- [x] screen_capture_status 默认仅 preflight，只有显式 prompt=true 才请求权限
+- [x] ScreenCaptureKit 按 pid+bounds 匹配 active window，PNG 写入 `.oneagent/computer/screenshots`
+- [x] 截图失败不影响 AX structured observation，并清空 screenshot mapping
+- [x] 新增 Retina pixel → global point 纯逻辑映射与 CoordinateTarget 左键单击
+- [x] Swift/Python 对所有成功 UI mutation 统一使 Observation cache 失效；失败与空 type 不失效
+- [x] 新增统一 `computer_v7_demo.py`，自动测试不截图、不点击、不滚动、不触发权限 prompt
+
+---
+
 ### 完成：macOS Computer V6 - Keyboard Key Input
 
 #### Bad Case

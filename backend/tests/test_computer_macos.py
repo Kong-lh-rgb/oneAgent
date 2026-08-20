@@ -1,4 +1,4 @@
-"""MacOSComputerRuntime（open_app / observe / click / type / key）测试。
+"""MacOSComputerRuntime 原生能力的离线 Stub 测试。
 
 使用 stub HelperClient，不启动真实 GUI App、不调用 NSWorkspace /
 AXUIElement / AXPress / CGEvent、不需要 Accessibility / Screen Recording
@@ -37,7 +37,11 @@ V6 key：
 21. helper result 正确转成 ActionResult.KEY
 22. helper 错误向上传播，非法 Python 参数在本地拒绝
 
-其它 scroll/focus_window 仍然 NotImplementedError
+V7 scroll / focus_window / screenshot / coordinate click：
+23. 多窗口与 active_window_ref 转换
+24. 截图路径与截图失败降级
+25. scroll / focus / coordinate 请求和 ActionResult
+26. Python 最新 Observation 生命周期
 """
 
 from __future__ import annotations
@@ -157,9 +161,7 @@ async def test_open_app_bundle_id_hint() -> None:
 
 
 async def test_open_app_helper_error_propagates() -> None:
-    stub = StubHelperClient(
-        error=ComputerHelperError("app_not_found: TextEdit")
-    )
+    stub = StubHelperClient(error=ComputerHelperError("app_not_found: TextEdit"))
     runtime = _runtime(stub)
 
     with pytest.raises(ComputerHelperError, match="app_not_found"):
@@ -167,9 +169,7 @@ async def test_open_app_helper_error_propagates() -> None:
 
 
 async def test_open_app_launch_failed_propagates() -> None:
-    stub = StubHelperClient(
-        error=ComputerHelperError("app_launch_failed: TextEdit")
-    )
+    stub = StubHelperClient(error=ComputerHelperError("app_launch_failed: TextEdit"))
     runtime = _runtime(stub)
 
     with pytest.raises(ComputerHelperError, match="app_launch_failed"):
@@ -255,9 +255,7 @@ async def test_observe_generates_and_passes_observation_id() -> None:
 
 
 async def test_observe_converts_elements() -> None:
-    runtime = _runtime(
-        StubHelperClient(result=_observe_result_with_elements())
-    )
+    runtime = _runtime(StubHelperClient(result=_observe_result_with_elements()))
 
     obs = await runtime.observe()
 
@@ -271,9 +269,12 @@ async def test_observe_converts_elements() -> None:
     assert e1.focused is True
     assert e1.actions == ()
     assert e1.bounds is not None
-    assert (
-        e1.bounds.x, e1.bounds.y, e1.bounds.width, e1.bounds.height
-    ) == (10, 20, 300, 200)
+    assert (e1.bounds.x, e1.bounds.y, e1.bounds.width, e1.bounds.height) == (
+        10,
+        20,
+        300,
+        200,
+    )
 
     assert e2.ref == "e2"
     assert e2.role == "button"
@@ -347,9 +348,7 @@ async def test_observe_permission_error_propagates() -> None:
     )
     runtime = _runtime(stub)
 
-    with pytest.raises(
-        ComputerHelperError, match="accessibility_permission_required"
-    ):
+    with pytest.raises(ComputerHelperError, match="accessibility_permission_required"):
         await runtime.observe()
 
 
@@ -444,9 +443,7 @@ async def test_click_stale_observation_error_propagates() -> None:
     runtime = _runtime(stub)
 
     with pytest.raises(ComputerHelperError, match="stale_observation"):
-        await runtime.click(
-            ElementTarget(observation_id="obs-old", element_ref="e1")
-        )
+        await runtime.click(ElementTarget(observation_id="obs-old", element_ref="e1"))
 
 
 async def test_click_element_not_found_error_propagates() -> None:
@@ -456,21 +453,18 @@ async def test_click_element_not_found_error_propagates() -> None:
     runtime = _runtime(stub)
 
     with pytest.raises(ComputerHelperError, match="element_not_found"):
-        await runtime.click(
-            ElementTarget(observation_id="obs-1", element_ref="e99")
-        )
+        await runtime.click(ElementTarget(observation_id="obs-1", element_ref="e99"))
 
 
-async def test_click_coordinate_target_rejected() -> None:
-    stub = StubHelperClient(result={})
+async def test_click_coordinate_target_calls_helper() -> None:
+    stub = StubHelperClient(result={"x": 10, "y": 20})
     runtime = _runtime(stub)
 
-    with pytest.raises(NotImplementedError, match="coordinate click"):
-        await runtime.click(
-            CoordinateTarget(observation_id="obs-1", x=10, y=20)
-        )
-    # CoordinateTarget 不应发送任何请求。
-    assert stub.calls == []
+    result = await runtime.click(CoordinateTarget(observation_id="obs-1", x=10, y=20))
+    assert stub.calls == [
+        ("click_coordinate", {"observation_id": "obs-1", "x": 10, "y": 20})
+    ]
+    assert result.metadata == {"method": "coordinate", "x": 10, "y": 20}
 
 
 async def test_click_does_not_break_observe_and_open_app() -> None:
@@ -566,9 +560,7 @@ async def test_type_permission_error_propagates() -> None:
     )
     runtime = _runtime(stub)
 
-    with pytest.raises(
-        ComputerHelperError, match="accessibility_permission_required"
-    ):
+    with pytest.raises(ComputerHelperError, match="accessibility_permission_required"):
         await runtime.type("hi")
 
 
@@ -588,9 +580,7 @@ async def test_type_does_not_break_others() -> None:
     runtime = _runtime(stub)
 
     await runtime.observe()
-    await runtime.click(
-        ElementTarget(observation_id="obs-1", element_ref="e1")
-    )
+    await runtime.click(ElementTarget(observation_id="obs-1", element_ref="e1"))
     type_result = await runtime.type("hello")
     await runtime.open_app("TextEdit")
 
@@ -631,9 +621,7 @@ async def test_key_passes_modifiers_and_converts_action_result() -> None:
 
     result = await runtime.key("a", ("cmd", "shift"))
 
-    assert stub.calls == [
-        ("key_press", {"key": "a", "modifiers": ["cmd", "shift"]})
-    ]
+    assert stub.calls == [("key_press", {"key": "a", "modifiers": ["cmd", "shift"]})]
     assert isinstance(result, ActionResult)
     assert result.success is True
     assert result.action is ActionName.KEY
@@ -717,12 +705,125 @@ async def test_key_does_not_break_existing_operations() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_other_runtime_methods_still_not_implemented() -> None:
-    runtime = _runtime(StubHelperClient(result={}))
+async def test_scroll_and_focus_window_are_implemented() -> None:
+    stub = StubHelperClient(
+        per_method={
+            "observe": _observe_result(),
+            "scroll": {"delta_x": 0, "delta_y": -10},
+            "focus_window": {"window_ref": "w1"},
+        }
+    )
+    runtime = _runtime(stub)
+    await runtime.observe(include_screenshot=False)
+    focus = await runtime.focus_window("w1")
+    assert focus.action is ActionName.FOCUS_WINDOW
+    await runtime.observe(include_screenshot=False)
+    scroll = await runtime.scroll(delta_y=-10)
+    assert scroll.action is ActionName.SCROLL
 
-    for coro in (
-        runtime.scroll(),
-        runtime.focus_window("w1"),
+
+async def test_focus_window_requires_latest_observation() -> None:
+    with pytest.raises(ValueError, match="latest observation"):
+        await _runtime(StubHelperClient()).focus_window("w1")
+
+
+async def test_observe_converts_multiple_windows_and_screenshot(tmp_path) -> None:
+    payload = _observe_result_with_elements()
+    payload.update(
+        {
+            "active_window_ref": "w2",
+            "windows": [
+                {
+                    "ref": "w1",
+                    "title": "First",
+                    "bounds": {"x": 0, "y": 0, "width": 400, "height": 300},
+                },
+                {
+                    "ref": "w2",
+                    "title": "Focused",
+                    "bounds": {"x": 10, "y": 20, "width": 800, "height": 600},
+                },
+            ],
+            "screenshot_ref": str(tmp_path / "shot.png"),
+        }
+    )
+    stub = StubHelperClient(result=payload)
+    runtime = MacOSComputerRuntime(stub, screenshot_dir=tmp_path)  # type: ignore[arg-type]
+    observation = await runtime.observe()
+    assert [window.ref for window in observation.windows] == ["w1", "w2"]
+    assert observation.active_window is observation.windows[1]
+    assert observation.screenshot_ref == str(tmp_path / "shot.png")
+    params = stub.calls[0][1]
+    assert params["include_screenshot"] is True
+    assert str(params["screenshot_path"]).endswith(f"{observation.id}.png")
+
+
+async def test_observe_without_screenshot_does_not_send_path(tmp_path) -> None:
+    stub = StubHelperClient(result=_observe_result())
+    runtime = MacOSComputerRuntime(stub, screenshot_dir=tmp_path)  # type: ignore[arg-type]
+    observation = await runtime.observe(include_screenshot=False)
+    assert observation.screenshot_ref is None
+    assert stub.calls[0][1]["include_screenshot"] is False
+    assert "screenshot_path" not in stub.calls[0][1]
+
+
+async def test_screenshot_error_keeps_structured_observation(tmp_path) -> None:
+    payload = _observe_result()
+    payload["screenshot_error"] = {"code": "screen_recording_permission_required"}
+    runtime = MacOSComputerRuntime(  # type: ignore[arg-type]
+        StubHelperClient(result=payload), screenshot_dir=tmp_path
+    )
+    observation = await runtime.observe()
+    assert observation.active_app is not None
+    assert observation.active_window is not None
+    assert observation.screenshot_ref is None
+
+
+async def test_successful_mutations_invalidate_latest_observation(tmp_path) -> None:
+    stub = StubHelperClient(
+        per_method={
+            "observe": _observe_result(),
+            "type_text": {"characters": 1},
+            "key_press": {"key": "enter", "modifiers": []},
+            "open_app": {},
+            "scroll": {"delta_x": 0, "delta_y": 1},
+        }
+    )
+    runtime = MacOSComputerRuntime(stub, screenshot_dir=tmp_path)  # type: ignore[arg-type]
+    await runtime.observe(False)
+    assert runtime._last_observation_id is not None
+    await runtime.type("")
+    assert runtime._last_observation_id is not None
+    await runtime.type("x")
+    assert runtime._last_observation_id is None
+
+    for mutation in (
+        runtime.key("enter"),
+        runtime.scroll(delta_y=1),
+        runtime.open_app("TextEdit"),
     ):
-        with pytest.raises(NotImplementedError, match="open_app"):
-            await coro
+        await runtime.observe(False)
+        await mutation
+        assert runtime._last_observation_id is None
+
+
+@pytest.mark.parametrize(
+    "code",
+    ["stale_observation", "screenshot_unavailable", "coordinate_out_of_bounds"],
+)
+async def test_coordinate_click_errors_propagate_and_keep_cache(code) -> None:
+    runtime = _runtime(StubHelperClient(error=ComputerHelperError(code)))
+    runtime._last_observation_id = "obs-1"
+    with pytest.raises(ComputerHelperError, match=code):
+        await runtime.click(CoordinateTarget(observation_id="obs-1", x=1, y=2))
+    assert runtime._last_observation_id == "obs-1"
+
+
+async def test_scroll_error_propagates_and_keeps_cache() -> None:
+    runtime = _runtime(
+        StubHelperClient(error=ComputerHelperError("input_event_failed"))
+    )
+    runtime._last_observation_id = "obs-1"
+    with pytest.raises(ComputerHelperError, match="input_event_failed"):
+        await runtime.scroll(delta_y=-10)
+    assert runtime._last_observation_id == "obs-1"

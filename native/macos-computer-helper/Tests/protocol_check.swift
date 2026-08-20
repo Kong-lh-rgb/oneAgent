@@ -640,11 +640,21 @@ do {
         "key_press 错误后 helper 仍能 ping",
         (afterKeyPing["result"] as? [String: Any])?["ok"] as? Bool == true
     )
+
+    // 25. V7 纯逻辑：Retina 映射、窗口排序、滚动校验。
+    let v7 = try request(["id": 83, "method": "__test_v7_logic", "params": [:]])
+    let v7Result = v7["result"] as? [String: Any]
+    check("Retina 坐标映射 X", v7Result?["mapped_x"] as? Double == 500)
+    check("Retina 坐标映射 Y", v7Result?["mapped_y"] as? Double == 380)
+    check("截图边界校验", v7Result?["out_of_bounds"] as? Bool == true)
+    check("focused window 优先", v7Result?["window_order"] as? [Int] == [1, 0, 2])
+    check("scroll 非零校验", v7Result?["valid_scroll"] as? Bool == true
+        && v7Result?["invalid_scroll"] as? Bool == false)
 } catch {
     check("协议用例执行无异常", false, "\(error)")
 }
 
-// 25. stdin EOF → 正常退出
+// 26. stdin EOF → 正常退出
 try? stdinPipe.fileHandleForWriting.close()
 process.waitUntilExit()
 check("stdin EOF 后 exit code == 0", process.terminationStatus == 0)
