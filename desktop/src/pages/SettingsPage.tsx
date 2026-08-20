@@ -1,8 +1,12 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 
+import { getComputerStatus, requestComputerPermission } from '../api/computer'
 import { getSystemInfo } from '../api/system'
+import ComputerStatusView from '../components/ComputerStatusView'
 
 export default function SettingsPage(): React.JSX.Element {
+  const queryClient = useQueryClient()
+
   const infoQuery = useQuery({
     queryKey: ['system-info'],
     queryFn: () => getSystemInfo(),
@@ -10,7 +14,25 @@ export default function SettingsPage(): React.JSX.Element {
     retry: false,
   })
 
+  const computerQuery = useQuery({
+    queryKey: ['computer-status'],
+    queryFn: () => getComputerStatus(),
+    refetchInterval: 5000,
+    retry: false,
+  })
+
   const desktop = window.oneagent
+
+  const doRequestPermission = async (
+    permission: 'accessibility' | 'screen_recording',
+  ): Promise<void> => {
+    try {
+      await requestComputerPermission(permission)
+      void queryClient.invalidateQueries({ queryKey: ['computer-status'] })
+    } catch (err) {
+      console.warn('computer permission request failed', err)
+    }
+  }
 
   return (
     <div style={{ padding: 16, overflowY: 'auto', flex: 1, maxWidth: 640 }}>
@@ -50,6 +72,22 @@ export default function SettingsPage(): React.JSX.Element {
               </tr>
             </tbody>
           </table>
+        )}
+      </div>
+
+      <div className="panel" style={{ padding: 14, marginTop: 12 }}>
+        <h3 style={{ fontSize: 14, marginTop: 0 }}>Computer</h3>
+        <ComputerStatusView
+          status={computerQuery.data ?? null}
+          loading={computerQuery.isLoading}
+          onRequestPermission={(p) => void doRequestPermission(p)}
+        />
+        {(computerQuery.data?.permissions.accessibility === 'required' ||
+          computerQuery.data?.permissions.screen_recording === 'required') && (
+          <div className="text-dim" style={{ marginTop: 8 }}>
+            点击 Request 会打开系统权限提示；如果未立即生效，请到
+            System Settings → Privacy &amp; Security 手动开启。
+          </div>
         )}
       </div>
 

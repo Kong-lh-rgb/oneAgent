@@ -23,6 +23,15 @@ def main() -> int:
         "--mcp-config",
         help="Path to the MCP Server JSON configuration file.",
     )
+    parser.add_argument(
+        "--computer-helper",
+        help="Explicit Swift helper binary path (overrides env/dev auto-detect).",
+    )
+    parser.add_argument(
+        "--disable-computer",
+        action="store_true",
+        help="Disable Computer Runtime even if a helper is available.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -40,6 +49,16 @@ def main() -> int:
         application_kwargs["database"] = args.database
     if args.mcp_config:
         application_kwargs["mcp_config"] = args.mcp_config
+
+    # 默认 Host 接入真实 MacOSComputerRuntime（helper 找不到 / disabled 不影响启动）。
+    from app.computer import build_macos_computer
+
+    computer_runtime, computer_host_status = build_macos_computer(
+        helper_path=args.computer_helper,
+        enabled=False if args.disable_computer else None,
+    )
+    application_kwargs["computer_runtime"] = computer_runtime
+    application_kwargs["computer_host_status"] = computer_host_status
 
     try:
         application = Application(

@@ -13,6 +13,13 @@
 不包含任何真实 macOS 实现（AXUIElement / ScreenCaptureKit / CGEvent）。
 """
 
+from .bootstrap import (
+    ComputerHostStatus,
+    build_macos_computer,
+    computer_enabled,
+    current_platform,
+    resolve_helper_path,
+)
 from .fake import FakeComputerRuntime, default_observation
 from .helper_client import (
     ComputerHelperError,
@@ -56,16 +63,17 @@ __all__ = [
     "ActionResult",
     "ActiveApp",
     "Bounds",
-    "ComputerClickTool",
     "ComputerBusyError",
-    "ComputerLeaseHook",
-    "ComputerLeaseManager",
-    "ComputerLeaseSnapshot",
+    "ComputerClickTool",
     "ComputerFocusWindowTool",
     "ComputerHelperError",
     "ComputerHelperProcessError",
     "ComputerHelperProtocolError",
+    "ComputerHostStatus",
     "ComputerKeyTool",
+    "ComputerLeaseHook",
+    "ComputerLeaseManager",
+    "ComputerLeaseSnapshot",
     "ComputerObserveTool",
     "ComputerOpenAppTool",
     "ComputerRuntime",
@@ -80,6 +88,10 @@ __all__ = [
     "Observation",
     "Target",
     "Window",
+    "build_macos_computer",
+    "computer_enabled",
+    "current_platform",
     "default_observation",
     "register_computer_tools",
+    "resolve_helper_path",
 ]

@@ -35,6 +35,7 @@ from app.automation import (
 )
 from app.checkpoint import SQLiteCheckpointStore
 from app.computer import (
+    ComputerHostStatus,
     ComputerLeaseHook,
     ComputerLeaseManager,
     ComputerRuntime,
@@ -197,6 +198,7 @@ class Application:
         skill_learning_settings: SkillLearningSettings | None = None,
         desktop_approval: bool = False,
         computer_runtime: ComputerRuntime | None = None,
+        computer_host_status: ComputerHostStatus | None = None,
     ) -> None:
         self.database = Path(database).expanduser().resolve()
         self.tasks_dir = Path(tasks_dir).expanduser().resolve()
@@ -225,6 +227,8 @@ class Application:
         self.desktop_approval = desktop_approval
         # Computer Runtime：V0 只注入 Fake；None 时不注册 computer_* 工具。
         self._computer_runtime = computer_runtime
+        # Computer Host 状态（bootstrap 产物；None = 未配置 Computer）。
+        self.computer_host_status = computer_host_status
         self.settings = settings or ModelSettings()
         if registry is not None:
             # 测试注入的离线 registry：provider 直接取传入值（不校验 .env）。

@@ -1,7 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 
+import { SERVER_URL } from '../api/config'
+import { getLatestComputerObservation } from '../api/computer'
 import { cancelRun, getRun, getRunTrace, recoverRun } from '../api/runs'
+import ComputerObservationPanel from '../components/ComputerObservationPanel'
 import RunBadge from '../components/RunBadge'
 import TraceTimeline from '../components/TraceTimeline'
 
@@ -34,9 +37,16 @@ export default function RunDetailPage({
     queryFn: () => getRunTrace(runId),
     refetchInterval: 3000,
   })
+  const computerObservationQuery = useQuery({
+    queryKey: ['computer-observation', runId],
+    queryFn: () => getLatestComputerObservation(runId),
+    refetchInterval: 3000,
+    retry: false,
+  })
 
   const run = runQuery.data
   const events = traceQuery.data?.events ?? []
+  const computerObservation = computerObservationQuery.data
 
   const doCancel = async (): Promise<void> => {
     setNotice(null)
@@ -112,6 +122,18 @@ export default function RunDetailPage({
       <div className="panel" style={{ padding: 12 }}>
         <TraceTimeline events={events} />
       </div>
+
+      {computerObservation?.observation ? (
+        <div className="panel" style={{ padding: 12, marginTop: 14 }}>
+          <ComputerObservationPanel
+            observation={computerObservation.observation}
+            runId={computerObservation.run_id}
+            eventTime={computerObservation.event_time}
+            serverUrl={SERVER_URL}
+            title="Computer Observation"
+          />
+        </div>
+      ) : null}
     </div>
   )
 }
