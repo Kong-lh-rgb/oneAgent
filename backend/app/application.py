@@ -129,6 +129,11 @@ DEFAULT_SYSTEM_PROMPT = (
     "调用 task_create；简单的一次性问题不要创建任务。完成任务步骤、计划"
     "变化或任务状态变化后调用 task_update，必要时用 task_get/task_list"
     "重新确认任务状态。"
+    "如果生成了用户需要保留、下载或查看的文件（如报告、CSV、代码、图片），"
+    "在最终回答前调用 artifact_publish 发布它；如果最终交付的是结果链接，"
+    "也用 artifact_publish 发布。普通中间文件、临时文件、Trace、"
+    "Computer Screenshot 不要发布为 Artifact；没有实际交付物时不要调用"
+    "artifact_publish。"
 )
 
 

@@ -19,7 +19,11 @@ from app.agent.events import (
     AgentEventHandler,
     AgentEventType,
 )
-from app.application import Application, title_from_content
+from app.application import (
+    DEFAULT_SYSTEM_PROMPT,
+    Application,
+    title_from_content,
+)
 from app.checkpoint import RunCheckpoint
 from app.conversation import (
     DEFAULT_DATABASE_PATH,
@@ -1040,15 +1044,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--system",
-        default=(
-            "你是 OneAgent，一个本地运行的智能助理。请使用用户的语言回答。"
-            "调用工具时优先使用已有结果；网页搜索通常只需一到两次，获得可用结果后"
-            "立即整理回答，不要为了追求完美而反复改写相同查询。"
-            "当用户明确要求记录任务，或工作复杂、需要多个步骤或跨多轮跟踪时，"
-            "调用 task_create；简单的一次性问题不要创建任务。完成任务步骤、计划"
-            "变化或任务状态变化后调用 task_update，必要时用 task_get/task_list"
-            "重新确认任务状态。"
-        ),
+        default=DEFAULT_SYSTEM_PROMPT,
         help="System prompt for this conversation.",
     )
     parser.add_argument(
