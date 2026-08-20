@@ -342,9 +342,11 @@ class _BlockingAdapter(ModelAdapter):
 async def test_desktop_gate_waits_until_approve(approval_store) -> None:
     gate = DesktopApprovalGate(approval_store)
     notifications: list[tuple[str, object]] = []
+    broadcasted = asyncio.Event()
 
     async def broadcaster(method: str, params: object) -> None:
         notifications.append((method, params))
+        broadcasted.set()
 
     gate.set_broadcaster(broadcaster)
 
@@ -358,14 +360,13 @@ async def test_desktop_gate_waits_until_approve(approval_store) -> None:
     )
     waiting = asyncio.create_task(gate.request_approval(submission))
 
-    # 等待记录创建并广播 approval.required。
-    for _ in range(200):
-        pending = await approval_store.list(
-            status=ApprovalRequestStatus.PENDING,
-        )
-        if pending:
-            break
-        await asyncio.sleep(0)
+    # 显式等待 broadcaster 被调用（approval.required 已广播），而不是轮询数据库。
+    # 数据库写入与 broadcast 之间可能发生 asyncio task switch：轮询 DB 会看到
+    # PENDING 记录但 notifications 尚未写入，随后立即访问 notifications[0] 即竞态。
+    # 用 Event 等待广播发生，消除对生产时序的依赖（不修改 DesktopApprovalGate）。
+    await asyncio.wait_for(broadcasted.wait(), timeout=5)
+
+    pending = await approval_store.list(status=ApprovalRequestStatus.PENDING)
     assert pending, "应创建 PENDING ApprovalRequest"
     assert notifications[0][0] == "approval.required"
     assert not waiting.done()
