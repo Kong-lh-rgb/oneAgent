@@ -1,16 +1,21 @@
-// macOS Computer Helper V1 —— 长驻 subprocess。
+// macOS Computer Helper V2 —— 长驻 subprocess。
 //
 // 职责：从 stdin 按行读 JSON，向 stdout 按行写 JSON（JSON Lines 协议）。
-// 本轮实现 ping / system_info / open_app。
+// 本轮实现 ping / system_info / open_app / accessibility_status /
+// basic_observe。
 //
 // 关键边界：
 // - stdout 只允许输出协议 JSON；日志一律写 stderr；
 // - 非法 JSON / unknown method / 缺 method 都返回 error，进程不退出；
 // - stdin EOF 时正常退出（exit 0）；
 // - open_app 用 NSWorkspace 原生 API 打开应用，不用 shell / osascript /
-//   subprocess，不模拟鼠标点 Dock。
+//   subprocess，不模拟鼠标点 Dock；
+// - basic_observe 只读 frontmost app + focused window（NSWorkspace +
+//   AXUIElement），不读完整 AX Tree、不截图、不点击；未授权返回
+//   accessibility_permission_required。
 
 import AppKit
+import ApplicationServices
 import Foundation
 
 /// helper 版本号（system_info 返回）。
@@ -122,6 +127,141 @@ func handleOpenApp(params: Any?, id: Any?) {
     }
 }
 
+/// 处理 accessibility_status 请求。
+///
+/// 只检查 AXIsProcessTrusted()；默认不弹系统授权提示。仅当
+/// params["prompt"] == true 且未授权时，才用 AXIsProcessTrustedWithOptions
+/// 触发一次系统授权提示（不自动反复弹窗）。
+func handleAccessibilityStatus(params: Any?, id: Any?) {
+    let shouldPrompt = (params as? [String: Any])?["prompt"] as? Bool ?? false
+    var trusted = AXIsProcessTrusted()
+    if shouldPrompt && !trusted {
+        let options = [
+            kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true
+        ] as CFDictionary
+        trusted = AXIsProcessTrustedWithOptions(options)
+    }
+    writeResponse([
+        "id": id ?? NSNull(),
+        "result": ["trusted": trusted],
+    ])
+}
+
+/// 读取 frontmost application 的结构化信息（无需 Accessibility 权限）。
+func frontmostAppDict(_ app: NSRunningApplication) -> [String: Any] {
+    var dict: [String: Any] = ["name": app.localizedName ?? "unknown"]
+    if let bundleID = app.bundleIdentifier {
+        dict["bundle_id"] = bundleID
+    }
+    dict["process_id"] = app.processIdentifier
+    return dict
+}
+
+/// 通过 AX 读取 focused window 的 title / bounds。
+/// 读不到 focused window 时返回 nil（不返回假数据）。
+func focusedWindowDict(pid: pid_t) -> [String: Any]? {
+    let appElement = AXUIElementCreateApplication(pid)
+    var windowRef: CFTypeRef?
+    guard
+        AXUIElementCopyAttributeValue(
+            appElement,
+            kAXFocusedWindowAttribute as CFString,
+            &windowRef
+        ) == .success,
+        let windowElement = windowRef
+    else {
+        return nil
+    }
+
+    // AXTitle
+    var title = ""
+    var titleRef: CFTypeRef?
+    if AXUIElementCopyAttributeValue(
+        windowElement as! AXUIElement,
+        kAXTitleAttribute as CFString,
+        &titleRef
+    ) == .success, let value = titleRef as? String {
+        title = value
+    }
+
+    // AXPosition
+    var position = CGPoint.zero
+    var positionRef: CFTypeRef?
+    if AXUIElementCopyAttributeValue(
+        windowElement as! AXUIElement,
+        kAXPositionAttribute as CFString,
+        &positionRef
+    ) == .success,
+        let value = positionRef,
+        AXValueGetType(value as! AXValue) == .cgPoint
+    {
+        AXValueGetValue(value as! AXValue, .cgPoint, &position)
+    }
+
+    // AXSize
+    var size = CGSize.zero
+    var sizeRef: CFTypeRef?
+    if AXUIElementCopyAttributeValue(
+        windowElement as! AXUIElement,
+        kAXSizeAttribute as CFString,
+        &sizeRef
+    ) == .success,
+        let value = sizeRef,
+        AXValueGetType(value as! AXValue) == .cgSize
+    {
+        AXValueGetValue(value as! AXValue, .cgSize, &size)
+    }
+
+    return [
+        "title": title,
+        "bounds": [
+            "x": Int(position.x.rounded()),
+            "y": Int(position.y.rounded()),
+            "width": Int(size.width.rounded()),
+            "height": Int(size.height.rounded()),
+        ],
+    ]
+}
+
+/// 处理 basic_observe 请求。
+///
+/// 需要 Accessibility 权限（AXIsProcessTrusted）；未授权返回
+/// accessibility_permission_required。成功返回：
+/// {"active_app": {...}, "active_window": {...} | null}
+func handleBasicObserve(params: Any?, id: Any?) {
+    guard AXIsProcessTrusted() else {
+        writeResponse(
+            makeError(
+                id: id,
+                code: "accessibility_permission_required",
+                message: "macOS Accessibility permission is required"
+            )
+        )
+        return
+    }
+
+    guard let frontmost = NSWorkspace.shared.frontmostApplication else {
+        writeResponse([
+            "id": id ?? NSNull(),
+            "result": [
+                "active_app": NSNull(),
+                "active_window": NSNull(),
+            ] as [String: Any],
+        ])
+        return
+    }
+
+    let activeWindow: Any =
+        focusedWindowDict(pid: frontmost.processIdentifier) ?? NSNull()
+    writeResponse([
+        "id": id ?? NSNull(),
+        "result": [
+            "active_app": frontmostAppDict(frontmost),
+            "active_window": activeWindow,
+        ],
+    ])
+}
+
 /// 处理一条已解析的请求，返回响应（或 nil 表示不响应）。
 func handleRequest(_ payload: [String: Any]) {
     let id = payload["id"]
@@ -152,6 +292,12 @@ func handleRequest(_ payload: [String: Any]) {
 
     case "open_app":
         handleOpenApp(params: payload["params"], id: id)
+
+    case "accessibility_status":
+        handleAccessibilityStatus(params: payload["params"], id: id)
+
+    case "basic_observe":
+        handleBasicObserve(params: payload["params"], id: id)
 
     default:
         writeResponse(

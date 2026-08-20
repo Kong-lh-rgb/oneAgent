@@ -237,11 +237,48 @@ do {
         "open_app 出错后仍能 ping",
         (afterOpen["result"] as? [String: Any])?["ok"] as? Bool == true
     )
+
+    // 11. accessibility_status 返回 trusted bool（默认不弹授权提示）
+    let status = try request([
+        "id": 30, "method": "accessibility_status", "params": [:]
+    ])
+    let trusted = (status["result"] as? [String: Any])?["trusted"] as? Bool
+    check("accessibility_status 返回 trusted bool", trusted != nil)
+
+    // 12. basic_observe：
+    //   - 已授权 → 校验返回 JSON 结构合法（不要求固定前台 App，不断言具体值）；
+    //   - 未授权 → 必须返回 accessibility_permission_required。
+    let observe = try request(["id": 31, "method": "basic_observe", "params": [:]])
+    if trusted == true {
+        let result = observe["result"] as? [String: Any]
+        check("basic_observe(已授权) 返回 result 对象", result != nil)
+        let appOK =
+            result?["active_app"] is [String: Any]
+                || result?["active_app"] is NSNull
+        let winOK =
+            result?["active_window"] is [String: Any]
+                || result?["active_window"] is NSNull
+        check("basic_observe active_app 结构合法", appOK)
+        check("basic_observe active_window 结构合法", winOK)
+    } else {
+        check(
+            "basic_observe 未授权 → accessibility_permission_required",
+            (observe["error"] as? [String: Any])?["code"] as? String
+                == "accessibility_permission_required"
+        )
+    }
+
+    // 13. basic_observe 出错后 helper 仍能处理下一条 ping
+    let afterObserve = try request(["id": 32, "method": "ping", "params": [:]])
+    check(
+        "basic_observe 后仍能 ping",
+        (afterObserve["result"] as? [String: Any])?["ok"] as? Bool == true
+    )
 } catch {
     check("协议用例执行无异常", false, "\(error)")
 }
 
-// 11. stdin EOF → 正常退出
+// 14. stdin EOF → 正常退出
 try? stdinPipe.fileHandleForWriting.close()
 process.waitUntilExit()
 check("stdin EOF 后 exit code == 0", process.terminationStatus == 0)
