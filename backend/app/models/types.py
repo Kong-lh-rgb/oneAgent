@@ -55,6 +55,9 @@ class Message(BaseModel):
     name: str | None = None
     tool_call_id: str | None = None
     tool_calls: tuple[ToolCall, ...] = ()
+    # 模型思考/推理内容（如 DeepSeek/Qwen 的 reasoning_content、Anthropic thinking）。
+    # 只用于展示与留存，不随请求回传给模型（请求构造器不序列化该字段）。
+    reasoning: str | None = None
 
 
 class ToolPermission(StrEnum):

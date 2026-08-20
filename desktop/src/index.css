@@ -788,6 +788,53 @@ summary:focus-visible {
   font-variant-ligatures: none;
 }
 
+/* 模型思考过程（可折叠，低调，不打断正文） */
+.assistant-reasoning {
+  margin: 0 0 8px;
+}
+
+.assistant-reasoning summary {
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  user-select: none;
+}
+
+.assistant-reasoning summary::-webkit-details-marker {
+  display: none;
+}
+
+.assistant-reasoning summary::before {
+  content: '';
+  width: 0;
+  height: 0;
+  border-left: 4px solid var(--text-muted);
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+  transition: transform 150ms ease;
+}
+
+.assistant-reasoning[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.assistant-reasoning__body {
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--border);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* Composer */
 .composer-dock {
   flex: 0 0 auto;

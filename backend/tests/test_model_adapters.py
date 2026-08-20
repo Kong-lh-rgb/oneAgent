@@ -204,7 +204,11 @@ async def test_openai_compatible_chat_adapter_preserves_tool_history() -> None:
         choices=[
             SimpleNamespace(
                 finish_reason="stop",
-                message=SimpleNamespace(content="done", tool_calls=None),
+                message=SimpleNamespace(
+                    content="done",
+                    tool_calls=None,
+                    reasoning_content="先分析用户意图",
+                ),
             )
         ],
         usage=SimpleNamespace(
@@ -249,6 +253,7 @@ async def test_openai_compatible_chat_adapter_preserves_tool_history() -> None:
     assert sent[0]["tool_calls"][0]["function"]["arguments"] == '{"id":7}'
     assert sent[1]["tool_call_id"] == "call_1"
     assert response.message.content == "done"
+    assert response.message.reasoning == "先分析用户意图"
 
 
 @pytest.mark.asyncio
@@ -262,7 +267,11 @@ async def test_openai_chat_stream_rebuilds_text_and_tool_calls() -> None:
                 choices=[
                     SimpleNamespace(
                         finish_reason=None,
-                        delta=SimpleNamespace(content="先", tool_calls=None),
+                        delta=SimpleNamespace(
+                            content="先",
+                            tool_calls=None,
+                            reasoning_content="思考中",
+                        ),
                     )
                 ],
             ),
@@ -315,6 +324,7 @@ async def test_openai_chat_stream_rebuilds_text_and_tool_calls() -> None:
     assert deltas == ["先"]
     assert response.message.content == "先"
     assert response.message.tool_calls[0].arguments == {"query": "oneAgent"}
+    assert response.message.reasoning == "思考中"
     assert response.usage.total_tokens == 8
 
 

@@ -151,11 +151,16 @@ def _anthropic_messages(
 
 def _normalize_anthropic_response(response: Any, provider: str) -> ModelResponse:
     text_parts: list[str] = []
+    reasoning_parts: list[str] = []
     tool_calls: list[ToolCall] = []
     for block in response.content:
         block_type = getattr(block, "type", None)
         if block_type == "text":
             text_parts.append(block.text)
+        elif block_type == "thinking":
+            thinking = getattr(block, "thinking", None)
+            if thinking:
+                reasoning_parts.append(thinking)
         elif block_type == "tool_use":
             tool_calls.append(
                 ToolCall(
@@ -175,6 +180,7 @@ def _normalize_anthropic_response(response: Any, provider: str) -> ModelResponse
             role=MessageRole.ASSISTANT,
             content="".join(text_parts) or None,
             tool_calls=tuple(tool_calls),
+            reasoning="".join(reasoning_parts) or None,
         ),
         finish_reason=response.stop_reason,
         usage=ModelUsage(

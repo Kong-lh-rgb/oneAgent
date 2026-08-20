@@ -3,15 +3,18 @@
 import type { AgentEvent } from '../api/types'
 import { Icon } from './Icon'
 import { AssistantContent } from './AssistantContent'
+import AssistantReasoning from './AssistantReasoning'
 import { ActivityItems } from './RunActivity'
 
 export default function LiveAgentTurn({
   events,
   streamText,
+  reasoning,
   settling = false,
 }: {
   events: AgentEvent[]
   streamText: string
+  reasoning?: string
   settling?: boolean
 }): React.JSX.Element {
   return (
@@ -34,6 +37,7 @@ export default function LiveAgentTurn({
       ) : (
         <div className="live-turn__starting">Starting the run…</div>
       )}
+      <AssistantReasoning text={reasoning ?? ''} />
       {streamText ? (
         <div className="live-turn__response">
           <AssistantContent content={streamText} />

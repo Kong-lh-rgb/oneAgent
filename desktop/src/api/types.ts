@@ -22,6 +22,8 @@ export interface Message {
   name?: string | null
   tool_call_id?: string | null
   tool_calls?: ToolCall[]
+  /** 模型思考/推理内容（DeepSeek/Qwen reasoning_content、Anthropic thinking）。 */
+  reasoning?: string | null
 }
 
 export type RunStatus =

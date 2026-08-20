@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS messages (
     name TEXT,
     tool_call_id TEXT,
     tool_calls_json TEXT NOT NULL DEFAULT '[]',
+    reasoning TEXT,
     created_at TEXT NOT NULL,
     UNIQUE(conversation_id, sequence),
     FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
@@ -56,11 +57,12 @@ class SQLiteConversationStore:
         self.database_path = Path(database_path).expanduser().resolve()
 
     async def initialize(self) -> None:
-        """创建数据库目录和数据表。"""
+        """创建数据库目录和数据表（含幂等列迁移）。"""
 
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         async with self._connect() as database:
             await database.executescript(_SCHEMA)
+            await _ensure_column(database, "messages", "reasoning", "TEXT")
             await database.commit()
 
     async def create(
@@ -151,7 +153,7 @@ class SQLiteConversationStore:
         async with self._connect() as database:
             cursor = await database.execute(
                 """
-                SELECT role, content, name, tool_call_id, tool_calls_json
+                SELECT role, content, name, tool_call_id, tool_calls_json, reasoning
                 FROM messages
                 WHERE conversation_id = ?
                 ORDER BY sequence ASC
@@ -258,6 +260,7 @@ class SQLiteConversationStore:
                     ensure_ascii=False,
                     separators=(",", ":"),
                 ),
+                message.reasoning,
                 created_at,
             )
             for sequence, message in enumerate(messages)
@@ -273,8 +276,9 @@ class SQLiteConversationStore:
                     name,
                     tool_call_id,
                     tool_calls_json,
+                    reasoning,
                     created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 rows,
             )
@@ -302,6 +306,22 @@ def _conversation_from_row(row: aiosqlite.Row) -> Conversation:
     )
 
 
+async def _ensure_column(
+    database: aiosqlite.Connection,
+    table: str,
+    column: str,
+    definition: str,
+) -> None:
+    """幂等迁移：表中缺少指定列时追加（用于旧数据库升级）。"""
+
+    cursor = await database.execute(f"PRAGMA table_info({table})")
+    columns = {row["name"] for row in await cursor.fetchall()}
+    if column not in columns:
+        await database.execute(
+            f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+        )
+
+
 def _message_from_row(row: aiosqlite.Row) -> Message:
     raw_tool_calls = json.loads(row["tool_calls_json"])
     return Message(
@@ -310,6 +330,7 @@ def _message_from_row(row: aiosqlite.Row) -> Message:
         name=row["name"],
         tool_call_id=row["tool_call_id"],
         tool_calls=tuple(ToolCall.model_validate(item) for item in raw_tool_calls),
+        reasoning=row["reasoning"],
     )
 
 

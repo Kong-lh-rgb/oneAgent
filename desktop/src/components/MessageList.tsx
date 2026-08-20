@@ -2,6 +2,7 @@ import type { Message } from '../api/types'
 import { Icon } from './Icon'
 import { EmptyState } from './ui'
 import { AssistantContent } from './AssistantContent'
+import AssistantReasoning from './AssistantReasoning'
 
 export { AssistantContent }
 
@@ -33,6 +34,7 @@ export default function MessageList({ messages }: { messages: Message[] }): Reac
                   <span className="message-assistant__avatar"><Icon name="agent" size={13} /></span>
                   oneAgent
                 </div>
+                <AssistantReasoning text={message.reasoning ?? ''} />
                 <AssistantContent content={message.content ?? ''} />
               </div>
             )

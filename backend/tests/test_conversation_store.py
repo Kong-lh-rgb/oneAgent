@@ -1,9 +1,77 @@
 from __future__ import annotations
 
+import aiosqlite
 import pytest
 
 from app.conversation import SQLiteConversationStore
 from app.models.types import Message, MessageRole, ToolCall
+
+
+@pytest.mark.asyncio
+async def test_reasoning_persists_across_store_restart(tmp_path) -> None:
+    database_path = tmp_path / "oneagent.db"
+    store = SQLiteConversationStore(database_path)
+    await store.initialize()
+    messages = (
+        Message(role=MessageRole.USER, content="分析一下"),
+        Message(
+            role=MessageRole.ASSISTANT,
+            content="结论",
+            reasoning="先拆解问题，再对比方案",
+        ),
+    )
+    conversation = await store.create(title="推理", messages=messages)
+
+    reopened_store = SQLiteConversationStore(database_path)
+    await reopened_store.initialize()
+    restored = await reopened_store.load_messages(conversation.id)
+    assert restored[1].content == "结论"
+    assert restored[1].reasoning == "先拆解问题，再对比方案"
+
+
+@pytest.mark.asyncio
+async def test_initialize_migrates_legacy_messages_table(tmp_path) -> None:
+    """旧库 messages 表没有 reasoning 列时，initialize() 应幂等补列。"""
+    database_path = tmp_path / "legacy.db"
+    async with aiosqlite.connect(database_path) as db:
+        await db.executescript(
+            """
+            CREATE TABLE conversations (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT,
+                name TEXT,
+                tool_call_id TEXT,
+                tool_calls_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+        await db.commit()
+
+    store = SQLiteConversationStore(database_path)
+    await store.initialize()
+
+    conversation = await store.create(
+        title="迁移",
+        messages=(
+            Message(
+                role=MessageRole.ASSISTANT,
+                content="ok",
+                reasoning="迁移后仍保留思考",
+            ),
+        ),
+    )
+    restored = await store.load_messages(conversation.id)
+    assert restored[0].reasoning == "迁移后仍保留思考"
 
 
 @pytest.mark.asyncio

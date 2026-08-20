@@ -47,4 +47,24 @@ describe('LiveAgentTurn', () => {
     expect(html).toContain('<strong>报告</strong>')
     expect(html).toContain('stream-cursor')
   })
+
+  it('展示模型思考过程（reasoning），默认折叠', () => {
+    const html = renderToStaticMarkup(
+      <LiveAgentTurn
+        events={[event({ type: 'model_completed' })]}
+        streamText="回复"
+        reasoning="先分析问题，再规划步骤"
+      />,
+    )
+    expect(html).toContain('思考过程')
+    expect(html).toContain('先分析问题，再规划步骤')
+    expect(html).toContain('<details class="assistant-reasoning"')
+  })
+
+  it('无 reasoning 时不渲染思考块', () => {
+    const html = renderToStaticMarkup(
+      <LiveAgentTurn events={[event({ type: 'model_completed' })]} streamText="回复" />,
+    )
+    expect(html).not.toContain('assistant-reasoning')
+  })
 })

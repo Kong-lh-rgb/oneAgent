@@ -47,6 +47,7 @@ export default function ChatPage(): React.JSX.Element {
   const [liveTurnActive, setLiveTurnActive] = useState(false)
   const [liveTurnSettling, setLiveTurnSettling] = useState(false)
 
+
   const conversationsQuery = useQuery({
     queryKey: ['conversations'],
     queryFn: () => listConversations(),
@@ -196,6 +197,11 @@ export default function ChatPage(): React.JSX.Element {
     progressRunId && latestModelStep !== null && latestModelStep !== undefined
       ? (streamTextByRun[progressRunId]?.[latestModelStep] ?? '')
       : ''
+  // 最近一次 model_completed 携带的模型思考内容（DeepSeek/Qwen reasoning）。
+  const latestModelReasoning =
+    [...activeEvents]
+      .reverse()
+      .find((event) => event.type === 'model_completed')?.message?.reasoning ?? ''
 
   // 流式限速：字符级平滑呈现，便于人眼观看（不快不慢）。
   // 每 tick 只新增固定字符数，追上真实文本后自然等待下一批；
@@ -353,6 +359,7 @@ export default function ChatPage(): React.JSX.Element {
               <LiveAgentTurn
                 events={activeEvents}
                 streamText={revealedText}
+                reasoning={latestModelReasoning}
                 settling={liveTurnSettling}
               />
             ) : null}

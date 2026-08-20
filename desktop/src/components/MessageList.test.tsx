@@ -7,6 +7,11 @@ import type { Message } from '../api/types'
 import MessageList from './MessageList'
 
 const userMsg: Message = { role: 'user', content: '帮我总结仓库' }
+const reasoningMsg: Message = {
+  role: 'assistant',
+  content: '结论',
+  reasoning: '先拆解需求，再核对仓库文件',
+}
 const assistantMsg: Message = {
   role: 'assistant',
   content: '## 结论\n这是 **重点** 和 `code`。\n\n- 第一项\n1. 第二项\n```ts\nconst a = 1\n```',
@@ -50,5 +55,12 @@ describe('MessageList', () => {
     )
     expect(html).not.toContain('你是助手')
     expect(html).toContain('帮我总结仓库')
+  })
+
+  it('助手消息带 reasoning 时展示思考过程', () => {
+    const html = renderToStaticMarkup(<MessageList messages={[reasoningMsg]} />)
+    expect(html).toContain('思考过程')
+    expect(html).toContain('先拆解需求，再核对仓库文件')
+    expect(html).toContain('assistant-reasoning')
   })
 })

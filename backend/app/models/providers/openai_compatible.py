@@ -140,6 +140,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 role=MessageRole.ASSISTANT,
                 content=response_message.content,
                 tool_calls=tool_calls,
+                reasoning=getattr(response_message, "reasoning_content", None),
             ),
             finish_reason=choice.finish_reason,
             usage=_chat_usage(getattr(response, "usage", None)),
@@ -212,6 +213,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
         finish_reason: str | None = None
         usage: Any | None = None
         text_parts: list[str] = []
+        reasoning_parts: list[str] = []
         tool_parts: dict[int, dict[str, str]] = {}
 
         async for chunk in stream:
@@ -230,6 +232,9 @@ class OpenAICompatibleAdapter(ModelAdapter):
             if content:
                 text_parts.append(content)
                 await on_text_delta(content)
+            reasoning = getattr(delta, "reasoning_content", None)
+            if reasoning:
+                reasoning_parts.append(reasoning)
             for call in getattr(delta, "tool_calls", None) or ():
                 index = int(getattr(call, "index", 0) or 0)
                 part = tool_parts.setdefault(
@@ -258,6 +263,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 role=MessageRole.ASSISTANT,
                 content="".join(text_parts) or None,
                 tool_calls=tool_calls,
+                reasoning="".join(reasoning_parts) or None,
             ),
             finish_reason=finish_reason or ("tool_calls" if tool_calls else "stop"),
             usage=_chat_usage(usage),
@@ -289,11 +295,22 @@ def _normalize_responses_response(response: Any, provider: str) -> ModelResponse
             role=MessageRole.ASSISTANT,
             content=response.output_text or None,
             tool_calls=tool_calls,
+            reasoning=_responses_reasoning(response),
         ),
         finish_reason=_responses_finish_reason(response, tool_calls),
         usage=_responses_usage(getattr(response, "usage", None)),
         raw=_model_dump(response),
     )
+
+
+def _responses_reasoning(response: Any) -> str | None:
+    """Responses API 的推理摘要（reasoning items 的 summary 拼接）。"""
+    parts: list[str] = []
+    for item in getattr(response, "reasoning", None) or ():
+        summary = getattr(item, "summary", None)
+        if summary:
+            parts.append(summary)
+    return "".join(parts) or None
 
 
 def _parse_arguments(arguments: Any) -> dict[str, Any] | str:
