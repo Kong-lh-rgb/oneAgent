@@ -1,4 +1,4 @@
-/** 与 Agent Server JSON 对应的类型（V0 最小集）。 */
+/** 与 oneAgent Host JSON-RPC 对应的 Desktop 类型。 */
 
 export interface Conversation {
   id: string

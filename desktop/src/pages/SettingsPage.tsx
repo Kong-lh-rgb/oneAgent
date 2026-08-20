@@ -39,12 +39,12 @@ export default function SettingsPage(): React.JSX.Element {
       <h2 style={{ margin: 0, fontSize: 16, marginBottom: 12 }}>Settings</h2>
 
       <div className="panel" style={{ padding: 14 }}>
-        <h3 style={{ fontSize: 14, marginTop: 0 }}>Backend</h3>
+        <h3 style={{ fontSize: 14, marginTop: 0 }}>oneAgent Host</h3>
         {infoQuery.isLoading ? (
           <div className="text-dim"><span className="spinner" /> 正在检查后端…</div>
         ) : infoQuery.isError ? (
           <div className="error-text">
-            无法连接 Agent Server。请先在 backend 启动：
+            无法连接 oneAgent Host。请先在 backend 启动：
             <pre style={{ background: 'var(--bg)', padding: 10, borderRadius: 6 }}>{'python -m app.server'}</pre>
           </div>
         ) : (
@@ -63,7 +63,7 @@ export default function SettingsPage(): React.JSX.Element {
                 <td>{infoQuery.data?.model ?? '-'}</td>
               </tr>
               <tr>
-                <td className="text-muted">server version</td>
+                <td className="text-muted">host version</td>
                 <td className="text-dim">{infoQuery.data?.version ?? '-'}</td>
               </tr>
               <tr>
@@ -97,7 +97,7 @@ export default function SettingsPage(): React.JSX.Element {
           <tbody>
             <tr>
               <td className="text-muted">app version</td>
-              <td>0.1.0 (V0)</td>
+              <td>0.1.0</td>
             </tr>
             <tr>
               <td className="text-muted">platform</td>

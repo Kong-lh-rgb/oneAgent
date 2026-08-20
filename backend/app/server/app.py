@@ -1,4 +1,4 @@
-"""Agent Server：本地 Host transport。
+"""oneAgent Host 的本地 transport。
 
 FastAPI 不是业务架构，只负责：
 
@@ -129,7 +129,7 @@ async def artifact_content(artifact_id: str, request: Request) -> FileResponse:
 
 
 def create_app(application: Application | None = None) -> FastAPI:
-    """构造 Agent Server 应用。
+    """构造 oneAgent Host 应用。
 
     ``application`` 为 None 时自动用默认配置创建（provider 从 .env 选择）。
     调用方也可传入已配置的 Application（例如测试注入离线 fake registry）。
@@ -162,7 +162,7 @@ def create_app(application: Application | None = None) -> FastAPI:
         if artifact_service is not None:
             artifact_service.set_broadcaster(hub.broadcast)
         logger.info(
-            "oneagent server started · provider=%s · model=%s",
+            "oneAgent Host started · provider=%s · model=%s",
             application.provider,
             application.model,
         )
@@ -170,10 +170,10 @@ def create_app(application: Application | None = None) -> FastAPI:
             yield
         finally:
             await application.close()
-            logger.info("oneagent server stopped")
+            logger.info("oneAgent Host stopped")
 
     app = FastAPI(
-        title="OneAgent Agent Server",
+        title="oneAgent Host",
         version=__version__,
         lifespan=lifespan,
     )

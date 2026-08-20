@@ -109,12 +109,12 @@ function Sidebar({
       </div>
       <div className="sidebar-footer">
         <div>
-          Server:{' '}
+          Host:{' '}
           <span className={connected ? 'text-dim' : 'error-text'}>
             {connected ? 'connected' : 'offline'}
           </span>
         </div>
-        <div className="text-muted">v0.1.0 · Desktop V0</div>
+        <div className="text-muted">v0.1.0 · Desktop</div>
       </div>
     </nav>
   )

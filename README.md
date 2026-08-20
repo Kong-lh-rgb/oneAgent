@@ -12,14 +12,18 @@ oneAgent 想做的事情很简单：
 
 它目前包含：
 
-- 🧠 **Memory** — 保留长期重要的信息
-- ✅ **Task** — 持续跟踪正在完成的工作
-- 🧩 **Skill** — 按需加载可复用的工作方法
-- 🌱 **Skill Learning** — 从重复完成的 Task 中形成新的经验
-- 🧱 **Context** — 在长对话中控制上下文并保留关键状态
-- 🔍 **Trace** — 保存 Agent 的真实执行过程
-- 💾 **Checkpoint** — 让中断的 Run 可以继续恢复
-- 🔌 **MCP & Tools** — 接入外部能力并管理工具权限
+- 🧠 **Memory** — 保留跨会话的长期重要信息
+- ✅ **Task / Plan Mode** — 跟踪复杂任务并支持计划确认
+- 🧩 **Skill / Skill Learning** — 按需加载方法，并从已完成任务中提炼经验
+- 🧱 **Context** — 管理长对话预算、工具结果压缩与滚动摘要
+- 🔍 **Trace / Checkpoint** — 记录真实执行过程和可恢复状态
+- 🔄 **Run / Recovery** — 持久化执行生命周期，并从中断点创建恢复 Run
+- ⏰ **Automation** — 通过 once、interval 或 cron 调度长期工作
+- 🛡️ **Async Approval** — 后台等待人工审批，并通过 Desktop 继续处理
+- 🖥️ **Computer Runtime (macOS)** — 基于原生 Helper 的结构化观察与桌面操作
+- 📦 **Artifacts** — 发布、保存并交付 Run 产生的文件或链接
+- 🔌 **MCP & Tools** — 接入外部工具，并统一执行、权限与审计边界
+- 🪟 **Desktop** — Electron 桌面入口、实时状态、审批、Run 与 Artifact 查看
 
 ## 🌱 Agents should learn from doing
 
@@ -63,10 +67,10 @@ cp .env.example .env
 
 目前支持 OpenAI、Qwen、DeepSeek 和 Anthropic。
 
-### 🖥️ Desktop V0（Agent Server + Electron）
+### 🖥️ Desktop + oneAgent Host
 
 ```bash
-# 终端 1：启动 Python Agent Server（FastAPI + WebSocket）
+# 终端 1：启动 oneAgent Host
 cd backend
 .venv/bin/python -m app.server            # http://127.0.0.1:8000
 
@@ -76,11 +80,20 @@ npm install
 npm run electron:dev                        # 或 npm run dev（纯 Renderer）
 ```
 
-- Renderer 只通过 HTTP / WebSocket 与 localhost Agent Server 通信；
-  Electron Main 只负责桌面壳（contextIsolation / nodeIntegration:false）。
-- 核心链路不变：Desktop → Agent Server → `ConversationService` → `RunManager` →
-  `AgentRuntime`；Automation → `ConversationService`。WebSocket `/api/events`
-  复用现有 `AgentEvent` 实时推送执行进度。
+- Desktop 的正常业务统一通过 `WS /rpc`（JSON-RPC）访问本机 oneAgent Host；
+  Electron Main 只负责桌面生命周期、受限外链和原生通知。
+- `GET /health`、Computer screenshot 与 Artifact content 端点只是本地 transport，
+  不承担业务 CRUD。
+
+```text
+Desktop
+  ↓
+WS /rpc (JSON-RPC)
+  ↓
+oneAgent Host
+  ↓
+ConversationService / RunManager / AgentRuntime
+```
 
 ```text
 🏗️ What's inside?
@@ -92,8 +105,8 @@ Trace          → 这次具体怎么执行的
 Checkpoint     → 中断后从哪里继续
 Run            → 这次执行的 Run 生命周期
 Automation     → 未来何时以什么 prompt 再启动一次
-Server         → 把上面的能力暴露成 HTTP / WebSocket
-Desktop        → Electron + React 桌面壳（V0）
+oneAgent Host  → 通过 WS /rpc 组合并暴露应用能力
+Desktop        → Electron + React 桌面入口
 ```
 
 oneAgent 试着把这些东西真正拆开，

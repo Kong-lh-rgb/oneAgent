@@ -7,6 +7,15 @@
 ---
 ## 2026-08-20
 
+### 完成：核心功能阶段工程收尾与 CI Baseline
+
+- [x] 删除三个误提交的 0 字节 CLI 参数文件，确认无其它同类 tracked 脏文件
+- [x] 清理当前源码、Desktop 文案和规划文档中的 Agent Server / Desktop V0 等过时描述
+- [x] README 准确反映当前能力与 Desktop → WS /rpc → oneAgent Host 架构
+- [x] 新增 Backend、Desktop、Native macOS 三个独立 GitHub Actions job
+- [x] 不修改 Runtime、Run、Task、Memory、Automation、Computer、Artifact 或 RPC 语义
+- [x] Backend 845 tests、Desktop 43 tests、Native protocol check 全部通过
+
 ### 完成：V10 Artifact & Result Delivery
 
 #### Bad Case

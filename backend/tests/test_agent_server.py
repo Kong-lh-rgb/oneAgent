@@ -1,4 +1,4 @@
-"""Agent Server 测试（全部用离线 fake model，不调用真实模型 API）。
+"""oneAgent Host 测试（全部用离线 fake model，不调用真实模型 API）。
 
 覆盖：WebSocket JSON-RPC 协议（request/response correlation / parse error /
 invalid request / method not found / invalid params / internal error /
@@ -172,7 +172,7 @@ class BlockingFakeAdapter(ModelAdapter):
 
 @pytest.fixture
 def make_app(tmp_path):
-    """构造一个可注入 fake registry 的 Application + FastAPI app。"""
+    """构造一个可注入 fake registry 的 Application + Host app。"""
 
     def build(
         *,

@@ -8,8 +8,8 @@ export interface DesktopNotification {
   kind: DesktopNotificationKind
 }
 
-// preload 只暴露真正需要的最小 Desktop API（V0 不搞整套 RPC）。
-// Renderer 通过 HTTP / WebSocket 直接与 localhost Agent Server 通信。
+// preload 只暴露真正需要的最小 Desktop API；业务 RPC 不经过 Electron Main。
+// Renderer 通过 WS /rpc 与 localhost oneAgent Host 通信，媒体使用只读 HTTP transport。
 const desktopApi = {
   platform: process.platform,
   versions: {

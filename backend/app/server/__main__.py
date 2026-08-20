@@ -1,4 +1,4 @@
-"""Agent Server 入口：``python -m app.server``。"""
+"""oneAgent Host 入口：``python -m app.server``。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import sys
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run the OneAgent Agent Server (FastAPI + WebSocket)."
+        description="Run the oneAgent Host (FastAPI + JSON-RPC WebSocket)."
     )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)

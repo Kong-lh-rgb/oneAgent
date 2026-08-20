@@ -1,6 +1,6 @@
 """Application：oneAgent 的 composition root（统一依赖装配）。
 
-CLI（``app.models.chat``）与 Agent Server（``app.server``）共用这一份
+CLI（``app.models.chat``）与 oneAgent Host（``app.server``）共用这一份
 “初始化并持有全部运行依赖”的逻辑，避免各自复制一套 wiring。
 
 生命周期：
@@ -236,9 +236,9 @@ class Application:
         self._memory_reflection_config = memory_reflection_config
         self._memory_maintenance_config = memory_maintenance_config
         self._skill_learning_settings = skill_learning_settings
-        # True = DesktopApprovalGate（Server）；False = ConsoleApprovalGate（CLI）。
+        # True = DesktopApprovalGate（Host）；False = ConsoleApprovalGate（CLI）。
         self.desktop_approval = desktop_approval
-        # Computer Runtime：V0 只注入 Fake；None 时不注册 computer_* 工具。
+        # Computer Runtime 由入口注入；None 时不注册 computer_* 工具。
         self._computer_runtime = computer_runtime
         # Computer Host 状态（bootstrap 产物；None = 未配置 Computer）。
         self.computer_host_status = computer_host_status
@@ -385,8 +385,8 @@ class Application:
             default_model=self.model,
         )
 
-        # Computer Runtime：V0 只接入 FakeComputerRuntime；未注入则不注册，
-        # 普通 CLI / Server 现有功能完全不受影响。
+        # Computer Runtime 可注入真实 macOS 实现或测试 Fake；未注入则不注册，
+        # 普通 CLI / Host 现有功能完全不受影响。
         computer_lease: ComputerLeaseManager | None = None
         computer_hooks = ()
         if self._computer_runtime is not None:
