@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from pathlib import Path
 
-from .helper_client import MacOSHelperClient
+from .helper_client import (
+    ComputerHelperError,
+    ComputerHelperProcessError,
+    ComputerHelperProtocolError,
+    MacOSHelperClient,
+)
 from .models import (
     ActionName,
     ActionResult,
@@ -78,6 +84,28 @@ class MacOSComputerRuntime:
     def _invalidate(self) -> None:
         self._last_observation_id = None
 
+    def _require_fresh(self) -> str:
+        if self._last_observation_id is None:
+            raise ValueError("fresh observation required before computer action")
+        return self._last_observation_id
+
+    async def _mutation_call(self, method: str, params: dict[str, object]) -> dict:
+        """副作用请求绝不重放；不确定或 stale 时丢弃本地 Observation。"""
+
+        try:
+            return await self.helper_client.call(method, params)
+        except asyncio.CancelledError:
+            self._invalidate()
+            raise
+        except ComputerHelperError as exc:
+            uncertain = isinstance(
+                exc, (ComputerHelperProcessError, ComputerHelperProtocolError)
+            ) or "timed out" in str(exc)
+            stale = "stale_observation" in str(exc)
+            if uncertain or stale:
+                self._invalidate()
+            raise
+
     async def start(self) -> None:
         await self.helper_client.start()
 
@@ -87,7 +115,7 @@ class MacOSComputerRuntime:
     async def open_app(self, app: str) -> ActionResult:
         if not isinstance(app, str) or not app.strip():
             raise ValueError("'app' must be a non-empty string")
-        result = await self.helper_client.call("open_app", {"app": app})
+        result = await self._mutation_call("open_app", {"app": app})
         self._invalidate()
         return ActionResult(
             success=True,
@@ -103,6 +131,7 @@ class MacOSComputerRuntime:
         if not isinstance(include_screenshot, bool):
             raise ValueError("'include_screenshot' must be a boolean")
         observation_id = uuid.uuid4().hex
+        await self.helper_client.ensure_started()
         params: dict[str, object] = {
             "observation_id": observation_id,
             "include_screenshot": include_screenshot,
@@ -159,7 +188,7 @@ class MacOSComputerRuntime:
 
     async def click(self, target: ElementTarget | CoordinateTarget) -> ActionResult:
         if isinstance(target, ElementTarget):
-            result = await self.helper_client.call(
+            result = await self._mutation_call(
                 "click_element",
                 {
                     "observation_id": target.observation_id,
@@ -172,7 +201,7 @@ class MacOSComputerRuntime:
                 "action": result.get("action"),
             }
         elif isinstance(target, CoordinateTarget):
-            result = await self.helper_client.call(
+            result = await self._mutation_call(
                 "click_coordinate",
                 {"observation_id": target.observation_id, "x": target.x, "y": target.y},
             )
@@ -194,7 +223,11 @@ class MacOSComputerRuntime:
     async def type(self, text: str) -> ActionResult:
         if not isinstance(text, str):
             raise ValueError("'text' must be a string")
-        result = await self.helper_client.call("type_text", {"text": text})
+        observation_id = self._require_fresh()
+        result = await self._mutation_call(
+            "type_text",
+            {"text": text, "expected_observation_id": observation_id},
+        )
         if text:
             self._invalidate()
         return ActionResult(
@@ -210,8 +243,14 @@ class MacOSComputerRuntime:
             isinstance(item, str) for item in modifiers
         ):
             raise ValueError("'modifiers' must be a tuple of strings")
-        result = await self.helper_client.call(
-            "key_press", {"key": key, "modifiers": list(modifiers)}
+        observation_id = self._require_fresh()
+        result = await self._mutation_call(
+            "key_press",
+            {
+                "key": key,
+                "modifiers": list(modifiers),
+                "expected_observation_id": observation_id,
+            },
         )
         self._invalidate()
         return ActionResult(
@@ -229,8 +268,14 @@ class MacOSComputerRuntime:
                 raise ValueError(f"'{name}' must be an integer")
         if delta_x == 0 and delta_y == 0:
             raise ValueError("at least one scroll delta must be non-zero")
-        result = await self.helper_client.call(
-            "scroll", {"delta_x": delta_x, "delta_y": delta_y}
+        observation_id = self._require_fresh()
+        result = await self._mutation_call(
+            "scroll",
+            {
+                "delta_x": delta_x,
+                "delta_y": delta_y,
+                "expected_observation_id": observation_id,
+            },
         )
         self._invalidate()
         return ActionResult(
@@ -245,10 +290,8 @@ class MacOSComputerRuntime:
     async def focus_window(self, window_ref: str) -> ActionResult:
         if not isinstance(window_ref, str) or not window_ref.strip():
             raise ValueError("'window_ref' must be a non-empty string")
-        if self._last_observation_id is None:
-            raise ValueError("focus_window requires a successful latest observation")
-        observation_id = self._last_observation_id
-        result = await self.helper_client.call(
+        observation_id = self._require_fresh()
+        result = await self._mutation_call(
             "focus_window", {"observation_id": observation_id, "window_ref": window_ref}
         )
         self._invalidate()

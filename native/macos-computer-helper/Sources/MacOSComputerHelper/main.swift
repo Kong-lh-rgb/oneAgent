@@ -252,11 +252,6 @@ func handleBasicObserve(params: Any?, id: Any?) {
 /// 全局元素映射：当前 observation_id → element_ref → AXUIElement。
 /// 只保留最近一次 observation 的映射；新 observe 到来时整体替换。
 /// 不要把 AX pointer/address 暴露给 Python。
-var currentObservationID: String? = nil
-var currentElements: [String: AXUIElement] = [:]
-var currentWindows: [String: AXUIElement] = [:]
-var currentScreenshotMapping: ScreenshotMapping? = nil
-var currentObservedPID: pid_t? = nil
 
 /// AX 遍历上限。
 private let kMaxElements = 300
@@ -646,7 +641,16 @@ func handleObserve(params: Any?, id: Any?) {
     currentElements = newMapping
     currentWindows = newWindows
     currentScreenshotMapping = newScreenshotMapping
-    currentObservedPID = observedPID
+    currentFrontmostPID = observedPID
+    currentFocusedWindow = newWindows["w1"]
+    if let active = windows.first, let bounds = active["bounds"] as? [String: Int] {
+        currentFocusedWindowBounds = CGRect(
+            x: bounds["x"] ?? 0, y: bounds["y"] ?? 0,
+            width: bounds["width"] ?? 0, height: bounds["height"] ?? 0
+        )
+    } else {
+        currentFocusedWindowBounds = nil
+    }
 
     writeResponse([
         "id": id ?? NSNull(),
@@ -734,14 +738,6 @@ func handleTestElementMapping(params: Any?, id: Any?) {
 // ---------------------------------------------------------------------------
 
 /// 清空当前 observation 的 element 映射（成功点击后调用）。
-func clearObservationCache() {
-    currentObservationID = nil
-    currentElements = [:]
-    currentWindows = [:]
-    currentScreenshotMapping = nil
-    currentObservedPID = nil
-}
-
 /// 成功点击后的响应 payload（同时使旧 Observation 失效）。
 func successPressPayload(observationID: String, elementRef: String) -> [String: Any] {
     clearObservationCache()
@@ -805,6 +801,8 @@ func handleClickElement(params: Any?, id: Any?) {
         )
         return
     }
+
+    guard requireFreshObservation(observationID, id: id) else { return }
 
     switch resolveClickTarget(
         observationID: observationID,
@@ -968,7 +966,9 @@ func successfulTypePayload(_ text: String) -> [String: Any] {
 func handleTypeText(params: Any?, id: Any?) {
     guard
         let params = params as? [String: Any],
-        let text = params["text"] as? String
+        let text = params["text"] as? String,
+        let expectedObservationID = params["expected_observation_id"] as? String,
+        !expectedObservationID.isEmpty
     else {
         writeResponse(
             makeError(
@@ -979,6 +979,8 @@ func handleTypeText(params: Any?, id: Any?) {
         )
         return
     }
+
+    guard requireFreshObservation(expectedObservationID, id: id) else { return }
 
     // 空字符串：直接成功，不发送任何事件。
     if text.isEmpty {
@@ -1062,7 +1064,9 @@ func handleKeyPress(params: Any?, id: Any?) {
     guard
         let params = params as? [String: Any],
         let key = params["key"] as? String,
-        !key.isEmpty
+        !key.isEmpty,
+        let expectedObservationID = params["expected_observation_id"] as? String,
+        !expectedObservationID.isEmpty
     else {
         writeResponse(
             makeError(
@@ -1073,6 +1077,8 @@ func handleKeyPress(params: Any?, id: Any?) {
         )
         return
     }
+
+    guard requireFreshObservation(expectedObservationID, id: id) else { return }
 
     guard let code = keyCode(for: key) else {
         writeResponse(
@@ -1286,9 +1292,23 @@ func handleTestObservationCache(params: Any?, id: Any?) {
             "observation_id": observationID,
             "refs": Array(currentElements.keys).sorted(),
             "cache_cleared":
-                currentObservationID == nil && currentElements.isEmpty,
+                currentObservationID == nil && currentElements.isEmpty
+                && currentWindows.isEmpty && currentScreenshotMapping == nil
+                && currentFrontmostPID == nil && currentFocusedWindow == nil,
         ],
     ])
+}
+
+func handleTestFreshGuard(params: Any?, id: Any?) {
+    let stateMatches = (params as? [String: Any])?["state_matches"] as? Bool ?? false
+    seedFakeMapping(observationID: "obs-fresh", refs: ["e1"])
+    currentFrontmostPID = 123
+    if !stateMatches { clearObservationCache() }
+    writeResponse(["id": id ?? NSNull(), "result": [
+        "accepted": stateMatches,
+        "cache_cleared": currentObservationID == nil && currentElements.isEmpty
+            && currentFrontmostPID == nil
+    ]])
 }
 
 // ---------------------------------------------------------------------------
@@ -1319,6 +1339,7 @@ func handleFocusWindow(params: Any?, id: Any?) {
         writeResponse(makeError(id: id, code: "stale_observation",
                                 message: "stale observation")); return
     }
+    guard requireFreshObservation(observationID, id: id) else { return }
     guard AXIsProcessTrusted() else {
         writeResponse(makeError(id: id, code: "accessibility_permission_required",
                                 message: "macOS Accessibility permission is required")); return
@@ -1331,7 +1352,7 @@ func handleFocusWindow(params: Any?, id: Any?) {
         writeResponse(makeError(id: id, code: "focus_window_failed",
                                 message: "AXRaise failed")); return
     }
-    if let pid = currentObservedPID {
+    if let pid = currentFrontmostPID {
         NSRunningApplication(processIdentifier: pid)?.activate(options: [])
     }
     clearObservationCache()
@@ -1342,10 +1363,13 @@ func handleScroll(params: Any?, id: Any?) {
     guard let params = params as? [String: Any],
           let dx = params["delta_x"] as? Int,
           let dy = params["delta_y"] as? Int,
+          let expectedObservationID = params["expected_observation_id"] as? String,
+          !expectedObservationID.isEmpty,
           validScroll(deltaX: dx, deltaY: dy) else {
         writeResponse(makeError(id: id, code: "invalid_params",
                                 message: "scroll deltas must contain a non-zero integer")); return
     }
+    guard requireFreshObservation(expectedObservationID, id: id) else { return }
     guard AXIsProcessTrusted() else {
         writeResponse(makeError(id: id, code: "accessibility_permission_required",
                                 message: "macOS Accessibility permission is required")); return
@@ -1370,6 +1394,7 @@ func handleClickCoordinate(params: Any?, id: Any?) {
         writeResponse(makeError(id: id, code: "stale_observation",
                                 message: "stale observation")); return
     }
+    guard requireFreshObservation(observationID, id: id) else { return }
     guard let mapping = currentScreenshotMapping else {
         writeResponse(makeError(id: id, code: "screenshot_unavailable",
                                 message: "current observation has no screenshot mapping")); return
@@ -1410,7 +1435,14 @@ func handleTestV7Logic(params: Any?, id: Any?) {
 
 /// 处理一条已解析的请求，返回响应（或 nil 表示不响应）。
 func handleRequest(_ payload: [String: Any]) {
-    let id = payload["id"]
+    let rawID = payload["id"]
+    guard let rawID,
+          CFGetTypeID(rawID as CFTypeRef) != CFBooleanGetTypeID(),
+          let id = rawID as? Int else {
+        writeResponse(makeError(id: nil, code: "invalid_request",
+                                message: "request id must be an integer"))
+        return
+    }
 
     guard let method = payload["method"] as? String, !method.isEmpty else {
         writeResponse(makeError(id: id, code: "invalid_request", message: "missing method"))
@@ -1419,7 +1451,7 @@ func handleRequest(_ payload: [String: Any]) {
 
     switch method {
     case "ping":
-        writeResponse(["id": id ?? NSNull(), "result": ["ok": true]])
+        writeResponse(["id": id, "result": ["ok": true]])
 
     case "system_info":
         let info = ProcessInfo.processInfo
@@ -1427,7 +1459,7 @@ func handleRequest(_ payload: [String: Any]) {
         let macosVersion =
             "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
         writeResponse([
-            "id": id ?? NSNull(),
+            "id": id,
             "result": [
                 "platform": "macos",
                 "helper_version": helperVersion,
@@ -1495,6 +1527,9 @@ func handleRequest(_ payload: [String: Any]) {
 
     case "__test_observation_cache":
         handleTestObservationCache(params: payload["params"], id: id)
+
+    case "__test_fresh_guard":
+        handleTestFreshGuard(params: payload["params"], id: id)
 
     default:
         writeResponse(

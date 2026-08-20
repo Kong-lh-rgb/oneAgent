@@ -20,6 +20,12 @@ from .helper_client import (
     ComputerHelperProtocolError,
     MacOSHelperClient,
 )
+from .lease import (
+    ComputerBusyError,
+    ComputerLeaseHook,
+    ComputerLeaseManager,
+    ComputerLeaseSnapshot,
+)
 from .macos import MacOSComputerRuntime
 from .models import (
     ActionName,
@@ -51,6 +57,10 @@ __all__ = [
     "ActiveApp",
     "Bounds",
     "ComputerClickTool",
+    "ComputerBusyError",
+    "ComputerLeaseHook",
+    "ComputerLeaseManager",
+    "ComputerLeaseSnapshot",
     "ComputerFocusWindowTool",
     "ComputerHelperError",
     "ComputerHelperProcessError",

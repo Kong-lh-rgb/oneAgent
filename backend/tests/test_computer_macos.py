@@ -52,6 +52,7 @@ from app.computer import (
     ActionName,
     ActionResult,
     ComputerHelperError,
+    ComputerHelperProcessError,
     CoordinateTarget,
     ElementTarget,
     MacOSComputerRuntime,
@@ -78,6 +79,9 @@ class StubHelperClient:
         self.per_method = per_method or {}
         self.calls: list[tuple[str, dict]] = []
 
+    async def ensure_started(self) -> None:
+        return None
+
     async def call(self, method: str, params: dict | None = None, **kwargs):
         self.calls.append((method, params or {}))
         if self.error is not None:
@@ -88,7 +92,10 @@ class StubHelperClient:
 
 
 def _runtime(stub: StubHelperClient) -> MacOSComputerRuntime:
-    return MacOSComputerRuntime(stub)  # type: ignore[arg-type]
+    runtime = MacOSComputerRuntime(stub)  # type: ignore[arg-type]
+    # 旧能力测试直接验证请求映射；V8 专门用独立用例验证缺少 fresh observe。
+    runtime._last_observation_id = "obs-current"
+    return runtime
 
 
 # ---------------------------------------------------------------------------
@@ -514,7 +521,12 @@ async def test_type_calls_type_text() -> None:
 
     result = await runtime.type("Hello oneAgent")
 
-    assert stub.calls == [("type_text", {"text": "Hello oneAgent"})]
+    assert stub.calls == [
+        (
+            "type_text",
+            {"text": "Hello oneAgent", "expected_observation_id": "obs-current"},
+        )
+    ]
     assert result.success is True
 
 
@@ -537,7 +549,9 @@ async def test_type_empty_string() -> None:
 
     result = await runtime.type("")
 
-    assert stub.calls == [("type_text", {"text": ""})]
+    assert stub.calls == [
+        ("type_text", {"text": "", "expected_observation_id": "obs-current"})
+    ]
     assert result.metadata == {"characters": 0}
 
 
@@ -581,6 +595,7 @@ async def test_type_does_not_break_others() -> None:
 
     await runtime.observe()
     await runtime.click(ElementTarget(observation_id="obs-1", element_ref="e1"))
+    await runtime.observe()
     type_result = await runtime.type("hello")
     await runtime.open_app("TextEdit")
 
@@ -588,6 +603,7 @@ async def test_type_does_not_break_others() -> None:
     assert [m for m, _ in stub.calls] == [
         "observe",
         "click_element",
+        "observe",
         "type_text",
         "open_app",
     ]
@@ -611,7 +627,12 @@ async def test_key_calls_key_press() -> None:
 
     result = await runtime.key("enter")
 
-    assert stub.calls == [("key_press", {"key": "enter", "modifiers": []})]
+    assert stub.calls == [
+        (
+            "key_press",
+            {"key": "enter", "modifiers": [], "expected_observation_id": "obs-current"},
+        )
+    ]
     assert result.success is True
 
 
@@ -621,7 +642,16 @@ async def test_key_passes_modifiers_and_converts_action_result() -> None:
 
     result = await runtime.key("a", ("cmd", "shift"))
 
-    assert stub.calls == [("key_press", {"key": "a", "modifiers": ["cmd", "shift"]})]
+    assert stub.calls == [
+        (
+            "key_press",
+            {
+                "key": "a",
+                "modifiers": ["cmd", "shift"],
+                "expected_observation_id": "obs-current",
+            },
+        )
+    ]
     assert isinstance(result, ActionResult)
     assert result.success is True
     assert result.action is ActionName.KEY
@@ -686,7 +716,9 @@ async def test_key_does_not_break_existing_operations() -> None:
 
     await runtime.observe()
     await runtime.click(ElementTarget(observation_id="obs-1", element_ref="e1"))
+    await runtime.observe()
     await runtime.type("hello")
+    await runtime.observe()
     key_result = await runtime.key("tab")
     await runtime.open_app("TextEdit")
 
@@ -694,7 +726,9 @@ async def test_key_does_not_break_existing_operations() -> None:
     assert [method for method, _ in stub.calls] == [
         "observe",
         "click_element",
+        "observe",
         "type_text",
+        "observe",
         "key_press",
         "open_app",
     ]
@@ -723,8 +757,23 @@ async def test_scroll_and_focus_window_are_implemented() -> None:
 
 
 async def test_focus_window_requires_latest_observation() -> None:
-    with pytest.raises(ValueError, match="latest observation"):
-        await _runtime(StubHelperClient()).focus_window("w1")
+    runtime = _runtime(StubHelperClient())
+    runtime._last_observation_id = None
+    with pytest.raises(ValueError, match="fresh observation required"):
+        await runtime.focus_window("w1")
+
+
+@pytest.mark.parametrize("action", ["type", "key", "scroll"])
+async def test_input_actions_require_fresh_observation(action: str) -> None:
+    runtime = _runtime(StubHelperClient(result={}))
+    runtime._last_observation_id = None
+    with pytest.raises(ValueError, match="fresh observation required"):
+        if action == "type":
+            await runtime.type("hello")
+        elif action == "key":
+            await runtime.key("enter")
+        else:
+            await runtime.scroll(delta_y=-1)
 
 
 async def test_observe_converts_multiple_windows_and_screenshot(tmp_path) -> None:
@@ -816,7 +865,8 @@ async def test_coordinate_click_errors_propagate_and_keep_cache(code) -> None:
     runtime._last_observation_id = "obs-1"
     with pytest.raises(ComputerHelperError, match=code):
         await runtime.click(CoordinateTarget(observation_id="obs-1", x=1, y=2))
-    assert runtime._last_observation_id == "obs-1"
+    expected = None if code == "stale_observation" else "obs-1"
+    assert runtime._last_observation_id == expected
 
 
 async def test_scroll_error_propagates_and_keeps_cache() -> None:
@@ -827,3 +877,12 @@ async def test_scroll_error_propagates_and_keeps_cache() -> None:
     with pytest.raises(ComputerHelperError, match="input_event_failed"):
         await runtime.scroll(delta_y=-10)
     assert runtime._last_observation_id == "obs-1"
+
+
+async def test_uncertain_mutation_failure_invalidates_without_retry() -> None:
+    stub = StubHelperClient(error=ComputerHelperProcessError("helper exited"))
+    runtime = _runtime(stub)
+    with pytest.raises(ComputerHelperProcessError):
+        await runtime.type("hello")
+    assert len(stub.calls) == 1
+    assert runtime._last_observation_id is None

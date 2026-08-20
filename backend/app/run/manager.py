@@ -12,6 +12,9 @@ RunManager 只负责“Run 生命周期对象”：把一次 Agent 执行包装�
 from __future__ import annotations
 
 import asyncio
+import inspect
+import logging
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -30,6 +33,8 @@ from .store import SQLiteRunStore
 
 _STALE_RUN_ERROR = "process restarted; run did not reach a terminal state"
 _STALE_PENDING_ERROR = "process restarted; run never started"
+logger = logging.getLogger("oneagent.run.manager")
+RunFinalizer = Callable[[str], Awaitable[object] | object]
 
 
 class RunManager:
@@ -41,12 +46,14 @@ class RunManager:
         checkpoint_store: SQLiteCheckpointStore,
         runtime: AgentRuntime,
         approval_store: SQLiteApprovalStore | None = None,
+        run_finalizers: Sequence[RunFinalizer] = (),
     ) -> None:
         self._run_store = run_store
         self._checkpoint_store = checkpoint_store
         self._runtime = runtime
         # Run 取消时清理其下无人等待的 PENDING approval（可选注入）。
         self._approval_store = approval_store
+        self._run_finalizers = tuple(run_finalizers)
         # 进程内正在执行的 Run → asyncio.Task（用于 cancel / wait）。
         self._active_tasks: dict[str, asyncio.Task[None]] = {}
         # 会话内最近一次执行完成的 AgentResult（供 CLI 读取，不持久化）。
@@ -254,6 +261,7 @@ class RunManager:
                 error="cancelled without active execution",
             )
             await self._cancel_pending_approvals(run_id)
+            await self._run_finalizers_for(run_id)
             return updated
         task.cancel()
         try:
@@ -269,6 +277,17 @@ class RunManager:
 
         if self._approval_store is not None:
             await self._approval_store.cancel_pending_for_run(run_id)
+
+    async def _run_finalizers_for(self, run_id: str) -> None:
+        """运行幂等资源清理；故障只记日志，不改变已确定的 Run 终态。"""
+
+        for finalizer in self._run_finalizers:
+            try:
+                result = finalizer(run_id)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                logger.exception("run finalizer failed for %s", run_id)
 
     # ------------------------------------------------------------------
     # recover
@@ -387,6 +406,7 @@ class RunManager:
                     stop_reason=result.stop_reason.value,
                 )
         finally:
+            await self._run_finalizers_for(run_id)
             self._active_tasks.pop(run_id, None)
 
 

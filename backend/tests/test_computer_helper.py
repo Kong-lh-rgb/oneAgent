@@ -29,6 +29,7 @@ from app.computer import (
     ComputerHelperError,
     ComputerHelperProcessError,
     ComputerHelperProtocolError,
+    ComputerLeaseManager,
     MacOSComputerRuntime,
     MacOSHelperClient,
 )
@@ -46,9 +47,7 @@ from app.models.types import (
 
 
 def _helper_command() -> tuple[str, tuple[str, ...]]:
-    script = (
-        Path(__file__).resolve().parent / "fixtures" / "fake_computer_helper.py"
-    )
+    script = Path(__file__).resolve().parent / "fixtures" / "fake_computer_helper.py"
     return sys.executable, (str(script),)
 
 
@@ -200,8 +199,24 @@ async def test_helper_crash_rejects_pending() -> None:
         # 进程已退出：后续调用给出明确错误。
         with pytest.raises(ComputerHelperProcessError, match="not started"):
             await client.call("ping", {})
+        await client.restart()
+        assert await client.call("ping", {}) == {"ok": True}
     finally:
         await client.close()
+
+
+async def test_observe_recovers_dead_helper_as_a_new_safe_request(tmp_path) -> None:
+    client = _make_client()
+    runtime = MacOSComputerRuntime(client, screenshot_dir=tmp_path)
+    await runtime.start()
+    try:
+        with pytest.raises(ComputerHelperProcessError):
+            await client.call("__crash", {})
+        observation = await runtime.observe(include_screenshot=False)
+        assert observation.active_app is not None
+        assert observation.active_app.name == "FakeApp"
+    finally:
+        await runtime.close()
 
 
 # ---------------------------------------------------------------------------
@@ -222,27 +237,69 @@ async def test_malformed_response_rejected() -> None:
         await client.close()
 
 
-async def test_bad_json_line_does_not_break() -> None:
+async def test_bad_json_line_breaks_protocol_until_restart() -> None:
     client = _make_client()
     await client.start()
     try:
         # __bad_json：先写一行非 JSON，再正常回 error。
-        with pytest.raises(ComputerHelperError, match="bad_json_test"):
+        with pytest.raises(ComputerHelperProtocolError, match="malformed JSON"):
             await client.call("__bad_json", {})
+        await client.restart()
         assert await client.call("ping", {}) == {"ok": True}
     finally:
         await client.close()
 
 
-async def test_unknown_id_response_dropped() -> None:
+async def test_unknown_id_breaks_protocol_until_restart() -> None:
     client = _make_client()
     await client.start()
     try:
         # __unknown_id：先发一条无主响应（id 不对应任何 pending），再回 error。
-        with pytest.raises(ComputerHelperError, match="unknown_id_test"):
+        with pytest.raises(ComputerHelperProtocolError, match="unknown id"):
             await client.call("__unknown_id", {})
-        # 无主响应被丢弃，helper 与 client 均未受影响。
+        await client.restart()
         assert await client.call("ping", {}) == {"ok": True}
+    finally:
+        await client.close()
+
+
+@pytest.mark.parametrize("method", ["__invalid_id", "__non_object"])
+async def test_invalid_response_shape_breaks_protocol(method: str) -> None:
+    client = _make_client()
+    await client.start()
+    try:
+        with pytest.raises(ComputerHelperProtocolError):
+            await client.call(method, {})
+        await client.restart()
+        assert await client.call("ping", {}) == {"ok": True}
+    finally:
+        await client.close()
+
+
+async def test_timeout_late_response_is_ignored() -> None:
+    client = _make_client()
+    await client.start()
+    try:
+        with pytest.raises(ComputerHelperError, match="timed out"):
+            await client.call("__delay", {"seconds": 0.05}, timeout=0.005)
+        # helper 先发退休 id 的迟到响应，再处理 ping；连接仍健康。
+        assert await client.call("ping", {}, timeout=1) == {"ok": True}
+        assert client._pending == {}
+    finally:
+        await client.close()
+
+
+async def test_cancelled_call_does_not_leak_pending() -> None:
+    client = _make_client()
+    await client.start()
+    try:
+        task = asyncio.create_task(client.call("__delay", {"seconds": 0.05}))
+        await asyncio.sleep(0.005)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert client._pending == {}
+        assert await client.call("ping", {}, timeout=1) == {"ok": True}
     finally:
         await client.close()
 
@@ -355,9 +412,7 @@ async def _build_application(tmp_path, *, computer_runtime):
         skills_user_dir=tmp_path / "skills-user",
         skills_project_dir=tmp_path / "skills-project",
         registry=model_registry,
-        memory_reflection_config=MemoryReflectionConfig(
-            _env_file=None, enabled=False
-        ),
+        memory_reflection_config=MemoryReflectionConfig(_env_file=None, enabled=False),
         memory_maintenance_config=MemoryMaintenanceConfig(
             _env_file=None, enabled=False
         ),
@@ -393,3 +448,20 @@ async def test_application_close_closes_helper(tmp_path) -> None:
     await app.close()
     assert process.returncode == 0  # helper 已随 Application.close 关闭
     assert client._process is None
+
+
+async def test_application_close_releases_machine_lease(tmp_path) -> None:
+    client = _make_client()
+    app = await _build_application(
+        tmp_path, computer_runtime=MacOSComputerRuntime(client)
+    )
+    assert app.computer_lease is not None
+    lock_path = app.computer_lease.lock_path
+    app.computer_lease.acquire("run-a")
+    await app.close()
+
+    next_host = ComputerLeaseManager(lock_path)
+    try:
+        assert next_host.acquire("run-b").owner_run_id == "run-b"
+    finally:
+        next_host.close()

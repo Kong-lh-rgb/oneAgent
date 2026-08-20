@@ -34,7 +34,12 @@ from app.automation import (
     register_automation_tools,
 )
 from app.checkpoint import SQLiteCheckpointStore
-from app.computer import ComputerRuntime, register_computer_tools
+from app.computer import (
+    ComputerLeaseHook,
+    ComputerLeaseManager,
+    ComputerRuntime,
+    register_computer_tools,
+)
 from app.context import (
     ContextManager,
     ContextSettings,
@@ -252,6 +257,7 @@ class Application:
         self.approval_gate: Any | None = None
         self.desktop_approval_gate: DesktopApprovalGate | None = None
         self.computer_runtime: ComputerRuntime | None = None
+        self.computer_lease: ComputerLeaseManager | None = None
         self.tool_registry: ToolRegistry | None = None
         self.task_store: FileTaskStore | None = None
         self.memory_manager: MemoryManager | None = None
@@ -352,7 +358,13 @@ class Application:
 
         # Computer Runtime：V0 只接入 FakeComputerRuntime；未注入则不注册，
         # 普通 CLI / Server 现有功能完全不受影响。
+        computer_lease: ComputerLeaseManager | None = None
+        computer_hooks = ()
         if self._computer_runtime is not None:
+            computer_lease = ComputerLeaseManager(
+                database.parent / "computer" / "machine.lock"
+            )
+            computer_hooks = (ComputerLeaseHook(computer_lease),)
             register_computer_tools(tool_registry, self._computer_runtime)
             self.computer_runtime = self._computer_runtime
             # 真实 MacOSComputerRuntime 才有显式 start / close；
@@ -430,6 +442,7 @@ class Application:
             memory_maintenance_reflector=memory_maintenance_reflector,
             skill_store=skill_store,
             skill_context_provider=skill_context_provider,
+            tool_hooks=computer_hooks,
         )
 
         run_store = SQLiteRunStore(database)
@@ -438,6 +451,7 @@ class Application:
             checkpoint_store,
             runtime,
             approval_store=approval_store,
+            run_finalizers=(computer_lease.release,) if computer_lease else (),
         )
         # 启动 reconciliation（Run + Checkpoint 统一处理）。
         reconciled_runs = await run_manager.initialize()
@@ -496,6 +510,7 @@ class Application:
         self.mcp_manager = mcp_manager
         self.mcp_statuses = mcp_statuses
         self.mcp_error = mcp_error
+        self.computer_lease = computer_lease
         self.runtime = runtime
         self.run_store = run_store
         self.run_manager = run_manager
@@ -515,6 +530,8 @@ class Application:
             await self.automation_scheduler.shutdown()
         if self.mcp_manager is not None and self.tool_registry is not None:
             await self.mcp_manager.close(self.tool_registry)
+        if self.computer_lease is not None:
+            self.computer_lease.close()
         if self.computer_runtime is not None:
             # 只在确实注入真实 MacOSComputerRuntime（有 close）时关闭 helper。
             close_runtime = getattr(self.computer_runtime, "close", None)
@@ -522,6 +539,3 @@ class Application:
                 await close_runtime()
         await self.registry.close()
         self._started = False
-
-
-

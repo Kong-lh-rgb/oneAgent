@@ -188,6 +188,7 @@ async def manager_factory(tmp_path):
         checkpoint_store: SQLiteCheckpointStore | None = None,
         run_store: SQLiteRunStore | None = None,
         provider: str = "fake",
+        run_finalizers=(),
     ) -> tuple[RunManager, SQLiteRunStore, SQLiteCheckpointStore]:
         database = tmp_path / "oneagent.db"
         run_store = run_store or SQLiteRunStore(database)
@@ -200,7 +201,9 @@ async def manager_factory(tmp_path):
             provider=provider,
             checkpoint_store=checkpoint_store,
         )
-        manager = RunManager(run_store, checkpoint_store, runtime)
+        manager = RunManager(
+            run_store, checkpoint_store, runtime, run_finalizers=run_finalizers
+        )
         return manager, run_store, checkpoint_store
 
     return build_manager
@@ -251,6 +254,34 @@ async def test_runtime_exception_marks_failed(manager_factory) -> None:
     assert run.stop_reason == AgentStopReason.MODEL_ERROR.value
 
 
+async def test_run_finalizer_runs_for_completed_and_failed(manager_factory) -> None:
+    finalized: list[str] = []
+    registry, _ = fake_registry([model_response(content="完成")])
+    manager, _, _ = await manager_factory(registry, run_finalizers=(finalized.append,))
+    completed_id, _ = await manager.start("完成")
+    await manager.wait(completed_id)
+
+    failed_registry, _ = fake_registry([RuntimeError("offline")])
+    failed_manager, _, _ = await manager_factory(
+        failed_registry, run_finalizers=(finalized.append,)
+    )
+    failed_id, _ = await failed_manager.start("失败")
+    await failed_manager.wait(failed_id)
+    assert finalized == [completed_id, failed_id]
+
+
+async def test_run_finalizer_failure_does_not_change_terminal_state(
+    manager_factory,
+) -> None:
+    def broken(_run_id: str) -> None:
+        raise RuntimeError("cleanup failed")
+
+    registry, _ = fake_registry([model_response(content="完成")])
+    manager, _, _ = await manager_factory(registry, run_finalizers=(broken,))
+    run_id, _ = await manager.start("完成")
+    assert (await manager.wait(run_id)).status is RunStatus.COMPLETED
+
+
 # ---------------------------------------------------------------------------
 # 3. cancel 正在执行的 Run → CANCELLED，不再产生新的 Agent Step
 # ---------------------------------------------------------------------------
@@ -272,7 +303,10 @@ async def test_cancel_running_run_during_model_request(
     registry.register("blocking", lambda _: adapter, config=config)
 
     # runtime 必须能解析到 blocking provider，否则不会进入 complete()。
-    manager, _, checkpoint_store = await build_manager(registry, provider="blocking")
+    finalized: list[str] = []
+    manager, _, checkpoint_store = await build_manager(
+        registry, provider="blocking", run_finalizers=(finalized.append,)
+    )
 
     run_id, task = await manager.start("你好", conversation_id="conv-1")
     await adapter.started.wait()
@@ -292,6 +326,7 @@ async def test_cancel_running_run_during_model_request(
     assert checkpoint.status is CheckpointStatus.INTERRUPTED
     assert checkpoint.phase is CheckpointPhase.MODEL_REQUEST
     assert checkpoint.step == 1
+    assert finalized == [run_id]
 
 
 async def test_cancel_running_run_during_tool_execution(manager_factory) -> None:
@@ -749,9 +784,7 @@ async def test_run_manager_keeps_trace_and_checkpoint_behavior(
     checkpoint = await checkpoint_store.get(run_id)
     assert checkpoint is not None
     assert checkpoint.status is CheckpointStatus.COMPLETED
-    assert [c.tool_call_id for c in checkpoint.completed_tool_results] == [
-        "count-1"
-    ]
+    assert [c.tool_call_id for c in checkpoint.completed_tool_results] == ["count-1"]
     # 工具只执行一次（Trace 与 Checkpoint 均不重复）。
     assert tool.executions == 1
 

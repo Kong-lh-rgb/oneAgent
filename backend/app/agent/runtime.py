@@ -113,6 +113,7 @@ class AgentRuntime:
         max_tool_rounds: int | None = None,
         max_output_tokens: int | None = None,
         tool_executor: ToolExecutor | None = None,
+        tool_hooks: Sequence[ToolHook] = (),
         approval_gate: ApprovalGate | None = None,
         policy_engine: PermissionPolicyEngine | None = None,
         rule_store: PermissionRuleStore | None = None,
@@ -158,6 +159,7 @@ class AgentRuntime:
             approval_gate=approval_gate,
             policy_engine=policy_engine,
             rule_store=rule_store,
+            hooks=tool_hooks,
         )
 
     @property

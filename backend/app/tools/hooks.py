@@ -92,7 +92,11 @@ class ToolHookRunner:
         for hook in self._hooks:
             try:
                 current = await hook.before_execute(context)
-                if decision is None and current is not None:
+                # 任一 Hook 的明确拒绝优先于审批请求，避免后注册的安全
+                # Hook（如 Machine Lease）被前面的 Permission 决定遮蔽。
+                if current is not None and current.denied_reason is not None:
+                    decision = current
+                elif decision is None and current is not None:
                     decision = current
             except Exception as exc:
                 if hook.critical:

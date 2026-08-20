@@ -201,6 +201,16 @@ do {
             == "invalid_request"
     )
 
+    let missingID = try request(["method": "ping", "params": [:]])
+    check("缺少 id → invalid_request",
+          (missingID["error"] as? [String: Any])?["code"] as? String == "invalid_request")
+    let boolID = try request(["id": true, "method": "ping", "params": [:]])
+    check("bool id → invalid_request",
+          (boolID["error"] as? [String: Any])?["code"] as? String == "invalid_request")
+    let stringID = try request(["id": "1", "method": "ping", "params": [:]])
+    check("string id → invalid_request",
+          (stringID["error"] as? [String: Any])?["code"] as? String == "invalid_request")
+
     // 7. open_app 缺 app → invalid_params（不启动任何 App）
     let noApp = try request(["id": 20, "method": "open_app", "params": [:]])
     check(
@@ -419,7 +429,7 @@ do {
         (afterClickPing["result"] as? [String: Any])?["ok"] as? Bool == true
     )
 
-    // 19. type_text：缺 text → invalid_params；空串 → characters 0（不发送事件）
+    // 19. type_text：真实入口必须绑定 fresh observation。
     let typeNoText = try request(["id": 60, "method": "type_text", "params": [:]])
     check(
         "type_text 缺 text → invalid_params",
@@ -430,8 +440,8 @@ do {
         "id": 61, "method": "type_text", "params": ["text": ""]
     ])
     check(
-        "type_text 空串 → characters == 0",
-        (typeEmpty["result"] as? [String: Any])?["characters"] as? Int == 0
+        "type_text 空串缺 observation → invalid_params",
+        (typeEmpty["error"] as? [String: Any])?["code"] as? String == "invalid_params"
     )
 
     // 19b. type_text 非空：未授权时验证权限错误；已授权时只走测试成功入口，
@@ -451,9 +461,9 @@ do {
             "id": 62, "method": "type_text", "params": ["text": "Hi"]
         ])
         check(
-            "type_text 未授权 → accessibility_permission_required",
+            "type_text 缺 observation → invalid_params",
             (typeRes["error"] as? [String: Any])?["code"] as? String
-                == "accessibility_permission_required"
+                == "invalid_params"
         )
     }
 
@@ -534,9 +544,9 @@ do {
         "id": 72, "method": "key_press", "params": ["key": "f5"]
     ])
     check(
-        "key_press 未支持 key → unsupported_key",
+        "key_press 缺 observation → invalid_params",
         (keyUnsupported["error"] as? [String: Any])?["code"] as? String
-            == "unsupported_key"
+            == "invalid_params"
     )
     let invalidModifier = try request([
         "id": 73,
@@ -544,9 +554,9 @@ do {
         "params": ["key": "a", "modifiers": ["fn"]],
     ])
     check(
-        "key_press 未知 modifier → invalid_modifier",
+        "key_press 缺 observation → invalid_params",
         (invalidModifier["error"] as? [String: Any])?["code"] as? String
-            == "invalid_modifier"
+            == "invalid_params"
     )
     let invalidModifierShape = try request([
         "id": 74,
@@ -565,9 +575,9 @@ do {
             "params": ["key": "enter", "modifiers": []],
         ])
         check(
-            "key_press 未授权 → accessibility_permission_required",
+            "key_press 缺 observation → invalid_params",
             (keyPermission["error"] as? [String: Any])?["code"] as? String
-                == "accessibility_permission_required"
+                == "invalid_params"
         )
     } else {
         check("已授权环境跳过真实 key_press，避免自动按键", true)
@@ -650,6 +660,15 @@ do {
     check("focused window 优先", v7Result?["window_order"] as? [Int] == [1, 0, 2])
     check("scroll 非零校验", v7Result?["valid_scroll"] as? Bool == true
         && v7Result?["invalid_scroll"] as? Bool == false)
+
+    let changed = try request([
+        "id": 84, "method": "__test_fresh_guard",
+        "params": ["state_matches": false],
+    ])
+    let changedResult = changed["result"] as? [String: Any]
+    check("desktop state changed 后拒绝", changedResult?["accepted"] as? Bool == false)
+    check("desktop state changed 后清 cache",
+          changedResult?["cache_cleared"] as? Bool == true)
 } catch {
     check("协议用例执行无异常", false, "\(error)")
 }

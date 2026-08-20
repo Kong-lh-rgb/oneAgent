@@ -27,6 +27,7 @@ import asyncio
 import contextlib
 import json
 import logging
+from collections import deque
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -63,6 +64,9 @@ class MacOSHelperClient:
         self._stderr_task: asyncio.Task[None] | None = None
         self._next_id = 0
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
+        self._retired_request_ids: deque[int] = deque(maxlen=512)
+        self._retired_request_set: set[int] = set()
+        self._protocol_broken = False
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -81,6 +85,7 @@ class MacOSHelperClient:
             stderr=asyncio.subprocess.PIPE,
         )
         self._process = process
+        self._protocol_broken = False
         self._reader_task = asyncio.create_task(self._reader_loop())
         self._stderr_task = asyncio.create_task(self._stderr_loop())
 
@@ -116,6 +121,22 @@ class MacOSHelperClient:
                 with contextlib.suppress(Exception):
                     await asyncio.wait_for(process.wait(), timeout=5)
         self._process = None
+
+    async def restart(self) -> None:
+        """丢弃旧连接并启动新 helper；不会重放任何旧请求。"""
+
+        await self.close()
+        await self.start()
+
+    async def ensure_started(self) -> None:
+        """保证 helper 可接收一条全新请求；仅负责恢复进程。"""
+
+        if (
+            self._process is None
+            or self._process.returncode is not None
+            or self._protocol_broken
+        ):
+            await self.restart()
 
     # ------------------------------------------------------------------
     # 请求
@@ -159,9 +180,15 @@ class MacOSHelperClient:
         try:
             process.stdin.write(line)
             await process.stdin.drain()
+        except asyncio.CancelledError:
+            self._pending.pop(request_id, None)
+            future.cancel()
+            self._retire(request_id)
+            raise
         except Exception as exc:
             self._pending.pop(request_id, None)
             future.cancel()
+            self._retire(request_id)
             raise ComputerHelperProcessError(
                 f"failed to write to computer helper: {exc}"
             ) from exc
@@ -173,9 +200,15 @@ class MacOSHelperClient:
         except TimeoutError:
             self._pending.pop(request_id, None)
             future.cancel()
+            self._retire(request_id)
             raise ComputerHelperError(
                 f"computer helper request {request_id} timed out"
             ) from None
+        except asyncio.CancelledError:
+            self._pending.pop(request_id, None)
+            future.cancel()
+            self._retire(request_id)
+            raise
 
     # ------------------------------------------------------------------
     # 读取
@@ -195,14 +228,18 @@ class MacOSHelperClient:
                 continue
             try:
                 self._dispatch_line(raw)
-            except Exception:
-                logger.exception("computer helper: failed to dispatch line %r", raw)
+            except ComputerHelperProtocolError as exc:
+                self._break_protocol(exc)
+                break
 
-        # EOF → helper 进程退出；reject 所有 pending。
+        # EOF / 协议破坏 → 回收子进程；reject 所有 pending。
+        with contextlib.suppress(Exception):
+            await process.wait()
         self._process = None
-        self._reject_all_pending(
-            ComputerHelperProcessError("computer helper process exited")
-        )
+        if not self._protocol_broken:
+            self._reject_all_pending(
+                ComputerHelperProcessError("computer helper process exited")
+            )
 
     async def _stderr_loop(self) -> None:
         """把 helper 的 stderr 逐行写入日志（stdout 只属于协议）。"""
@@ -223,28 +260,29 @@ class MacOSHelperClient:
         try:
             payload = json.loads(raw)
         except (json.JSONDecodeError, UnicodeDecodeError):
-            logger.warning("computer helper: non-JSON stdout line dropped: %r", raw)
-            return
+            raise ComputerHelperProtocolError(
+                "computer helper emitted malformed JSON"
+            ) from None
 
         if not isinstance(payload, dict):
-            logger.warning(
-                "computer helper: non-object stdout line dropped: %r", payload
+            raise ComputerHelperProtocolError(
+                "computer helper emitted a non-object response"
             )
-            return
 
         msg_id = payload.get("id")
         if not isinstance(msg_id, int) or isinstance(msg_id, bool):
-            logger.warning(
-                "computer helper: response without valid id dropped: %r", payload
+            raise ComputerHelperProtocolError(
+                "computer helper response has an invalid id"
             )
-            return
 
         future = self._pending.pop(msg_id, None)
         if future is None:
-            logger.warning(
-                "computer helper: response for unknown id %r dropped", msg_id
+            if msg_id in self._retired_request_set:
+                logger.debug("computer helper: late response ignored for %s", msg_id)
+                return
+            raise ComputerHelperProtocolError(
+                f"computer helper response has unknown id {msg_id}"
             )
-            return
 
         if "error" in payload:
             error = payload["error"]
@@ -280,6 +318,23 @@ class MacOSHelperClient:
         for future in pending.values():
             if not future.done():
                 future.set_exception(exc)
+
+    def _retire(self, request_id: int) -> None:
+        if len(self._retired_request_ids) == self._retired_request_ids.maxlen:
+            oldest = self._retired_request_ids[0]
+            self._retired_request_set.discard(oldest)
+        self._retired_request_ids.append(request_id)
+        self._retired_request_set.add(request_id)
+
+    def _break_protocol(self, exc: ComputerHelperProtocolError) -> None:
+        """协议损坏后拒绝所有 pending，并使连接只能通过 restart 恢复。"""
+
+        self._protocol_broken = True
+        self._reject_all_pending(exc)
+        process = self._process
+        if process is not None and process.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                process.terminate()
 
 
 __all__ = [

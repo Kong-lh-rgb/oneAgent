@@ -7,6 +7,28 @@
 ---
 ## 2026-08-20
 
+### 完成：macOS Computer V8 - Lease / Freshness / Reliability
+
+#### Bad Case
+- [x] 多个 Run 或两个 Host 可同时覆盖 helper 的唯一 Observation cache，导致 refs 串线和抢机器
+- [x] Approval 等待期间用户切换 App/窗口，旧 observation_id 仍可能通过缓存校验并误操作新界面
+- [x] type/key/scroll 不绑定 Observation，可在未观察真实桌面的情况下盲目发送输入事件
+- [x] helper 非 JSON、非法响应 ID和未知 ID 只 warning/drop，pending Future 可能泄漏到超时
+- [x] helper 崩溃后若自动重放 mutation，无法判断副作用是否已经发生
+
+#### 实现结果
+- [x] 新增 run_id owner 的 ComputerLeaseManager：进程内幂等 owner + `flock(LOCK_NB)` 跨 Host 互斥
+- [x] ComputerLeaseHook 统一保护全部 computer_*；缺 run context 或机器 busy 时在 Runtime 调用前拒绝
+- [x] RunManager 新增通用幂等 finalizer，completed/failed/cancelled/exception 均释放 lease，清理失败不改终态
+- [x] Swift 缓存 frontmost PID、focused AX identity 与 bounds；所有 mutation 在副作用前重新验证 freshness
+- [x] type/key/scroll 内部携带 expected_observation_id；Python 无 latest observation 直接拒绝
+- [x] helper mutation crash/timeout/protocol failure 不重试并使本地 Observation 失效；新 observe 可安全 restart helper
+- [x] JSON Lines 非 JSON、非对象、非法/未知 ID 会中止损坏连接并 reject pending；timeout/cancel id 有界退休
+- [x] native Observation 状态拆到 `ObservationState.swift`，保持 ScreenCapture 与纯坐标逻辑独立
+- [x] 新增 V8 lease demo 与 Python/Swift 离线安全测试，不执行真实点击、输入、滚动或截图
+
+---
+
 ### 完成：macOS Computer V7 - Core Interaction Completion
 
 #### Bad Case

@@ -14,6 +14,7 @@
 import json
 import os
 import sys
+import time
 
 HELPER_VERSION = "0.0.1-test"
 
@@ -81,6 +82,22 @@ def main() -> None:
                         },
                     }
                 )
+        elif method == "observe":
+            write_response(
+                {
+                    "id": msg_id,
+                    "result": {
+                        "active_app": {
+                            "name": "FakeApp",
+                            "bundle_id": "com.example.fake",
+                            "process_id": 4242,
+                        },
+                        "active_window": None,
+                        "windows": [],
+                        "elements": [],
+                    },
+                }
+            )
         elif method == "__bad_json":
             sys.stdout.write("this is not json\n")
             sys.stdout.flush()
@@ -92,6 +109,15 @@ def main() -> None:
         elif method == "__malformed":
             # 有 id 但既无 result 也无 error。
             write_response({"id": msg_id})
+        elif method == "__invalid_id":
+            write_response({"id": "bad", "result": {"ok": True}})
+        elif method == "__non_object":
+            sys.stdout.write("[]\n")
+            sys.stdout.flush()
+        elif method == "__delay":
+            delay = float((payload.get("params") or {}).get("seconds", 0.05))
+            time.sleep(delay)
+            write_response({"id": msg_id, "result": {"delayed": True}})
         elif method == "__crash":
             os._exit(1)
         else:
