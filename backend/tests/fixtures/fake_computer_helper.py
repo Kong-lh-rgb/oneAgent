@@ -64,6 +64,23 @@ def main() -> None:
                     },
                 }
             )
+        elif method == "open_app":
+            # 模拟 Swift helper：不启动真实 App，只回结构化的成功结果。
+            params = payload.get("params")
+            app = params.get("app") if isinstance(params, dict) else None
+            if not isinstance(app, str) or not app.strip():
+                error(msg_id, "invalid_params", "missing or empty app")
+            else:
+                write_response(
+                    {
+                        "id": msg_id,
+                        "result": {
+                            "app": app,
+                            "bundle_id": f"com.example.{app}",
+                            "process_id": 4242,
+                        },
+                    }
+                )
         elif method == "__bad_json":
             sys.stdout.write("this is not json\n")
             sys.stdout.flush()

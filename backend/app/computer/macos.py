@@ -1,28 +1,34 @@
-"""MacOSComputerRuntime：真实 macOS ComputerRuntime 的骨架（V0）。
+"""MacOSComputerRuntime：真实 macOS ComputerRuntime（V1）。
 
-本轮只建立生命周期（start / close 驱动 MacOSHelperClient 的长驻子进程），
-ComputerRuntime 契约里的 7 个真实操作方法（observe/click/type/key/scroll/
-open_app/focus_window）**全部**抛 ``NotImplementedError``，不返回假的成功。
+V1 只实现 ``open_app``（通过 Swift helper → NSWorkspace 真正打开应用），
+其余契约方法（observe/click/type/key/scroll/focus_window）仍抛
+``NotImplementedError``，不返回假的成功。
 
-真实电脑控制（AXUIElement / ScreenCaptureKit / CGEvent / NSWorkspace）
-留到后续轮次；FakeComputerRuntime 继续用于 Agent Tool 测试。
+真实电脑控制（AXUIElement / ScreenCaptureKit / CGEvent / NSWorkspace 其余
+能力）留到后续轮次；FakeComputerRuntime 继续用于 Agent Tool 测试。
 """
 
 from __future__ import annotations
 
 from .helper_client import MacOSHelperClient
-from .models import ActionResult, CoordinateTarget, ElementTarget, Observation
+from .models import (
+    ActionName,
+    ActionResult,
+    CoordinateTarget,
+    ElementTarget,
+    Observation,
+)
 
 __all__ = ["MacOSComputerRuntime"]
 
 _NOT_IMPLEMENTED = (
-    "macOS Computer Runtime 本轮只打通 Helper 生命周期，"
+    "macOS Computer Runtime 本轮只实现 open_app，"
     "该操作尚未实现真实电脑控制"
 )
 
 
 class MacOSComputerRuntime:
-    """把真实操作委托给 Swift helper 的骨架（当前仅生命周期）。"""
+    """把真实操作委托给 Swift helper 的骨架（当前仅 open_app）。"""
 
     def __init__(self, helper_client: MacOSHelperClient) -> None:
         self.helper_client = helper_client
@@ -42,8 +48,29 @@ class MacOSComputerRuntime:
         await self.helper_client.close()
 
     # ------------------------------------------------------------------
-    # ComputerRuntime 契约 —— V0 全部未实现
+    # ComputerRuntime 契约
     # ------------------------------------------------------------------
+
+    async def open_app(self, app: str) -> ActionResult:
+        """通过 Swift helper（NSWorkspace）真正打开一个应用。
+
+        ``app`` 支持应用名称或 bundle id。helper 返回 error（如
+        app_not_found / app_launch_failed）时向上抛出 ComputerHelperError。
+        """
+
+        if not isinstance(app, str) or not app.strip():
+            raise ValueError("'app' must be a non-empty string")
+
+        result = await self.helper_client.call("open_app", {"app": app})
+        return ActionResult(
+            success=True,
+            action=ActionName.OPEN_APP,
+            metadata={
+                "app": result.get("app"),
+                "bundle_id": result.get("bundle_id"),
+                "process_id": result.get("process_id"),
+            },
+        )
 
     async def observe(self, include_screenshot: bool = True) -> Observation:
         raise NotImplementedError(_NOT_IMPLEMENTED)
@@ -69,9 +96,6 @@ class MacOSComputerRuntime:
         delta_x: int = 0,
         delta_y: int = 0,
     ) -> ActionResult:
-        raise NotImplementedError(_NOT_IMPLEMENTED)
-
-    async def open_app(self, app: str) -> ActionResult:
         raise NotImplementedError(_NOT_IMPLEMENTED)
 
     async def focus_window(self, window_ref: str) -> ActionResult:

@@ -248,6 +248,49 @@ async def test_unknown_id_response_dropped() -> None:
 
 
 # ---------------------------------------------------------------------------
+# open_app 传输层（使用 fake helper，不启动真实 App）
+# ---------------------------------------------------------------------------
+
+
+async def test_open_app_transport_returns_result() -> None:
+    client = _make_client()
+    await client.start()
+    try:
+        result = await client.call("open_app", {"app": "TextEdit"})
+        assert result["app"] == "TextEdit"
+        assert result["bundle_id"] == "com.example.TextEdit"
+        assert result["process_id"] == 4242
+    finally:
+        await client.close()
+
+
+async def test_open_app_missing_app_invalid_params() -> None:
+    client = _make_client()
+    await client.start()
+    try:
+        with pytest.raises(ComputerHelperError, match="invalid_params"):
+            await client.call("open_app", {})
+        with pytest.raises(ComputerHelperError, match="invalid_params"):
+            await client.call("open_app", {"app": "   "})
+    finally:
+        await client.close()
+
+
+async def test_open_app_concurrent_with_ping() -> None:
+    client = _make_client()
+    await client.start()
+    try:
+        open_result, ping_result = await asyncio.gather(
+            client.call("open_app", {"app": "Notes"}),
+            client.call("ping", {}),
+        )
+        assert open_result["app"] == "Notes"
+        assert ping_result == {"ok": True}
+    finally:
+        await client.close()
+
+
+# ---------------------------------------------------------------------------
 # MacOSComputerRuntime 骨架
 # ---------------------------------------------------------------------------
 
@@ -275,10 +318,9 @@ async def test_macos_runtime_methods_not_implemented() -> None:
             runtime.type("hi"),
             runtime.key("enter"),
             runtime.scroll(),
-            runtime.open_app("Notes"),
             runtime.focus_window("w1"),
         ):
-            with pytest.raises(NotImplementedError, match="生命周期"):
+            with pytest.raises(NotImplementedError, match="open_app"):
                 await call
     finally:
         await runtime.close()

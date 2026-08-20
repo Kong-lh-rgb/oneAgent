@@ -200,11 +200,48 @@ do {
         (noMethod["error"] as? [String: Any])?["code"] as? String
             == "invalid_request"
     )
+
+    // 7. open_app 缺 app → invalid_params（不启动任何 App）
+    let noApp = try request(["id": 20, "method": "open_app", "params": [:]])
+    check(
+        "open_app 缺 app → invalid_params",
+        (noApp["error"] as? [String: Any])?["code"] as? String
+            == "invalid_params"
+    )
+
+    // 8. open_app 空 app → invalid_params
+    let emptyApp = try request([
+        "id": 21, "method": "open_app", "params": ["app": ""]
+    ])
+    check(
+        "open_app 空 app → invalid_params",
+        (emptyApp["error"] as? [String: Any])?["code"] as? String
+            == "invalid_params"
+    )
+
+    // 9. 不存在的 app → app_not_found（不会真正启动任何东西）
+    let missingApp = try request([
+        "id": 22,
+        "method": "open_app",
+        "params": ["app": "OneAgentDefinitelyMissingApp_9f3a2b"],
+    ])
+    check(
+        "open_app 不存在 → app_not_found",
+        (missingApp["error"] as? [String: Any])?["code"] as? String
+            == "app_not_found"
+    )
+
+    // 10. open_app 出错后 helper 仍能处理下一条 ping
+    let afterOpen = try request(["id": 23, "method": "ping", "params": [:]])
+    check(
+        "open_app 出错后仍能 ping",
+        (afterOpen["result"] as? [String: Any])?["ok"] as? Bool == true
+    )
 } catch {
     check("协议用例执行无异常", false, "\(error)")
 }
 
-// 7. stdin EOF → 正常退出
+// 11. stdin EOF → 正常退出
 try? stdinPipe.fileHandleForWriting.close()
 process.waitUntilExit()
 check("stdin EOF 后 exit code == 0", process.terminationStatus == 0)
