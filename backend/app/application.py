@@ -34,6 +34,7 @@ from app.automation import (
     register_automation_tools,
 )
 from app.checkpoint import SQLiteCheckpointStore
+from app.computer import ComputerRuntime, register_computer_tools
 from app.context import (
     ContextManager,
     ContextSettings,
@@ -190,6 +191,7 @@ class Application:
         memory_maintenance_config: MemoryMaintenanceConfig | None = None,
         skill_learning_settings: SkillLearningSettings | None = None,
         desktop_approval: bool = False,
+        computer_runtime: ComputerRuntime | None = None,
     ) -> None:
         self.database = Path(database).expanduser().resolve()
         self.tasks_dir = Path(tasks_dir).expanduser().resolve()
@@ -216,6 +218,8 @@ class Application:
         self._skill_learning_settings = skill_learning_settings
         # True = DesktopApprovalGate（Server）；False = ConsoleApprovalGate（CLI）。
         self.desktop_approval = desktop_approval
+        # Computer Runtime：V0 只注入 Fake；None 时不注册 computer_* 工具。
+        self._computer_runtime = computer_runtime
 
         self.settings = settings or ModelSettings()
         if registry is not None:
@@ -248,6 +252,7 @@ class Application:
         self.approval_store: SQLiteApprovalStore | None = None
         self.approval_gate: Any | None = None
         self.desktop_approval_gate: DesktopApprovalGate | None = None
+        self.computer_runtime: ComputerRuntime | None = None
         self.tool_registry: ToolRegistry | None = None
         self.task_store: FileTaskStore | None = None
         self.memory_manager: MemoryManager | None = None
@@ -345,6 +350,12 @@ class Application:
             default_provider=self.provider,
             default_model=self.model,
         )
+
+        # Computer Runtime：V0 只接入 FakeComputerRuntime；未注入则不注册，
+        # 普通 CLI / Server 现有功能完全不受影响。
+        if self._computer_runtime is not None:
+            register_computer_tools(tool_registry, self._computer_runtime)
+            self.computer_runtime = self._computer_runtime
 
         _mark_deferred_tools(tool_registry, _DEFERRED_TOOL_NAMES)
 
