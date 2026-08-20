@@ -7,6 +7,25 @@
 ---
 ## 2026-08-20
 
+### 完成：V10 Artifact & Result Delivery
+
+#### Bad Case
+- [x] Run 只有最终文本、Trace 和工具结果，没有“真正交付给用户的结果”这一等领域对象
+- [x] 直接引用 workspace 原文件会在文件被修改、删除或覆盖后失去历史交付版本
+- [x] Desktop 缺少按 Run 查看/下载结果的入口，窗口关闭后也无法继续接收审批与完成提醒
+- [x] 把系统通知另存数据库会与 Run / Approval / Artifact 三个事实来源重复并产生一致性问题
+
+#### 实现结果
+- [x] 新增 immutable `Artifact` 模型与 `SQLiteArtifactStore`，支持 file/url、get/list 和 Run/Conversation 筛选
+- [x] `ArtifactService` 复用统一 workspace 边界，流式复制、SHA-256、100 MB 上限并原子写入 managed artifact 目录
+- [x] `artifact_publish` 通过 `ToolExecutionContext` 绑定真实 Run/Conversation，并拒绝模型伪造 ID
+- [x] 新增 `artifact.list` / `artifact.get` RPC 与 loopback-only 文件端点，公开结构不泄漏 storage path
+- [x] publish 成功后广播 `artifact.created`；无 broadcaster 或通知失败都不影响 durable Artifact
+- [x] Desktop 新增 Artifacts 页面与 Run Detail 交付区；文件 URL 只由 opaque Artifact ID 构造
+- [x] Electron 仅暴露受限 `openExternal` / `notify`，macOS 关闭窗口后隐藏并保持 Renderer/RPC 活跃
+- [x] 隐藏状态下投递 Approval / Run 终态 / Artifact 原生通知，敏感正文不进通知并使用进程内 key 去重
+- [x] 新增 Artifact 后端专项测试与 Desktop API/UI/通知测试，完成全量回归
+
 ### 完成：macOS Computer V8 - Lease / Freshness / Reliability
 
 #### Bad Case

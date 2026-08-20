@@ -28,6 +28,11 @@ from app.approval import (
     DesktopApprovalGate,
     SQLiteApprovalStore,
 )
+from app.artifact import (
+    ArtifactService,
+    SQLiteArtifactStore,
+    register_artifact_tools,
+)
 from app.automation import (
     AutomationScheduler,
     SQLiteAutomationStore,
@@ -101,6 +106,7 @@ from app.tools import (
     build_builtin_tool_registry,
     describe_safe_rule,
 )
+from app.tools.builtin._workspace import workspace_root_path
 from app.trace import SQLiteTraceStore
 
 logger = logging.getLogger("oneagent.application")
@@ -199,9 +205,11 @@ class Application:
         desktop_approval: bool = False,
         computer_runtime: ComputerRuntime | None = None,
         computer_host_status: ComputerHostStatus | None = None,
+        workspace_root: str | Path | None = None,
     ) -> None:
         self.database = Path(database).expanduser().resolve()
         self.tasks_dir = Path(tasks_dir).expanduser().resolve()
+        self.workspace_root = workspace_root_path(workspace_root)
         self.mcp_config = Path(mcp_config).expanduser().resolve()
         self.memory_dir = (
             Path(memory_dir).expanduser().resolve() if memory_dir is not None else None
@@ -260,6 +268,8 @@ class Application:
         self.approval_store: SQLiteApprovalStore | None = None
         self.approval_gate: Any | None = None
         self.desktop_approval_gate: DesktopApprovalGate | None = None
+        self.artifact_store: SQLiteArtifactStore | None = None
+        self.artifact_service: ArtifactService | None = None
         self.computer_runtime: ComputerRuntime | None = None
         self.computer_lease: ComputerLeaseManager | None = None
         self.tool_registry: ToolRegistry | None = None
@@ -318,7 +328,17 @@ class Application:
                 rule_label_factory=describe_safe_rule,
             )
 
-        tool_registry = build_builtin_tool_registry()
+        tool_registry = build_builtin_tool_registry(self.workspace_root)
+
+        artifact_store = SQLiteArtifactStore(database)
+        await artifact_store.initialize()
+        artifact_service = ArtifactService(
+            artifact_store,
+            self.workspace_root,
+            managed_dir=database.parent / "artifacts",
+        )
+        register_artifact_tools(tool_registry, artifact_service)
+
         task_store = FileTaskStore(self.tasks_dir)
         await task_store.initialize()
         register_task_tools(tool_registry, task_store)
@@ -500,6 +520,8 @@ class Application:
         self.desktop_approval_gate = (
             approval_gate if isinstance(approval_gate, DesktopApprovalGate) else None
         )
+        self.artifact_store = artifact_store
+        self.artifact_service = artifact_service
         self.tool_registry = tool_registry
         self.task_store = task_store
         self.memory_manager = memory_manager

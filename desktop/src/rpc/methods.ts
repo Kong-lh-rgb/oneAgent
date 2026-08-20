@@ -21,6 +21,8 @@ export const RpcMethods = {
   approvalGet: 'approval.get',
   approvalApprove: 'approval.approve',
   approvalDeny: 'approval.deny',
+  artifactList: 'artifact.list',
+  artifactGet: 'artifact.get',
   taskGet: 'task.get',
   taskPlanAccept: 'task.plan_accept',
   taskPlanReject: 'task.plan_reject',
@@ -41,4 +43,3 @@ export const RpcMethodErrorCode = {
   ResourceNotFound: -32000,
   InvalidState: -32001,
 } as const
-

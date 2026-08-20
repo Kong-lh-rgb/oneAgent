@@ -222,6 +222,18 @@ textarea:focus {
   text-decoration: underline;
 }
 
+.artifact-target {
+  max-width: 320px;
+  overflow-wrap: anywhere;
+}
+
+.artifact-action {
+  display: inline-block;
+  color: var(--text);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
 /* 状态徽章 */
 .badge {
   display: inline-block;

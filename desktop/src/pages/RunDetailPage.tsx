@@ -2,9 +2,11 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 
 import { SERVER_URL } from '../api/config'
+import { listArtifacts } from '../api/artifacts'
 import { getLatestComputerObservation } from '../api/computer'
 import { cancelRun, getRun, getRunTrace, recoverRun } from '../api/runs'
 import ComputerObservationPanel from '../components/ComputerObservationPanel'
+import ArtifactList from '../components/ArtifactList'
 import RunBadge from '../components/RunBadge'
 import TraceTimeline from '../components/TraceTimeline'
 
@@ -43,10 +45,16 @@ export default function RunDetailPage({
     refetchInterval: 3000,
     retry: false,
   })
+  const artifactsQuery = useQuery({
+    queryKey: ['artifacts', 'run', runId],
+    queryFn: () => listArtifacts({ runId, limit: 100 }),
+    refetchInterval: 3000,
+  })
 
   const run = runQuery.data
   const events = traceQuery.data?.events ?? []
   const computerObservation = computerObservationQuery.data
+  const artifacts = artifactsQuery.data ?? []
 
   const doCancel = async (): Promise<void> => {
     setNotice(null)
@@ -134,6 +142,22 @@ export default function RunDetailPage({
           />
         </div>
       ) : null}
+
+      <RunArtifactsSection artifacts={artifacts} />
     </div>
+  )
+}
+
+export function RunArtifactsSection({
+  artifacts,
+}: {
+  artifacts: Awaited<ReturnType<typeof listArtifacts>>
+}): React.JSX.Element | null {
+  if (artifacts.length === 0) return null
+  return (
+    <section style={{ marginTop: 14 }}>
+      <h3 style={{ fontSize: 14, margin: '0 0 8px' }}>Artifacts</h3>
+      <ArtifactList artifacts={artifacts} compact />
+    </section>
   )
 }
