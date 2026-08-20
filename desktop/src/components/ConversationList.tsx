@@ -1,4 +1,5 @@
 import type { Conversation } from '../api/types'
+import { Icon } from './Icon'
 
 export default function ConversationList({
   conversations,
@@ -12,35 +13,31 @@ export default function ConversationList({
   onNew: () => void
 }): React.JSX.Element {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div style={{ padding: 8 }}>
-        <button className="btn btn-primary" style={{ width: '100%' }} onClick={onNew}>
-          ＋ 新建会话
+    <div className="conversation-sidebar__content">
+      <div className="conversation-sidebar__top">
+        <div className="conversation-sidebar__label">Conversations</div>
+        <button className="new-conversation" type="button" onClick={onNew}>
+          <Icon name="plus" size={14} />
+          New conversation
         </button>
       </div>
-      <div style={{ flex: 1, overflowY: 'auto' }}>
-        {conversations.length === 0 && (
-          <div className="empty">暂无会话</div>
-        )}
+      <div className="conversation-list">
+        {conversations.length === 0 ? (
+          <div className="conversation-list__empty">No conversations yet</div>
+        ) : null}
         {conversations.map((conversation) => (
           <button
             key={conversation.id}
-            className="nav-item"
-            style={{
-              display: 'block',
-              width: '100%',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              ...(selectedId === conversation.id
-                ? { background: 'var(--accent-soft)', color: 'var(--accent)' }
-                : {}),
-            }}
+            type="button"
+            className={`conversation-item ${selectedId === conversation.id ? 'active' : ''}`}
             onClick={() => onSelect(conversation.id)}
+            aria-current={selectedId === conversation.id ? 'true' : undefined}
           >
-            {conversation.title || '未命名会话'}
-            <span className="text-muted" style={{ marginLeft: 6, fontSize: 12 }}>
-              {conversation.message_count}
+            <span className="conversation-item__title">
+              {conversation.title || 'Untitled conversation'}
+            </span>
+            <span className="conversation-item__meta">
+              {conversation.message_count} messages
             </span>
           </button>
         ))}

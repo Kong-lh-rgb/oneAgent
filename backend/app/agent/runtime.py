@@ -578,13 +578,25 @@ class AgentRuntime:
                 )
 
             try:
-                response = await adapter.complete(
+                async def emit_text_delta(delta: str) -> None:
+                    if not delta:
+                        return
+                    await emitter.emit(
+                        AgentEventType.MODEL_OUTPUT_DELTA,
+                        step=step,
+                        provider=resolved_provider,
+                        model=resolved_model,
+                        delta=delta,
+                    )
+
+                response = await adapter.complete_stream(
                     ModelRequest(
                         messages=request_messages,
                         model=resolved_model,
                         tools=request_tools,
                         max_output_tokens=effective_max_output_tokens,
-                    )
+                    ),
+                    on_text_delta=emit_text_delta,
                 )
             except Exception as exc:
                 return await stop_with_error(

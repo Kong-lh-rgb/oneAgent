@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 
+import { approveApproval, denyApproval, listApprovals } from '../api/approvals'
+import { listArtifacts } from '../api/artifacts'
 import {
   createConversation,
   getConversation,
@@ -8,20 +10,39 @@ import {
   sendMessage,
 } from '../api/conversations'
 import { getTask, planAccept, planReject } from '../api/tasks'
-import type { AgentMode, Task } from '../api/types'
+import type { AgentMode, Message, Task } from '../api/types'
+import ApprovalCard from '../components/ApprovalCard'
+import ChatEmptyState from '../components/ChatEmptyState'
+import ChatHeader from '../components/ChatHeader'
 import Composer from '../components/Composer'
 import ConversationList from '../components/ConversationList'
+import LiveAgentTurn from '../components/LiveAgentTurn'
 import MessageList from '../components/MessageList'
+import PlanCard from '../components/PlanCard'
+import ResultCard from '../components/ResultCard'
 import RunActivity from '../components/RunActivity'
+import { Icon } from '../components/Icon'
+import { SectionHeader } from '../components/ui'
+import { useEventsStore } from '../stores/events'
 
 export default function ChatPage(): React.JSX.Element {
   const queryClient = useQueryClient()
+  const eventsByRun = useEventsStore((state) => state.eventsByRun)
+  const runStatuses = useEventsStore((state) => state.runStatuses)
+  const streamTextByRun = useEventsStore((state) => state.streamTextByRun)
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [activeRunId, setActiveRunId] = useState<string | null>(null)
+  const [lastRunId, setLastRunId] = useState<string | null>(null)
   const [mode, setMode] = useState<AgentMode>('normal')
-  // Plan Mode 结果：生成的 PENDING Task + 展示/操作状态。
+  const [draft, setDraft] = useState('')
+  const [conversationSidebarOpen, setConversationSidebarOpen] = useState(true)
+  const [activityOpen, setActivityOpen] = useState(false)
   const [planTask, setPlanTask] = useState<Task | null>(null)
   const [planResolved, setPlanResolved] = useState<string | null>(null)
+  const [optimisticMessage, setOptimisticMessage] = useState<{
+    conversationId: string
+    message: Message
+  } | null>(null)
+  const [sendError, setSendError] = useState<string | null>(null)
 
   const conversationsQuery = useQuery({
     queryKey: ['conversations'],
@@ -29,7 +50,6 @@ export default function ChatPage(): React.JSX.Element {
   })
   const conversations = conversationsQuery.data ?? []
 
-  // 默认选中最近会话。
   useEffect(() => {
     if (selectedId === null && conversations.length > 0) {
       setSelectedId(conversations[0].id)
@@ -42,11 +62,59 @@ export default function ChatPage(): React.JSX.Element {
     enabled: selectedId !== null,
   })
 
+  // conversation.send 返回前也能从共享事件流识别当前 Run，不需要改 RPC。
+  const liveRunId = useMemo(() => {
+    if (!selectedId) return null
+    let candidate: { id: string; time: string } | null = null
+    for (const [runId, events] of Object.entries(eventsByRun)) {
+      const latest = events.at(-1)
+      if (!latest || latest.conversation_id !== selectedId) continue
+      if (!['pending', 'running'].includes(runStatuses[runId] ?? '')) continue
+      if (!candidate || latest.event_time > candidate.time) {
+        candidate = { id: runId, time: latest.event_time }
+      }
+    }
+    return candidate?.id ?? null
+  }, [eventsByRun, runStatuses, selectedId])
+  const activeRunId = liveRunId ?? lastRunId
+  const activeRunStatus = activeRunId ? runStatuses[activeRunId] : undefined
+
+  const approvalsQuery = useQuery({
+    queryKey: ['chat-approvals', activeRunId],
+    queryFn: () => listApprovals('pending'),
+    refetchInterval: 2000,
+    enabled: activeRunId !== null,
+  })
+  const pendingApproval =
+    approvalsQuery.data?.find((approval) => approval.run_id === activeRunId) ?? null
+
+  const artifactsQuery = useQuery({
+    queryKey: ['chat-artifacts', activeRunId],
+    queryFn: () =>
+      activeRunId ? listArtifacts({ runId: activeRunId }) : Promise.resolve([]),
+    refetchInterval: 3000,
+    enabled: activeRunId !== null,
+  })
+  const artifacts = artifactsQuery.data ?? []
+
+  const resolveApprovalMutation = useMutation({
+    mutationFn: (action: { id: string; decision: 'approve' | 'deny' }) =>
+      action.decision === 'approve'
+        ? approveApproval(action.id)
+        : denyApproval(action.id),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['chat-approvals'] })
+      void queryClient.invalidateQueries({ queryKey: ['approvals'] })
+    },
+  })
+
   const newConversationMutation = useMutation({
     mutationFn: () => createConversation(),
     onSuccess: (conversation) => {
       setSelectedId(conversation.id)
+      setLastRunId(null)
       setPlanTask(null)
+      setPlanResolved(null)
       void queryClient.invalidateQueries({ queryKey: ['conversations'] })
     },
   })
@@ -55,16 +123,15 @@ export default function ChatPage(): React.JSX.Element {
     mutationFn: ({
       conversationId,
       content,
-      mode: sendMode,
+      sendMode,
     }: {
       conversationId: string
       content: string
-      mode: AgentMode
+      sendMode: AgentMode
     }) => sendMessage(conversationId, content, sendMode),
     onSuccess: async (data) => {
-      setActiveRunId(data.run.id)
+      setLastRunId(data.run.id)
       setPlanResolved(null)
-      // Plan Mode：若生成了 PENDING Task，拉取详情用于展示 + Accept/Reject。
       if (data.run.mode === 'plan' && data.plan_task_id) {
         try {
           setPlanTask(await getTask(data.plan_task_id))
@@ -74,162 +141,182 @@ export default function ChatPage(): React.JSX.Element {
       } else {
         setPlanTask(null)
       }
-      void queryClient.invalidateQueries({ queryKey: ['conversation', selectedId] })
-      void queryClient.invalidateQueries({ queryKey: ['conversations'] })
-      void queryClient.invalidateQueries({ queryKey: ['runs'] })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['conversation', selectedId] }),
+        queryClient.invalidateQueries({ queryKey: ['conversations'] }),
+        queryClient.invalidateQueries({ queryKey: ['runs'] }),
+        queryClient.invalidateQueries({ queryKey: ['chat-artifacts'] }),
+      ])
     },
+    onError: (error: unknown) => {
+      setSendError(error instanceof Error ? error.message : String(error))
+    },
+    onSettled: () => setOptimisticMessage(null),
   })
 
   const resolvePlanMutation = useMutation({
-    mutationFn: (action: { taskId: string; decision: 'accept' | 'reject' }) => {
-      if (action.decision === 'accept') return planAccept(action.taskId)
-      return planReject(action.taskId)
-    },
+    mutationFn: (action: { taskId: string; decision: 'accept' | 'reject' }) =>
+      action.decision === 'accept'
+        ? planAccept(action.taskId)
+        : planReject(action.taskId),
     onSuccess: (_task, variables) => {
-      setPlanResolved(variables.decision === 'accept' ? 'accepted' : 'rejected')
+      setPlanResolved(variables.decision === 'accept' ? 'Plan accepted' : 'Plan rejected')
       setPlanTask(null)
       void queryClient.invalidateQueries({ queryKey: ['tasks'] })
     },
-    onError: (err: unknown) => {
-      setPlanResolved(err instanceof Error ? err.message : String(err))
+    onError: (error: unknown) => {
+      setPlanResolved(error instanceof Error ? error.message : String(error))
     },
   })
 
-  const messages = conversationQuery.data?.messages ?? []
-  const latestAssistant = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      if (messages[i].role === 'assistant') return messages[i].content
+  const storedMessages = conversationQuery.data?.messages ?? []
+  const messages =
+    optimisticMessage?.conversationId === selectedId
+      ? [...storedMessages, optimisticMessage.message]
+      : storedMessages
+  const selectedConversation = conversations.find((item) => item.id === selectedId)
+  const showNewConversationHome = selectedId !== null && messages.length === 0
+  const progressRunId = sendMutation.isPending ? liveRunId : activeRunId
+  const activeEvents = progressRunId ? (eventsByRun[progressRunId] ?? []) : []
+  const latestModelStep = [...activeEvents]
+    .reverse()
+    .find((event) => event.type === 'model_started')?.step
+  const streamedText =
+    progressRunId && latestModelStep !== null && latestModelStep !== undefined
+      ? (streamTextByRun[progressRunId]?.[latestModelStep] ?? '')
+      : ''
+
+  const chooseExamplePrompt = (prompt: string): void => {
+    setDraft(prompt)
+    if (selectedId === null && !newConversationMutation.isPending) {
+      newConversationMutation.mutate()
     }
-    return null
-  }, [messages])
+  }
 
   return (
-    <div className="page">
-      <div style={{ width: 240, borderRight: '1px solid var(--border)', background: 'var(--bg-panel)', display: 'flex', flexDirection: 'column' }}>
+    <div className="chat-workspace">
+      <aside
+        className={`conversation-sidebar ${conversationSidebarOpen ? 'open' : 'collapsed'}`}
+        aria-hidden={!conversationSidebarOpen}
+      >
         <ConversationList
           conversations={conversations}
           selectedId={selectedId}
           onSelect={(id) => {
             setSelectedId(id)
-            setActiveRunId(null)
+            setLastRunId(null)
             setPlanTask(null)
             setPlanResolved(null)
+            setActivityOpen(false)
           }}
           onNew={() => newConversationMutation.mutate()}
         />
-      </div>
+      </aside>
 
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        <div style={{ flex: 1, overflowY: 'auto', padding: 16 }}>
-          {selectedId === null ? (
-            <div className="empty">选择或新建一个会话。</div>
-          ) : (
-            <MessageList messages={messages} />
-          )}
+      <main className="conversation-main">
+        <ChatHeader
+          title={selectedConversation?.title || 'New conversation'}
+          conversationSidebarOpen={conversationSidebarOpen}
+          onToggleConversationSidebar={() => setConversationSidebarOpen((open) => !open)}
+          runStatus={activeRunStatus}
+          activityOpen={activityOpen}
+          onToggleActivity={() => setActivityOpen((open) => !open)}
+        />
 
-          {/* Plan Mode 结果：生成的计划 + Accept / Reject */}
-          {planTask && (
-            <div className="approval-card" style={{ marginTop: 12 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <strong>{planTask.title}</strong>
-                <span className="badge badge-pending">{planTask.status}</span>
-              </div>
-              {planTask.goal && (
-                <div className="text-dim" style={{ marginTop: 4 }}>
-                  goal: {planTask.goal}
+        <div className={`conversation-scroll ${showNewConversationHome ? 'conversation-scroll--empty' : ''}`}>
+          <div className="message-thread">
+            {selectedId === null ? (
+              <section className="no-conversation">
+                <div className="chat-empty__mark">oa</div>
+                <h1>Start a conversation</h1>
+                <p>Create a conversation, then give oneAgent something to work on.</p>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => newConversationMutation.mutate()}
+                  disabled={newConversationMutation.isPending}
+                >
+                  <Icon name="plus" size={15} /> New conversation
+                </button>
+              </section>
+            ) : showNewConversationHome ? (
+              <ChatEmptyState onSelectPrompt={chooseExamplePrompt} />
+            ) : (
+              <MessageList messages={messages} />
+            )}
+
+            {sendMutation.isPending ? (
+              <LiveAgentTurn events={activeEvents} streamText={streamedText} />
+            ) : null}
+
+            {sendError ? (
+              <div className="inline-notice inline-notice--error">{sendError}</div>
+            ) : null}
+
+            {planTask ? (
+              <PlanCard
+                task={planTask}
+                busy={resolvePlanMutation.isPending}
+                onAccept={(taskId) =>
+                  resolvePlanMutation.mutate({ taskId, decision: 'accept' })
+                }
+                onReject={(taskId) =>
+                  resolvePlanMutation.mutate({ taskId, decision: 'reject' })
+                }
+              />
+            ) : null}
+            {planResolved ? <div className="inline-notice">{planResolved}</div> : null}
+
+            {pendingApproval ? (
+              <ApprovalCard
+                approval={pendingApproval}
+                busy={resolveApprovalMutation.isPending}
+                onApprove={(id) => resolveApprovalMutation.mutate({ id, decision: 'approve' })}
+                onDeny={(id) => resolveApprovalMutation.mutate({ id, decision: 'deny' })}
+              />
+            ) : null}
+
+            {artifacts.length > 0 ? (
+              <section className="results-section">
+                <SectionHeader title="Results" hint={`${artifacts.length} delivered`} />
+                <div className="results-list">
+                  {artifacts.map((artifact) => (
+                    <ResultCard key={artifact.id} artifact={artifact} />
+                  ))}
                 </div>
-              )}
-              <ol style={{ margin: '8px 0 0', paddingLeft: 18 }}>
-                {planTask.steps.map((step, index) => (
-                  <li key={step.id ?? index} style={{ marginBottom: 2 }}>
-                    {step.title}
-                  </li>
-                ))}
-              </ol>
-              <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
-                <button
-                  className="btn btn-primary btn-sm"
-                  disabled={resolvePlanMutation.isPending}
-                  onClick={() =>
-                    resolvePlanMutation.mutate({
-                      taskId: planTask.id,
-                      decision: 'accept',
-                    })
-                  }
-                >
-                  Accept Plan
-                </button>
-                <button
-                  className="btn btn-danger btn-sm"
-                  disabled={resolvePlanMutation.isPending}
-                  onClick={() =>
-                    resolvePlanMutation.mutate({
-                      taskId: planTask.id,
-                      decision: 'reject',
-                    })
-                  }
-                >
-                  Reject
-                </button>
-              </div>
-            </div>
-          )}
-          {planResolved && (
-            <div className="text-dim" style={{ marginTop: 8 }}>
-              {planResolved === 'accepted'
-                ? 'Plan accepted'
-                : planResolved === 'rejected'
-                  ? 'Plan rejected'
-                  : planResolved}
-            </div>
-          )}
-        </div>
-        {latestAssistant && (
-          <div style={{ borderTop: '1px solid var(--border)', padding: '6px 16px', fontSize: 12, color: 'var(--text-dim)' }}>
-            最后回答：{latestAssistant.slice(0, 160)}
+              </section>
+            ) : null}
           </div>
-        )}
+        </div>
+
         <Composer
-          disabled={selectedId === null || sendMutation.isPending}
+          disabled={selectedId === null}
+          sending={sendMutation.isPending}
+          mode={mode}
+          onModeChange={setMode}
+          value={draft}
+          onValueChange={setDraft}
           onSend={async (content) => {
-            if (selectedId === null) return
+            if (!selectedId) return
+            setSendError(null)
+            setOptimisticMessage({
+              conversationId: selectedId,
+              message: { role: 'user', content },
+            })
             await sendMutation.mutateAsync({
               conversationId: selectedId,
               content,
-              mode,
+              sendMode: mode,
             })
           }}
         />
-        {/* 简单模式选择：Normal / Plan */}
-        <div
-          style={{
-            display: 'flex',
-            gap: 6,
-            padding: '6px 16px 8px',
-            borderTop: '1px solid var(--border)',
-          }}
-        >
-          {(['normal', 'plan'] as const).map((item) => (
-            <button
-              key={item}
-              className={`btn btn-sm ${mode === item ? 'btn-primary' : ''}`}
-              onClick={() => setMode(item)}
-            >
-              {item === 'normal' ? 'Normal' : 'Plan'}
-            </button>
-          ))}
-          <span
-            className="text-dim"
-            style={{ marginLeft: 8, fontSize: 12, alignSelf: 'center' }}
-          >
-            {mode === 'plan' ? 'Plan Mode：只读调查 + 生成计划' : 'Normal Mode'}
-          </span>
-        </div>
-      </div>
+      </main>
 
-      <div style={{ width: 300, borderLeft: '1px solid var(--border)', background: 'var(--bg-panel)', display: 'flex', flexDirection: 'column' }}>
-        <RunActivity runId={activeRunId} />
-      </div>
+      {activityOpen ? (
+        <div className="activity-drawer">
+          <RunActivity runId={activeRunId} onClose={() => setActivityOpen(false)} />
+        </div>
+      ) : null}
     </div>
   )
 }

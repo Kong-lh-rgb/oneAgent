@@ -13,6 +13,7 @@ import { rpcClient } from '../rpc'
 interface EventsState {
   connected: boolean
   eventsByRun: Record<string, AgentEvent[]>
+  streamTextByRun: Record<string, Record<number, string>>
   runStatuses: Record<string, string>
   connect: () => void
   disconnect: () => void
@@ -31,6 +32,23 @@ export const useEventsStore = create<EventsState>((set, get) => {
     if (existing.some((item) => item.event_id === agentEvent.event_id)) {
       return
     }
+    if (
+      agentEvent.type === 'model_output_delta' &&
+      agentEvent.step !== null &&
+      agentEvent.delta
+    ) {
+      const runText = get().streamTextByRun[runId] ?? {}
+      set({
+        streamTextByRun: {
+          ...get().streamTextByRun,
+          [runId]: {
+            ...runText,
+            [agentEvent.step]: `${runText[agentEvent.step] ?? ''}${agentEvent.delta}`,
+          },
+        },
+      })
+      return
+    }
     const next = [...existing, agentEvent].slice(-MAX_EVENTS_PER_RUN)
     set({ eventsByRun: { ...get().eventsByRun, [runId]: next } })
   }
@@ -43,6 +61,7 @@ export const useEventsStore = create<EventsState>((set, get) => {
   return {
     connected: false,
     eventsByRun: {},
+    streamTextByRun: {},
     runStatuses: {},
     connect: () => {
       if (unsubscribeStatus) return // 只订阅一次

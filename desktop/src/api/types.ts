@@ -138,6 +138,7 @@ export interface AgentEvent {
   step: number | null
   provider: string | null
   model: string | null
+  delta?: string | null
   message: Message | null
   tool_call: ToolCall | null
   tool_result: {

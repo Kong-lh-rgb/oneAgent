@@ -1,6 +1,8 @@
 import type { Message } from '../api/types'
+import { Icon } from './Icon'
+import { EmptyState } from './ui'
 
-/** 极简 Markdown 渲染：只处理粗体 / 行内代码 / 代码块 / 换行。 */
+/** 轻量 Markdown 渲染：覆盖 Agent 回复里最常用的文档层级，不引入 HTML 注入。 */
 function renderInline(text: string): React.ReactNode[] {
   const parts: React.ReactNode[] = []
   const regex = /(\*\*[^*]+\*\*|`[^`]+`)/g
@@ -35,7 +37,7 @@ function renderBlocks(text: string): React.ReactNode[] {
   const flushCode = (): void => {
     if (codeBuffer.length > 0) {
       blocks.push(
-        <pre key={key++} style={{ background: 'var(--bg-panel)', padding: 10, borderRadius: 6, overflowX: 'auto' }}>
+        <pre key={key++}>
           <code>{codeBuffer.join('\n')}</code>
         </pre>,
       )
@@ -59,18 +61,56 @@ function renderBlocks(text: string): React.ReactNode[] {
       continue
     }
     if (line.trim() === '') {
-      blocks.push(<div key={key++} style={{ height: 8 }} />)
+      blocks.push(<div key={key++} className="message-assistant__spacer" />)
       continue
     }
-    blocks.push(<p key={key++} style={{ margin: 0 }}>{renderInline(line)}</p>)
+    const heading = /^(#{1,3})\s+(.+)$/.exec(line)
+    if (heading) {
+      const content = renderInline(heading[2])
+      const level = heading[1].length
+      if (level === 1) blocks.push(<h2 key={key++}>{content}</h2>)
+      else if (level === 2) blocks.push(<h3 key={key++}>{content}</h3>)
+      else blocks.push(<h4 key={key++}>{content}</h4>)
+      continue
+    }
+    const unordered = /^[-*]\s+(.+)$/.exec(line)
+    if (unordered) {
+      blocks.push(
+        <div key={key++} className="message-assistant__list-item">
+          <span aria-hidden="true">•</span>
+          <p>{renderInline(unordered[1])}</p>
+        </div>,
+      )
+      continue
+    }
+    const ordered = /^(\d+)\.\s+(.+)$/.exec(line)
+    if (ordered) {
+      blocks.push(
+        <div key={key++} className="message-assistant__list-item">
+          <span>{ordered[1]}.</span>
+          <p>{renderInline(ordered[2])}</p>
+        </div>,
+      )
+      continue
+    }
+    blocks.push(<p key={key++}>{renderInline(line)}</p>)
   }
   if (inCode) flushCode()
   return blocks
 }
 
+export function AssistantContent({ content }: { content: string }): React.JSX.Element {
+  return <div className="message-assistant__body">{renderBlocks(content)}</div>
+}
+
 export default function MessageList({ messages }: { messages: Message[] }): React.JSX.Element {
   if (messages.length === 0) {
-    return <div className="empty">还没有消息。发送一句话开始。</div>
+    return (
+      <EmptyState
+        title="开始对话"
+        hint="向 oneAgent 描述你想做的事，Enter 发送。"
+      />
+    )
   }
   return (
     <div>
@@ -79,38 +119,19 @@ export default function MessageList({ messages }: { messages: Message[] }): Reac
         .map((message, index) => {
           if (message.role === 'user') {
             return (
-              <div key={index} style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-                <div
-                  style={{
-                    maxWidth: '78%',
-                    background: 'var(--accent-soft)',
-                    border: '1px solid var(--accent)',
-                    borderRadius: 12,
-                    padding: '8px 12px',
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-word',
-                  }}
-                >
-                  {message.content}
-                </div>
+              <div key={index} className="message-user">
+                <div className="message-user__body">{message.content}</div>
               </div>
             )
           }
           if (message.role === 'assistant') {
             return (
-              <div key={index} style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 12 }}>
-                <div
-                  style={{
-                    maxWidth: '85%',
-                    background: 'var(--bg-panel)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 12,
-                    padding: '8px 12px',
-                    wordBreak: 'break-word',
-                  }}
-                >
-                  {renderBlocks(message.content ?? '')}
+              <div key={index} className="message-assistant">
+                <div className="message-assistant__author">
+                  <span className="message-assistant__avatar"><Icon name="agent" size={13} /></span>
+                  oneAgent
                 </div>
+                <AssistantContent content={message.content ?? ''} />
               </div>
             )
           }

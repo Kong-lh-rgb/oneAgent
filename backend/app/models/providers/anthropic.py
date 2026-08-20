@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from anthropic import AsyncAnthropic
@@ -39,6 +40,37 @@ class AnthropicAdapter(ModelAdapter):
         self._client = client or AsyncAnthropic(**client_kwargs)
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
+        kwargs = self._request_kwargs(request)
+
+        try:
+            response = await self._client.messages.create(**kwargs)
+        except Exception as exc:
+            raise ModelAdapterError(
+                f"{self.provider} model request failed: {exc}"
+            ) from exc
+
+        return _normalize_anthropic_response(response, self.provider)
+
+    async def complete_stream(
+        self,
+        request: ModelRequest,
+        *,
+        on_text_delta: Callable[[str], Awaitable[None]],
+    ) -> ModelResponse:
+        kwargs = self._request_kwargs(request)
+        try:
+            async with self._client.messages.stream(**kwargs) as stream:
+                async for text in stream.text_stream:
+                    if text:
+                        await on_text_delta(text)
+                response = await stream.get_final_message()
+        except Exception as exc:
+            raise ModelAdapterError(
+                f"{self.provider} model stream failed: {exc}"
+            ) from exc
+        return _normalize_anthropic_response(response, self.provider)
+
+    def _request_kwargs(self, request: ModelRequest) -> dict[str, Any]:
         system, messages = _anthropic_messages(request.messages)
         kwargs: dict[str, Any] = {
             "model": request.model or self.default_model,
@@ -57,48 +89,7 @@ class AnthropicAdapter(ModelAdapter):
             kwargs["temperature"] = request.temperature
         if request.extra_body:
             kwargs["extra_body"] = request.extra_body
-
-        try:
-            response = await self._client.messages.create(**kwargs)
-        except Exception as exc:
-            raise ModelAdapterError(
-                f"{self.provider} model request failed: {exc}"
-            ) from exc
-
-        text_parts: list[str] = []
-        tool_calls: list[ToolCall] = []
-        for block in response.content:
-            block_type = getattr(block, "type", None)
-            if block_type == "text":
-                text_parts.append(block.text)
-            elif block_type == "tool_use":
-                tool_calls.append(
-                    ToolCall(
-                        id=block.id,
-                        name=block.name,
-                        arguments=block.input,
-                    )
-                )
-
-        input_tokens = int(getattr(response.usage, "input_tokens", 0) or 0)
-        output_tokens = int(getattr(response.usage, "output_tokens", 0) or 0)
-        return ModelResponse(
-            id=response.id,
-            provider=self.provider,
-            model=response.model,
-            message=Message(
-                role=MessageRole.ASSISTANT,
-                content="".join(text_parts) or None,
-                tool_calls=tuple(tool_calls),
-            ),
-            finish_reason=response.stop_reason,
-            usage=ModelUsage(
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                total_tokens=input_tokens + output_tokens,
-            ),
-            raw=_model_dump(response),
-        )
+        return kwargs
 
     async def close(self) -> None:
         await self._client.close()
@@ -156,6 +147,43 @@ def _anthropic_messages(
         result.append({"role": message.role.value, "content": content})
 
     return "\n\n".join(system_parts) or None, result
+
+
+def _normalize_anthropic_response(response: Any, provider: str) -> ModelResponse:
+    text_parts: list[str] = []
+    tool_calls: list[ToolCall] = []
+    for block in response.content:
+        block_type = getattr(block, "type", None)
+        if block_type == "text":
+            text_parts.append(block.text)
+        elif block_type == "tool_use":
+            tool_calls.append(
+                ToolCall(
+                    id=block.id,
+                    name=block.name,
+                    arguments=block.input,
+                )
+            )
+
+    input_tokens = int(getattr(response.usage, "input_tokens", 0) or 0)
+    output_tokens = int(getattr(response.usage, "output_tokens", 0) or 0)
+    return ModelResponse(
+        id=response.id,
+        provider=provider,
+        model=response.model,
+        message=Message(
+            role=MessageRole.ASSISTANT,
+            content="".join(text_parts) or None,
+            tool_calls=tuple(tool_calls),
+        ),
+        finish_reason=response.stop_reason,
+        usage=ModelUsage(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+        ),
+        raw=_model_dump(response),
+    )
 
 
 def _arguments_dict(arguments: dict[str, Any] | str) -> dict[str, Any]:

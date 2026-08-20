@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 
 import pytest
 from pydantic import SecretStr
@@ -94,6 +94,21 @@ class FakeModelAdapter(ModelAdapter):
 
     async def close(self) -> None:
         pass
+
+
+class StreamingFakeModelAdapter(FakeModelAdapter):
+    async def complete_stream(
+        self,
+        request: ModelRequest,
+        *,
+        on_text_delta: Callable[[str], Awaitable[None]],
+    ) -> ModelResponse:
+        self.requests.append(request)
+        await on_text_delta("正在")
+        await on_text_delta("完成")
+        response = self.responses.pop(0)
+        assert isinstance(response, ModelResponse)
+        return response
 
 
 class FixedContextSummarizer(ContextSummarizer):
@@ -255,6 +270,38 @@ def fake_registry(
     registry = ModelAdapterRegistry(ModelSettings(_env_file=None))
     registry.register("fake", lambda _: adapter, config=config)
     return registry, adapter
+
+
+@pytest.mark.asyncio
+async def test_runtime_emits_model_text_deltas_before_completed() -> None:
+    config = ProviderConfig(
+        provider="streaming-fake",
+        model="streaming-model",
+        api_key=SecretStr("offline-test-key"),
+        api_style=ApiStyle.CHAT_COMPLETIONS,
+    )
+    adapter = StreamingFakeModelAdapter(config, [model_response(content="正在完成")])
+    registry = ModelAdapterRegistry(ModelSettings(_env_file=None))
+    registry.register("streaming-fake", lambda _: adapter, config=config)
+    handler = InMemoryEventHandler()
+
+    result = await AgentRuntime(
+        registry,
+        ToolRegistry(),
+        provider="streaming-fake",
+    ).run("开始", event_handler=handler)
+
+    assert result.content == "正在完成"
+    deltas = [
+        event.delta
+        for event in handler.events
+        if event.type is AgentEventType.MODEL_OUTPUT_DELTA
+    ]
+    assert deltas == ["正在", "完成"]
+    event_types = [event.type for event in handler.events]
+    assert event_types.index(AgentEventType.MODEL_STARTED) < event_types.index(
+        AgentEventType.MODEL_OUTPUT_DELTA
+    ) < event_types.index(AgentEventType.MODEL_COMPLETED)
 
 
 @pytest.mark.asyncio

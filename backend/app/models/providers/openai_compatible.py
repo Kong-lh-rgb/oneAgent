@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -56,6 +57,25 @@ class OpenAICompatibleAdapter(ModelAdapter):
                 f"{self.provider} model request failed: {exc}"
             ) from exc
 
+    async def complete_stream(
+        self,
+        request: ModelRequest,
+        *,
+        on_text_delta: Callable[[str], Awaitable[None]],
+    ) -> ModelResponse:
+        """使用 Provider 原生流，同时在结束时还原完整 ``ModelResponse``。"""
+
+        try:
+            if self.config.api_style is ApiStyle.RESPONSES:
+                return await self._stream_responses(request, on_text_delta)
+            return await self._stream_chat(request, on_text_delta)
+        except ModelAdapterError:
+            raise
+        except Exception as exc:
+            raise ModelAdapterError(
+                f"{self.provider} model stream failed: {exc}"
+            ) from exc
+
     async def close(self) -> None:
         await self._client.close()
 
@@ -79,30 +99,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
             kwargs["extra_body"] = request.extra_body
 
         response = await self._client.responses.create(**kwargs)
-        tool_calls = tuple(
-            ToolCall(
-                id=item.call_id,
-                name=item.name,
-                arguments=_parse_arguments(item.arguments),
-            )
-            for item in response.output
-            if getattr(item, "type", None) == "function_call"
-        )
-        finish_reason = _responses_finish_reason(response, tool_calls)
-
-        return ModelResponse(
-            id=response.id,
-            provider=self.provider,
-            model=response.model,
-            message=Message(
-                role=MessageRole.ASSISTANT,
-                content=response.output_text or None,
-                tool_calls=tool_calls,
-            ),
-            finish_reason=finish_reason,
-            usage=_responses_usage(getattr(response, "usage", None)),
-            raw=_model_dump(response),
-        )
+        return _normalize_responses_response(response, self.provider)
 
     async def _complete_chat(
         self,
@@ -149,11 +146,154 @@ class OpenAICompatibleAdapter(ModelAdapter):
             raw=_model_dump(response),
         )
 
+    async def _stream_responses(
+        self,
+        request: ModelRequest,
+        on_text_delta: Callable[[str], Awaitable[None]],
+    ) -> ModelResponse:
+        kwargs: dict[str, Any] = {
+            "model": request.model or self.default_model,
+            "input": _responses_input(request.messages),
+            "stream": True,
+        }
+        if request.tools:
+            kwargs["tools"] = [_responses_tool(tool) for tool in request.tools]
+        if request.tool_choice is not None:
+            kwargs["tool_choice"] = request.tool_choice
+        if request.temperature is not None:
+            kwargs["temperature"] = request.temperature
+        if request.max_output_tokens is not None:
+            kwargs["max_output_tokens"] = request.max_output_tokens
+        if request.extra_body:
+            kwargs["extra_body"] = request.extra_body
+
+        stream = await self._client.responses.create(**kwargs)
+        final_response: Any | None = None
+        async for event in stream:
+            event_type = getattr(event, "type", None)
+            if event_type == "response.output_text.delta":
+                delta = getattr(event, "delta", "")
+                if delta:
+                    await on_text_delta(delta)
+            elif event_type == "response.completed":
+                final_response = getattr(event, "response", None)
+
+        if final_response is None:
+            raise ModelAdapterError(
+                f"{self.provider} response stream ended without response.completed"
+            )
+        return _normalize_responses_response(final_response, self.provider)
+
+    async def _stream_chat(
+        self,
+        request: ModelRequest,
+        on_text_delta: Callable[[str], Awaitable[None]],
+    ) -> ModelResponse:
+        kwargs: dict[str, Any] = {
+            "model": request.model or self.default_model,
+            "messages": [_chat_message(message) for message in request.messages],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if request.tools:
+            kwargs["tools"] = [_chat_tool(tool) for tool in request.tools]
+        if request.tool_choice is not None:
+            kwargs["tool_choice"] = request.tool_choice
+        if request.temperature is not None:
+            kwargs["temperature"] = request.temperature
+        if request.max_output_tokens is not None:
+            kwargs["max_tokens"] = request.max_output_tokens
+        if request.extra_body:
+            kwargs["extra_body"] = request.extra_body
+
+        stream = await self._client.chat.completions.create(**kwargs)
+        response_id = ""
+        response_model = request.model or self.default_model
+        finish_reason: str | None = None
+        usage: Any | None = None
+        text_parts: list[str] = []
+        tool_parts: dict[int, dict[str, str]] = {}
+
+        async for chunk in stream:
+            response_id = getattr(chunk, "id", response_id) or response_id
+            response_model = getattr(chunk, "model", response_model) or response_model
+            usage = getattr(chunk, "usage", None) or usage
+            choices = getattr(chunk, "choices", None) or ()
+            if not choices:
+                continue
+            choice = choices[0]
+            finish_reason = getattr(choice, "finish_reason", None) or finish_reason
+            delta = getattr(choice, "delta", None)
+            if delta is None:
+                continue
+            content = getattr(delta, "content", None)
+            if content:
+                text_parts.append(content)
+                await on_text_delta(content)
+            for call in getattr(delta, "tool_calls", None) or ():
+                index = int(getattr(call, "index", 0) or 0)
+                part = tool_parts.setdefault(
+                    index,
+                    {"id": "", "name": "", "arguments": ""},
+                )
+                part["id"] += getattr(call, "id", None) or ""
+                function = getattr(call, "function", None)
+                if function is not None:
+                    part["name"] += getattr(function, "name", None) or ""
+                    part["arguments"] += getattr(function, "arguments", None) or ""
+
+        tool_calls = tuple(
+            ToolCall(
+                id=part["id"],
+                name=part["name"],
+                arguments=_parse_arguments(part["arguments"]),
+            )
+            for _, part in sorted(tool_parts.items())
+        )
+        return ModelResponse(
+            id=response_id or "stream",
+            provider=self.provider,
+            model=response_model,
+            message=Message(
+                role=MessageRole.ASSISTANT,
+                content="".join(text_parts) or None,
+                tool_calls=tool_calls,
+            ),
+            finish_reason=finish_reason or ("tool_calls" if tool_calls else "stop"),
+            usage=_chat_usage(usage),
+            raw=None,
+        )
+
 
 def _arguments_json(arguments: dict[str, Any] | str) -> str:
     if isinstance(arguments, str):
         return arguments
     return json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+
+
+def _normalize_responses_response(response: Any, provider: str) -> ModelResponse:
+    tool_calls = tuple(
+        ToolCall(
+            id=item.call_id,
+            name=item.name,
+            arguments=_parse_arguments(item.arguments),
+        )
+        for item in response.output
+        if getattr(item, "type", None) == "function_call"
+    )
+    return ModelResponse(
+        id=response.id,
+        provider=provider,
+        model=response.model,
+        message=Message(
+            role=MessageRole.ASSISTANT,
+            content=response.output_text or None,
+            tool_calls=tool_calls,
+        ),
+        finish_reason=_responses_finish_reason(response, tool_calls),
+        usage=_responses_usage(getattr(response, "usage", None)),
+        raw=_model_dump(response),
+    )
 
 
 def _parse_arguments(arguments: Any) -> dict[str, Any] | str:

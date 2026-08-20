@@ -7,6 +7,24 @@
 ---
 ## 2026-08-20
 
+### 完成：Desktop Light Glass + 原生流式 Agent Turn
+
+#### Bad Case
+- [x] 用户点击发送后，消息要等整个 `conversation.send` 完成才进入对话，无法确认指令是否已发出
+- [x] AgentEvent 已实时广播模型与工具生命周期，但 Chat 默认必须打开 Activity Drawer 才能看到过程
+- [x] 模型正文只在 `model_completed` 后整段出现，长回答期间界面缺少持续反馈
+- [x] 深色主题与用户希望的白色模糊毛玻璃方向不一致，旧页面仍残留深色字面量
+
+#### 实现结果
+- [x] ModelAdapter 墨守原 `complete()` 兼容，同时新增 `complete_stream()`；OpenAI Responses、兼容 Chat Completions、Anthropic Messages 均接入 Provider 原生文本流
+- [x] Runtime 新增瞬时 `model_output_delta` 事件，经现有 `agent.event` RPC 广播；SQLite Trace 明确跳过增量，只保存最终完整事实
+- [x] Desktop 发送时立即乐观插入用户消息并清空 Composer；失败时恢复草稿并显示错误
+- [x] 新增 `LiveAgentTurn`，在对话流中实时显示 Starting / Thinking / Tool / Approval 活动和带光标的增量正文
+- [x] 增量正文按 Run + Step 聚合，不把每个 chunk 放进 Activity/Trace 列表，避免长回复挤掉工具事件
+- [x] 全局 token 与遗留字面量统一为浅色玻璃主题；Sidebar、Header、Composer、Drawer、Card/Panel 使用半透明白色与 blur/saturate
+- [x] 实际检查 1360×860、980×640 和六个其它页面，均无横向溢出
+- [x] Backend 850 tests、ruff、compileall；Desktop 75 tests、typecheck、build；git diff check 全部通过
+
 ### 完成：核心功能阶段工程收尾与 CI Baseline
 
 - [x] 删除三个误提交的 0 字节 CLI 参数文件，确认无其它同类 tracked 脏文件
@@ -34,6 +52,26 @@
 - [x] Electron 仅暴露受限 `openExternal` / `notify`，macOS 关闭窗口后隐藏并保持 Renderer/RPC 活跃
 - [x] 隐藏状态下投递 Approval / Run 终态 / Artifact 原生通知，敏感正文不进通知并使用进程内 key 去重
 - [x] 新增 Artifact 后端专项测试与 Desktop API/UI/通知测试，完成全量回归
+
+### 完成：Desktop Design Foundation + App Shell + Chat Experience
+
+#### Bad Case
+- [x] Desktop 仍是"工程控制台"：深色高对比 token、220px 文本导航、消息重气泡、技术性 Activity，缺少可长期放在桌面使用的冷静感
+- [x] Chat 信息层级混乱：approval / artifact 结果分散在其它页面，当前 Run 的待审批与交付物在对话流里看不到
+- [x] 无统一的可复用基础组件与设计 token，各页面内联样式、token 名不一致
+
+#### 实现结果（纯 Desktop，零后端 / RPC 语义改动）
+- [x] `index.css` 重构 `:root` 为 calm 语义 token（surface/radius/spacing/font/transition），旧 token 名保留为别名，现有页面零破坏
+- [x] 新增基于 `lucide-react` 的统一 `Icon.tsx` 与 `ui.tsx`（Button/StatusDot/Badge/Card/EmptyState/SectionHeader/Input/Textarea 等 thin 组件）
+- [x] 新增 68px icon-first `Sidebar.tsx`（Settings 与 Host 状态固定底部），`App.tsx` 移除内联 Sidebar
+- [x] Chat：可折叠 248px 会话栏；MessageList 用户窄表面 / 助手文档流；Composer command 风格（autosize、Normal/Plan、图标发送）；新会话品牌空状态与四个示例任务
+- [x] Activity 改为按需抽屉，合并同一 Tool 的 started/completed 事件；技术协议只放入折叠 details
+- [x] 独立实现 `PlanCard`、`ApprovalCard`、`ResultCard`，保持计划确认、权限审批和交付结果三种语义边界
+- [x] ChatPage 重排信息层级 messages→plan→approval→results；新增 `ApprovalCard`（pending 按 run_id 客户端过滤）与 `ResultCard`（file→opaque id 下载 / url→Open Link）
+- [x] 在 1360×860 与 980×640 实际渲染验证长消息、空状态、Composer 和 Activity，无横向溢出
+- [x] Desktop 18 个测试文件 / 73 tests、typecheck、build、git diff --check 全绿
+
+---
 
 ### 完成：macOS Computer V8 - Lease / Freshness / Reliability
 

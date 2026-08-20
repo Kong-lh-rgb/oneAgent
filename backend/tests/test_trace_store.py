@@ -8,7 +8,7 @@ from app.agent.events import AgentEvent, AgentEventType
 from app.agent.result import AgentError, AgentResult, AgentStopReason
 from app.models.types import Message, MessageRole, ModelUsage, ToolCall
 from app.tools.approval import ApprovalDecision
-from app.trace import RunStatus, SQLiteTraceStore
+from app.trace import RunStatus, SQLiteTraceEventHandler, SQLiteTraceStore
 
 
 def _trace_events() -> tuple[AgentEvent, ...]:
@@ -72,6 +72,25 @@ def _trace_events() -> tuple[AgentEvent, ...]:
             result=result,
         ),
     )
+
+
+@pytest.mark.asyncio
+async def test_trace_handler_does_not_persist_text_deltas(tmp_path) -> None:
+    store = SQLiteTraceStore(tmp_path / "stream.db")
+    await store.initialize()
+    handler = SQLiteTraceEventHandler(store)
+
+    await handler.emit(
+        AgentEvent(
+            run_id="run-stream",
+            sequence=1,
+            type=AgentEventType.MODEL_OUTPUT_DELTA,
+            step=1,
+            delta="partial",
+        )
+    )
+
+    assert await store.get("run-stream") is None
 
 
 @pytest.mark.asyncio
