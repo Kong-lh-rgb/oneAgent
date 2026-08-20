@@ -49,6 +49,8 @@ export class RpcClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private shouldReconnect = false
   private connectPromise: Promise<void> | null = null
+  // 每次发起连接自增；用于区分“当前活动连接尝试”，使被放弃的旧 openSocket 失效。
+  private connectToken = 0
 
   private readonly url: string
   private readonly reconnectDelayMs: number
@@ -78,7 +80,7 @@ export class RpcClient {
       return // 已在连接中或已连接
     }
     if (this.connectPromise) return
-    this.connectPromise = this.openSocket()
+    void this.openSocket()
   }
 
   disconnect(): void {
@@ -87,6 +89,9 @@ export class RpcClient {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null
     }
+    // 清除在途连接尝试：允许后续 connect() 重新发起（React StrictMode
+    // 开发模式会 mount→unmount→mount，旧 openSocket 必须失效且不挡住新连接）。
+    this.connectPromise = null
     const socket = this.socket
     this.socket = null
     if (socket) {
@@ -104,24 +109,35 @@ export class RpcClient {
   }
 
   private async openSocket(): Promise<void> {
+    const token = ++this.connectToken
     const socket = this.socketFactory()
     this.socket = socket
     // 创建时同步挂上 message/close 处理器，避免 open 后消息竞态。
     socket.onmessage = (event: MessageEvent<string>) => this.handleMessage(event.data)
     socket.onclose = () => this.handleClose(socket)
-    try {
-      await new Promise<void>((resolve, reject) => {
-        socket.onopen = () => resolve()
-        socket.onerror = () =>
-          reject(new RpcError(RpcErrorCode.NotConnected, 'websocket error'))
-      })
-      this.flushOpenWaiters()
-      this.emitStatus(true)
-    } catch {
-      this.handleClose(socket)
-    } finally {
-      this.connectPromise = null
-    }
+    const opener = new Promise<void>((resolve, reject) => {
+      socket.onopen = () => resolve()
+      socket.onerror = () =>
+        reject(new RpcError(RpcErrorCode.NotConnected, 'websocket error'))
+    })
+    // connectPromise 在 openSocket 内赋值，由本 token 负责清理，避免被
+    // 被放弃的旧连接尝试误清/误判。
+    this.connectPromise = (async () => {
+      try {
+        await opener
+        if (token !== this.connectToken) return // 已被更新连接替代
+        this.flushOpenWaiters()
+        this.emitStatus(true)
+      } catch {
+        if (token === this.connectToken) {
+          this.handleClose(socket)
+        }
+      } finally {
+        if (token === this.connectToken) {
+          this.connectPromise = null
+        }
+      }
+    })()
   }
 
   private handleClose(socket: WebSocket): void {
