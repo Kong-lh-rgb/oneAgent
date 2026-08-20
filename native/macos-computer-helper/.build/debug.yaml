@@ -1,0 +1,81 @@
+client:
+  name: basic
+  file-system: device-agnostic
+tools: {}
+targets:
+  "MacOSComputerHelper-arm64-apple-macosx15.0-debug.exe": ["<MacOSComputerHelper-arm64-apple-macosx15.0-debug.exe>"]
+  "MacOSComputerHelper-arm64-apple-macosx15.0-debug.module": ["<MacOSComputerHelper-arm64-apple-macosx15.0-debug.module>"]
+  "PackageStructure": ["<PackageStructure>"]
+  "main": ["<MacOSComputerHelper-arm64-apple-macosx15.0-debug.exe>","<MacOSComputerHelper-arm64-apple-macosx15.0-debug.module>"]
+  "test": ["<MacOSComputerHelper-arm64-apple-macosx15.0-debug.exe>","<MacOSComputerHelper-arm64-apple-macosx15.0-debug.module>"]
+default: "main"
+nodes:
+  "/Users/linghang/agent/oneAgent/native/macos-computer-helper/Sources/MacOSComputerHelper/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+  "/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper":
+    is-mutated: true
+commands:
+  "/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper-entitlement.plist":
+    tool: write-auxiliary-file
+    inputs: ["<entitlement-plist>","<com.apple.security.get-task-allow>"]
+    outputs: ["/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper-entitlement.plist"]
+    description: "Write auxiliary file /Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper-entitlement.plist"
+
+  "/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/linghang/agent/oneAgent/native/macos-computer-helper/Sources/MacOSComputerHelper/main.swift"]
+    outputs: ["/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.build/sources"]
+    description: "Write auxiliary file /Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.build/sources"
+
+  "/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.product/Objects.LinkFileList":
+    tool: write-auxiliary-file
+    inputs: ["<link-file-list>","/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.build/main.swift.o"]
+    outputs: ["/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.product/Objects.LinkFileList"]
+    description: "Write auxiliary file /Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.product/Objects.LinkFileList"
+
+  "/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt":
+    tool: write-auxiliary-file
+    inputs: ["<swift-get-version>","/Library/Developer/CommandLineTools/usr/bin/swiftc"]
+    outputs: ["/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"]
+    always-out-of-date: "true"
+    description: "Write auxiliary file /Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"
+
+  "<MacOSComputerHelper-arm64-apple-macosx15.0-debug.exe>":
+    tool: phony
+    inputs: ["<MacOSComputerHelper-arm64-apple-macosx15.0-debug.exe-CodeSigning>"]
+    outputs: ["<MacOSComputerHelper-arm64-apple-macosx15.0-debug.exe>"]
+
+  "<MacOSComputerHelper-arm64-apple-macosx15.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.build/main.swift.o","/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/Modules/MacOSComputerHelper.swiftmodule"]
+    outputs: ["<MacOSComputerHelper-arm64-apple-macosx15.0-debug.module>"]
+
+  "C.MacOSComputerHelper-arm64-apple-macosx15.0-debug.exe":
+    tool: shell
+    inputs: ["/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.build/main.swift.o","/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.product/Objects.LinkFileList"]
+    outputs: ["/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper"]
+    description: "Linking ./.build/arm64-apple-macosx/debug/MacOSComputerHelper"
+    args: ["/Library/Developer/CommandLineTools/usr/bin/swiftc","-L","/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug","-o","/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper","-module-name","MacOSComputerHelper","-Xlinker","-no_warn_duplicate_libraries","-emit-executable","-Xlinker","-alias","-Xlinker","_MacOSComputerHelper_main","-Xlinker","_main","-Xlinker","-rpath","-Xlinker","@loader_path","@/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.product/Objects.LinkFileList","-Xlinker","-rpath","-Xlinker","/Library/Developer/CommandLineTools/usr/lib/swift-5.5/macosx","-Xlinker","-rpath","-Xlinker","/Library/Developer/CommandLineTools/usr/lib/swift-6.2/macosx","-target","arm64-apple-macosx10.13","-Xlinker","-add_ast_path","-Xlinker","/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/Modules/MacOSComputerHelper.swiftmodule","-I","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-L","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-plugin-path","/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing","-sdk","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-g"]
+
+  "C.MacOSComputerHelper-arm64-apple-macosx15.0-debug.exe-entitlements":
+    tool: shell
+    inputs: ["/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper","/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper-entitlement.plist"]
+    outputs: ["<MacOSComputerHelper-arm64-apple-macosx15.0-debug.exe-CodeSigning>"]
+    description: "Applying debug entitlements to ./.build/arm64-apple-macosx/debug/MacOSComputerHelper"
+    args: ["codesign","--force","--sign","-","--entitlements","/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper-entitlement.plist","/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper"]
+
+  "C.MacOSComputerHelper-arm64-apple-macosx15.0-debug.module":
+    tool: shell
+    inputs: ["/Users/linghang/agent/oneAgent/native/macos-computer-helper/Sources/MacOSComputerHelper/main.swift","/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt","/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.build/sources"]
+    outputs: ["/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.build/main.swift.o","/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/Modules/MacOSComputerHelper.swiftmodule"]
+    description: "Compiling Swift Module 'MacOSComputerHelper' (1 sources)"
+    args: ["/Library/Developer/CommandLineTools/usr/bin/swiftc","-module-name","MacOSComputerHelper","-emit-dependencies","-emit-module","-emit-module-path","/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/Modules/MacOSComputerHelper.swiftmodule","-output-file-map","/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.build/output-file-map.json","-incremental","-c","@/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.build/sources","-I","/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx10.13","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-j12","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-Xfrontend","-entry-point-function-name","-Xfrontend","MacOSComputerHelper_main","-swift-version","5","-I","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-L","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-plugin-path","/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing","-sdk","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-g","-Xcc","-isysroot","-Xcc","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-Xcc","-fPIC","-Xcc","-g","-package-name","macos_computer_helper"]
+
+  "PackageStructure":
+    tool: package-structure-tool
+    inputs: ["/Users/linghang/agent/oneAgent/native/macos-computer-helper/Sources/MacOSComputerHelper/","/Users/linghang/agent/oneAgent/native/macos-computer-helper/Package.swift","/Users/linghang/agent/oneAgent/native/macos-computer-helper/Package.resolved"]
+    outputs: ["<PackageStructure>"]
+    description: "Planning build"
+    allow-missing-inputs: true
+

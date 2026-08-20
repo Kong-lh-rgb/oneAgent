@@ -220,7 +220,6 @@ class Application:
         self.desktop_approval = desktop_approval
         # Computer Runtime：V0 只注入 Fake；None 时不注册 computer_* 工具。
         self._computer_runtime = computer_runtime
-
         self.settings = settings or ModelSettings()
         if registry is not None:
             # 测试注入的离线 registry：provider 直接取传入值（不校验 .env）。
@@ -356,6 +355,11 @@ class Application:
         if self._computer_runtime is not None:
             register_computer_tools(tool_registry, self._computer_runtime)
             self.computer_runtime = self._computer_runtime
+            # 真实 MacOSComputerRuntime 才有显式 start / close；
+            # FakeComputerRuntime 没有 start，用 getattr 探测，不影响现有路径。
+            start_runtime = getattr(self._computer_runtime, "start", None)
+            if callable(start_runtime):
+                await start_runtime()
 
         _mark_deferred_tools(tool_registry, _DEFERRED_TOOL_NAMES)
 
@@ -503,7 +507,7 @@ class Application:
         self._started = True
 
     async def close(self) -> None:
-        """优雅关闭 Scheduler / MCP / 模型适配器（幂等）。"""
+        """优雅关闭 Scheduler / MCP / Computer Runtime / 模型适配器（幂等）。"""
 
         if not self._started:
             return
@@ -511,6 +515,11 @@ class Application:
             await self.automation_scheduler.shutdown()
         if self.mcp_manager is not None and self.tool_registry is not None:
             await self.mcp_manager.close(self.tool_registry)
+        if self.computer_runtime is not None:
+            # 只在确实注入真实 MacOSComputerRuntime（有 close）时关闭 helper。
+            close_runtime = getattr(self.computer_runtime, "close", None)
+            if callable(close_runtime):
+                await close_runtime()
         await self.registry.close()
         self._started = False
 

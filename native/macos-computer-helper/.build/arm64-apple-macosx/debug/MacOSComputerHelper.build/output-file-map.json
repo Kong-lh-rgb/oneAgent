@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.build/master.swiftdeps"
+  },
+  "/Users/linghang/agent/oneAgent/native/macos-computer-helper/Sources/MacOSComputerHelper/main.swift": {
+    "dependencies": "/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.build/main.d",
+    "object": "/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.build/main.swift.o",
+    "swiftmodule": "/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.build/main~partial.swiftmodule",
+    "swift-dependencies": "/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.build/main.swiftdeps",
+    "diagnostics": "/Users/linghang/agent/oneAgent/native/macos-computer-helper/.build/arm64-apple-macosx/debug/MacOSComputerHelper.build/main.dia"
+  }
+}

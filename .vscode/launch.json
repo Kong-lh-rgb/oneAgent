@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:oneAgent}/native/macos-computer-helper",
+            "name": "Debug MacOSComputerHelper (native/macos-computer-helper)",
+            "target": "MacOSComputerHelper",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug MacOSComputerHelper (native/macos-computer-helper)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:oneAgent}/native/macos-computer-helper",
+            "name": "Release MacOSComputerHelper (native/macos-computer-helper)",
+            "target": "MacOSComputerHelper",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release MacOSComputerHelper (native/macos-computer-helper)"
+        }
+    ]
+}
