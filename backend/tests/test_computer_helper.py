@@ -208,6 +208,7 @@ async def test_helper_crash_rejects_pending() -> None:
 async def test_observe_recovers_dead_helper_as_a_new_safe_request(tmp_path) -> None:
     client = _make_client()
     runtime = MacOSComputerRuntime(client, screenshot_dir=tmp_path)
+    runtime.begin_session("test-run")
     await runtime.start()
     try:
         with pytest.raises(ComputerHelperProcessError):

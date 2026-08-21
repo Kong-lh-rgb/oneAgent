@@ -160,7 +160,13 @@ class ElementStats(BaseModel):
 
 
 class Observation(BaseModel):
-    """一次屏幕观察的结构化快照。"""
+    """一次屏幕观察的结构化快照。
+
+    语义分离：
+    - ``target``：Agent 正在操作的 Session Target（AX Tree / 截图的来源）；
+    - ``user_frontmost_app``：用户当前正在使用的 App（可以与 target 不同）；
+    - ``active_app``：兼容别名（等于 target，V2 起不建议再依赖）。
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -169,6 +175,7 @@ class Observation(BaseModel):
     active_app: ActiveApp | None = None
     target: ActiveApp | None = None
     target_is_frontmost: bool = False
+    user_frontmost_app: ActiveApp | None = None
     active_window: Window | None = None
     windows: tuple[Window, ...] = ()
     elements: tuple[Element, ...] = ()
@@ -241,7 +248,12 @@ Target = ElementTarget | CoordinateTarget
 
 
 class ActionResult(BaseModel):
-    """一次 ComputerRuntime 动作的结果（轻量，不做复杂异常体系）。"""
+    """一次 ComputerRuntime 动作的结果（轻量，不做复杂异常体系）。
+
+    ``method``：实际执行路径（ax_press / ax_set_value / cg_event_pid /
+    foreground_cg_event / coordinate）；
+    ``execution_mode``：background / foreground_fallback。
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -251,6 +263,8 @@ class ActionResult(BaseModel):
     error: str | None = None
     delivery_status: DeliveryStatus = DeliveryStatus.NOT_APPLICABLE
     verification_status: VerificationStatus = VerificationStatus.NOT_APPLICABLE
+    method: str | None = None
+    execution_mode: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

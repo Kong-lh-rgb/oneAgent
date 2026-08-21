@@ -97,15 +97,26 @@ func handleOpenApp(params: Any?, id: Any?) {
     guard
         let params = params as? [String: Any],
         let app = params["app"] as? String,
-        !app.trimmingCharacters(in: .whitespaces).isEmpty
+        !app.trimmingCharacters(in: .whitespaces).isEmpty,
+        let sessionID = params["session_id"] as? String,
+        !sessionID.isEmpty
     else {
         writeResponse(
             makeError(
                 id: id,
                 code: "invalid_params",
-                message: "missing or empty 'app'"
+                message: "missing or empty 'app' / 'session_id'"
             )
         )
+        return
+    }
+    beginSessionIfNeeded(sessionID)
+    guard validateSession(sessionID) else {
+        writeResponse(makeError(
+            id: id,
+            code: "session_mismatch",
+            message: "session is not active; start a new run"
+        ))
         return
     }
 
@@ -158,6 +169,19 @@ func handleOpenApp(params: Any?, id: Any?) {
             )
         )
     }
+}
+
+/// 处理 end_session 请求：结束 Run 的 Session，清除 Native Target / Snapshot。
+/// params: {"session_id": "..."}。session 不匹配返回 ended=false（幂等）。
+func handleEndSession(params: Any?, id: Any?) {
+    guard let params = params as? [String: Any],
+          let sessionID = params["session_id"] as? String,
+          !sessionID.isEmpty else {
+        writeResponse(makeError(id: id, code: "invalid_params",
+                                message: "missing 'session_id'")); return
+    }
+    let ended = endSession(sessionID)
+    writeResponse(["id": id ?? NSNull(), "result": ["ended": ended]])
 }
 
 /// 处理 accessibility_status 请求。
@@ -720,15 +744,27 @@ func handleObserve(params: Any?, id: Any?) {
     guard
         let params = params as? [String: Any],
         let observationID = params["observation_id"] as? String,
-        !observationID.isEmpty
+        !observationID.isEmpty,
+        let sessionID = params["session_id"] as? String,
+        !sessionID.isEmpty
     else {
         writeResponse(
             makeError(
                 id: id,
                 code: "invalid_params",
-                message: "missing or empty 'observation_id'"
+                message: "missing or empty 'observation_id' / 'session_id'"
             )
         )
+        return
+    }
+    // 首次见到该 session_id 时建立 Session 并清空上一个 Run 的 Target/Snapshot。
+    beginSessionIfNeeded(sessionID)
+    guard validateSession(sessionID) else {
+        writeResponse(makeError(
+            id: id,
+            code: "session_mismatch",
+            message: "session is not active; start a new run"
+        ))
         return
     }
 
@@ -778,8 +814,18 @@ func handleObserve(params: Any?, id: Any?) {
             return
         }
     } else {
+        // Session 尚无 target：以当前 frontmost 作为初始 target，但必须显式
+        // 写入 Session（computerTargetPID），之后不随 frontmost 漂移。
         targetApplication = NSWorkspace.shared.frontmostApplication
         if let targetApplication { setComputerTarget(targetApplication) }
+    }
+
+    // User Frontmost：用户当前正在使用的 App，与 Session Target 分离。
+    let userFrontmostApp: Any
+    if let frontmost = NSWorkspace.shared.frontmostApplication {
+        userFrontmostApp = frontmostAppDict(frontmost)
+    } else {
+        userFrontmostApp = NSNull()
     }
 
     if let target = targetApplication {
@@ -865,7 +911,7 @@ func handleObserve(params: Any?, id: Any?) {
     currentElements = newMapping
     currentWindows = newWindows
     currentScreenshotMapping = newScreenshotMapping
-    currentFrontmostPID = observedPID
+    currentTargetPID = observedPID
     currentFocusedWindow = newWindows["w1"]
     currentFocusedElementRef = focusedElementRef as? String
     if let active = windows.first, let bounds = active["bounds"] as? [String: Int] {
@@ -883,6 +929,7 @@ func handleObserve(params: Any?, id: Any?) {
             "active_app": activeApp,
             "target": activeApp,
             "target_is_frontmost": targetIsFrontmost,
+            "user_frontmost_app": userFrontmostApp,
             "active_window": activeWindow,
             "active_window_ref": activeWindowRef,
             "windows": windows,
@@ -965,7 +1012,7 @@ func handleTestTargetCache(params: Any?, id: Any?) {
     computerTargetBundleID = "com.example.Target"
     computerTargetName = "Target"
     currentObservationID = "obs-target"
-    currentFrontmostPID = 321
+    currentTargetPID = 321
     clearObservationCache()
     let targetPreserved = computerTargetPID == 321
         && computerTargetBundleID == "com.example.Target"
@@ -1050,12 +1097,19 @@ func handleTestElementMapping(params: Any?, id: Any?) {
 
 /// 清空当前 observation 的 element 映射（成功点击后调用）。
 /// 成功点击后的响应 payload（同时使旧 Observation 失效）。
-func successPressPayload(observationID: String, elementRef: String) -> [String: Any] {
+func successPressPayload(
+    observationID: String,
+    elementRef: String,
+    method: String = "ax_press",
+    executionMode: String = "background"
+) -> [String: Any] {
     clearObservationCache()
     return [
         "observation_id": observationID,
         "element_ref": elementRef,
         "action": "press",
+        "method": method,
+        "execution_mode": executionMode,
     ]
 }
 
@@ -1101,23 +1155,32 @@ func handleClickElement(params: Any?, id: Any?) {
         let observationID = params["observation_id"] as? String,
         !observationID.isEmpty,
         let elementRef = params["element_ref"] as? String,
-        !elementRef.isEmpty
+        !elementRef.isEmpty,
+        let sessionID = params["session_id"] as? String,
+        !sessionID.isEmpty
     else {
         writeResponse(
             makeError(
                 id: id,
                 code: "invalid_params",
-                message: "missing or empty 'observation_id' / 'element_ref'"
+                message: "missing or empty 'observation_id' / 'element_ref' / 'session_id'"
             )
         )
         return
     }
+    beginSessionIfNeeded(sessionID)
+    guard validateSession(sessionID) else {
+        writeResponse(makeError(id: id, code: "session_mismatch",
+                                message: "session is not active; start a new run")); return
+    }
 
-    // click_element 需要人工审批，审批 UI 会抢焦点：漂移时先恢复已批准目标再执行。
-    guard requireFreshObservation(
+    // Background-first：AXPress 只要求 Target Snapshot 一致，不强制 Target 在
+    // 最前台；漂移时允许恢复已批准目标后执行。
+    guard requireBackgroundFresh(
         observationID,
+        sessionID: sessionID,
         id: id,
-        restoreOnDrift: true
+        allowForegroundRestore: true
     ) else { return }
 
     switch resolveClickTarget(
@@ -1146,25 +1209,54 @@ func handleClickElement(params: Any?, id: Any?) {
             return
         }
 
-        guard AXUIElementPerformAction(element, kAXPressAction as CFString)
-            == .success else {
+        if AXUIElementPerformAction(element, kAXPressAction as CFString)
+            == .success {
+            // 后台语义点击成功。
+            writeResponse([
+                "id": id ?? NSNull(),
+                "result": successPressPayload(
+                    observationID: observationID,
+                    elementRef: elementRef,
+                    method: "ax_press",
+                    executionMode: "background"
+                ),
+            ])
+            return
+        }
+
+        // Background AXPress 失败 → foreground fallback：恢复已批准目标后重试。
+        guard let target = runningComputerTarget(),
+              restoreRecordedTarget() else {
             writeResponse(
                 makeError(
                     id: id,
-                    code: "ax_action_failed",
-                    message: "AXUIElementPerformAction failed for \(elementRef)"
+                    code: "background_action_failed",
+                    message: "AXPress failed and target could not be brought to foreground"
                 )
             )
             return
         }
-
-        writeResponse([
-            "id": id ?? NSNull(),
-            "result": successPressPayload(
-                observationID: observationID,
-                elementRef: elementRef
-            ),
-        ])
+        _ = target
+        if AXUIElementPerformAction(element, kAXPressAction as CFString)
+            == .success {
+            writeResponse([
+                "id": id ?? NSNull(),
+                "result": successPressPayload(
+                    observationID: observationID,
+                    elementRef: elementRef,
+                    method: "ax_press",
+                    executionMode: "foreground_fallback"
+                ),
+            ])
+            return
+        }
+        writeResponse(
+            makeError(
+                id: id,
+                code: "background_action_failed",
+                message: "AXUIElementPerformAction failed for \(elementRef) in both modes"
+            )
+        )
     }
 }
 
@@ -1353,13 +1445,15 @@ func handleTypeText(params: Any?, id: Any?) {
         let params = params as? [String: Any],
         let text = params["text"] as? String,
         let expectedObservationID = params["expected_observation_id"] as? String,
-        !expectedObservationID.isEmpty
+        !expectedObservationID.isEmpty,
+        let sessionID = params["session_id"] as? String,
+        !sessionID.isEmpty
     else {
         writeResponse(
             makeError(
                 id: id,
                 code: "invalid_params",
-                message: "missing or non-string 'text'"
+                message: "missing 'text' / 'expected_observation_id' / 'session_id'"
             )
         )
         return
@@ -1368,13 +1462,21 @@ func handleTypeText(params: Any?, id: Any?) {
         // 非法 element_ref 已由解析函数写响应。
         return
     }
+    beginSessionIfNeeded(sessionID)
+    guard validateSession(sessionID) else {
+        writeResponse(makeError(id: id, code: "session_mismatch",
+                                message: "session is not active; start a new run")); return
+    }
 
-    // type_text 需要人工审批，审批 UI 会抢焦点：漂移时先恢复已批准目标再执行。
-    guard requireFreshObservation(
-        expectedObservationID, id: id, restoreOnDrift: true
+    // Background-first：只要求 Target Snapshot 一致，不强制 Target 在最前台。
+    guard requireBackgroundFresh(
+        expectedObservationID,
+        sessionID: sessionID,
+        id: id,
+        allowForegroundRestore: true
     ) else { return }
 
-    // 可选：先把目标元素聚焦，再输入（避免打到错误位置）。
+    // 可选：先把目标元素聚焦（避免输入到错误位置）。
     if parsedElementRef.provided {
         if case .failure(let error) = focusElement(
             observationID: expectedObservationID,
@@ -1390,7 +1492,7 @@ func handleTypeText(params: Any?, id: Any?) {
     if text.isEmpty {
         writeResponse([
             "id": id ?? NSNull(),
-            "result": ["characters": 0],
+            "result": ["characters": 0, "method": "none", "execution_mode": "background"],
         ])
         return
     }
@@ -1406,7 +1508,7 @@ func handleTypeText(params: Any?, id: Any?) {
         return
     }
 
-    guard let targetPID = currentFrontmostPID,
+    guard let targetPID = currentTargetPID,
           let targetElement = currentElements[parsedElementRef.value] else {
         writeResponse(makeError(
             id: id,
@@ -1415,6 +1517,61 @@ func handleTypeText(params: Any?, id: Any?) {
         ))
         return
     }
+
+    // 1) Background semantic：AXValue settable → AXSetValue（不切前台）。
+    var settable = DarwinBoolean(false)
+    if AXUIElementIsAttributeSettable(
+        targetElement, kAXValueAttribute as CFString, &settable
+    ) == .success, settable.boolValue {
+        let beforeValue = readAXFullString(
+            targetElement, kAXValueAttribute as CFString
+        )
+        let setResult = AXUIElementSetAttributeValue(
+            targetElement,
+            kAXValueAttribute as CFString,
+            text as CFString
+        )
+        if setResult == .success {
+            var afterValue = readAXFullString(
+                targetElement, kAXValueAttribute as CFString
+            )
+            for _ in 0..<8 where beforeValue != nil && afterValue == beforeValue {
+                Thread.sleep(forTimeInterval: 0.05)
+                afterValue = readAXFullString(
+                    targetElement, kAXValueAttribute as CFString
+                )
+            }
+            let verificationStatus: String
+            if let beforeValue, let afterValue {
+                verificationStatus = beforeValue == afterValue ? "mismatch" : "verified"
+            } else {
+                verificationStatus = "unverified"
+            }
+            let evidence: [String: Any] = [
+                "value_readable": beforeValue != nil && afterValue != nil,
+                "value_changed": beforeValue != nil && afterValue != beforeValue,
+                "before_characters": beforeValue.map { $0.count } ?? NSNull(),
+                "after_characters": afterValue.map { $0.count } ?? NSNull(),
+            ]
+            clearObservationCache()
+            writeResponse([
+                "id": id ?? NSNull(),
+                "result": [
+                    "characters": characterCount(text),
+                    "element_ref": parsedElementRef.value,
+                    "delivery_status": "delivered",
+                    "verification_status": verificationStatus,
+                    "evidence": evidence,
+                    "method": "ax_set_value",
+                    "execution_mode": "background",
+                ],
+            ])
+            return
+        }
+        // AXSetValue 失败 → 回退 Targeted background input（CGEventPostToPid）。
+    }
+
+    // 2) Targeted background input：CGEventPostToPid（不强制前台）。
     let beforeValue = readAXFullString(
         targetElement, kAXValueAttribute as CFString
     )
@@ -1465,6 +1622,8 @@ func handleTypeText(params: Any?, id: Any?) {
             "delivery_status": "delivered",
             "verification_status": verificationStatus,
             "evidence": evidence,
+            "method": "cg_event_pid",
+            "execution_mode": "background",
         ],
     ])
 }
@@ -1498,10 +1657,17 @@ func handleTestTypeLogic(params: Any?, id: Any?) {
 /// 成功按键后的响应 payload（同时使旧 Observation 失效）。
 func successfulKeyPayload(
     normalizedKey: String,
-    modifiers: [String]
+    modifiers: [String],
+    method: String = "cg_event_pid",
+    executionMode: String = "background"
 ) -> [String: Any] {
     clearObservationCache()
-    return ["key": normalizedKey, "modifiers": modifiers]
+    return [
+        "key": normalizedKey,
+        "modifiers": modifiers,
+        "method": method,
+        "execution_mode": executionMode,
+    ]
 }
 
 /// 处理 key_press 请求（V6）。
@@ -1514,13 +1680,15 @@ func handleKeyPress(params: Any?, id: Any?) {
         let key = params["key"] as? String,
         !key.isEmpty,
         let expectedObservationID = params["expected_observation_id"] as? String,
-        !expectedObservationID.isEmpty
+        !expectedObservationID.isEmpty,
+        let sessionID = params["session_id"] as? String,
+        !sessionID.isEmpty
     else {
         writeResponse(
             makeError(
                 id: id,
                 code: "invalid_params",
-                message: "missing or empty 'key'"
+                message: "missing or empty 'key' / 'expected_observation_id' / 'session_id'"
             )
         )
         return
@@ -1529,10 +1697,18 @@ func handleKeyPress(params: Any?, id: Any?) {
         // 非法 element_ref 已由解析函数写响应。
         return
     }
+    beginSessionIfNeeded(sessionID)
+    guard validateSession(sessionID) else {
+        writeResponse(makeError(id: id, code: "session_mismatch",
+                                message: "session is not active; start a new run")); return
+    }
 
-    // key_press 需要人工审批，审批 UI 会抢焦点：漂移时先恢复已批准目标再执行。
-    guard requireFreshObservation(
-        expectedObservationID, id: id, restoreOnDrift: true
+    // Background-first：CGEventPostToPid 只要求 Target Snapshot 一致，不强制前台。
+    guard requireBackgroundFresh(
+        expectedObservationID,
+        sessionID: sessionID,
+        id: id,
+        allowForegroundRestore: true
     ) else { return }
 
     // 可选：先把目标元素聚焦，再发送按键。
@@ -1625,7 +1801,7 @@ func handleKeyPress(params: Any?, id: Any?) {
     }
     down.flags = mods.flags
     up.flags = mods.flags
-    guard let targetPID = currentFrontmostPID else {
+    guard let targetPID = currentTargetPID else {
         writeResponse(makeError(
             id: id, code: "stale_observation", message: "missing target pid"
         ))
@@ -1638,7 +1814,9 @@ func handleKeyPress(params: Any?, id: Any?) {
         "id": id ?? NSNull(),
         "result": successfulKeyPayload(
             normalizedKey: normalizeKey(key),
-            modifiers: mods.normalized
+            modifiers: mods.normalized,
+            method: "cg_event_pid",
+            executionMode: "background"
         ),
     ])
 }
@@ -1766,7 +1944,7 @@ func handleTestObservationCache(params: Any?, id: Any?) {
             "cache_cleared":
                 currentObservationID == nil && currentElements.isEmpty
                 && currentWindows.isEmpty && currentScreenshotMapping == nil
-                && currentFrontmostPID == nil && currentFocusedWindow == nil,
+                && currentTargetPID == nil && currentFocusedWindow == nil,
         ],
     ])
 }
@@ -1774,12 +1952,12 @@ func handleTestObservationCache(params: Any?, id: Any?) {
 func handleTestFreshGuard(params: Any?, id: Any?) {
     let stateMatches = (params as? [String: Any])?["state_matches"] as? Bool ?? false
     seedFakeMapping(observationID: "obs-fresh", refs: ["e1"])
-    currentFrontmostPID = 123
+    currentTargetPID = 123
     if !stateMatches { clearObservationCache() }
     writeResponse(["id": id ?? NSNull(), "result": [
         "accepted": stateMatches,
         "cache_cleared": currentObservationID == nil && currentElements.isEmpty
-            && currentFrontmostPID == nil
+            && currentTargetPID == nil
     ]])
 }
 
@@ -1788,7 +1966,7 @@ func handleTestFreshGuard(params: Any?, id: Any?) {
 /// 必须返回 false 且不崩溃、不清空缓存（是否 stale 由调用方决定）。
 func handleTestRestoreTarget(params: Any?, id: Any?) {
     seedFakeMapping(observationID: "obs-restore", refs: ["e1"])
-    currentFrontmostPID = 999_999  // 不存在的 PID → activate 无效果
+    currentTargetPID = 999_999  // 不存在的 PID → activate 无效果
     computerTargetPID = 999_999
     computerTargetBundleID = "com.example.Exited"
     computerTargetName = "Exited"
@@ -1849,9 +2027,15 @@ func handleFocusWindow(params: Any?, id: Any?) {
     guard let params = params as? [String: Any],
           let observationID = params["observation_id"] as? String,
           let windowRef = params["window_ref"] as? String,
-          !observationID.isEmpty, !windowRef.isEmpty else {
+          let sessionID = params["session_id"] as? String,
+          !observationID.isEmpty, !windowRef.isEmpty, !sessionID.isEmpty else {
         writeResponse(makeError(id: id, code: "invalid_params",
-                                message: "missing observation_id/window_ref")); return
+                                message: "missing observation_id/window_ref/session_id")); return
+    }
+    beginSessionIfNeeded(sessionID)
+    guard validateSession(sessionID) else {
+        writeResponse(makeError(id: id, code: "session_mismatch",
+                                message: "session is not active; start a new run")); return
     }
     guard observationID == currentObservationID else {
         writeResponse(makeError(id: id, code: "stale_observation",
@@ -1872,11 +2056,15 @@ func handleFocusWindow(params: Any?, id: Any?) {
         writeResponse(makeError(id: id, code: "focus_window_failed",
                                 message: "AXRaise failed")); return
     }
-    if let pid = currentFrontmostPID {
+    if let pid = currentTargetPID {
         NSRunningApplication(processIdentifier: pid)?.activate(options: [])
     }
     clearObservationCache()
-    writeResponse(["id": id ?? NSNull(), "result": ["window_ref": windowRef]])
+    writeResponse(["id": id ?? NSNull(), "result": [
+        "window_ref": windowRef,
+        "method": "ax_raise",
+        "execution_mode": "foreground_fallback",
+    ]])
 }
 
 func handleScroll(params: Any?, id: Any?) {
@@ -1884,13 +2072,22 @@ func handleScroll(params: Any?, id: Any?) {
           let dx = params["delta_x"] as? Int,
           let dy = params["delta_y"] as? Int,
           let expectedObservationID = params["expected_observation_id"] as? String,
-          !expectedObservationID.isEmpty,
+          let sessionID = params["session_id"] as? String,
+          !expectedObservationID.isEmpty, !sessionID.isEmpty,
           validScroll(deltaX: dx, deltaY: dy) else {
         writeResponse(makeError(id: id, code: "invalid_params",
                                 message: "scroll deltas must contain a non-zero integer")); return
     }
-    guard requireFreshObservation(
-        expectedObservationID, id: id, restoreOnDrift: true
+    beginSessionIfNeeded(sessionID)
+    guard validateSession(sessionID) else {
+        writeResponse(makeError(id: id, code: "session_mismatch",
+                                message: "session is not active; start a new run")); return
+    }
+    guard requireBackgroundFresh(
+        expectedObservationID,
+        sessionID: sessionID,
+        id: id,
+        allowForegroundRestore: true
     ) else { return }
     guard AXIsProcessTrusted() else {
         writeResponse(makeError(id: id, code: "accessibility_permission_required",
@@ -1902,21 +2099,29 @@ func handleScroll(params: Any?, id: Any?) {
                                 message: "failed to create scroll event")); return
     }
     event.post(tap: .cghidEventTap); clearObservationCache()
-    writeResponse(["id": id ?? NSNull(), "result": ["delta_x": dx, "delta_y": dy]])
+    writeResponse(["id": id ?? NSNull(), "result": ["delta_x": dx, "delta_y": dy,
+        "method": "scroll_event", "execution_mode": "background"]])
 }
 
 func handleClickCoordinate(params: Any?, id: Any?) {
     guard let params = params as? [String: Any],
           let observationID = params["observation_id"] as? String,
-          let x = params["x"] as? Int, let y = params["y"] as? Int else {
+          let x = params["x"] as? Int, let y = params["y"] as? Int,
+          let sessionID = params["session_id"] as? String,
+          !sessionID.isEmpty else {
         writeResponse(makeError(id: id, code: "invalid_params",
-                                message: "missing observation_id/x/y")); return
+                                message: "missing observation_id/x/y/session_id")); return
+    }
+    beginSessionIfNeeded(sessionID)
+    guard validateSession(sessionID) else {
+        writeResponse(makeError(id: id, code: "session_mismatch",
+                                message: "session is not active; start a new run")); return
     }
     guard observationID == currentObservationID else {
         writeResponse(makeError(id: id, code: "stale_observation",
                                 message: "stale observation")); return
     }
-    // click_coordinate 需要人工审批，审批 UI 会抢焦点：漂移时先恢复已批准目标再执行。
+    // click_coordinate 依赖真实窗口几何与全局指针语义，执行前必须 foreground verify。
     guard requireFreshObservation(
         observationID,
         id: id,
@@ -2010,6 +2215,9 @@ func handleRequest(_ payload: [String: Any]) {
 
     case "observe":
         handleObserve(params: payload["params"], id: id)
+
+    case "end_session":
+        handleEndSession(params: payload["params"], id: id)
 
     case "__test_ax_logic":
         handleTestAXLogic(params: payload["params"], id: id)

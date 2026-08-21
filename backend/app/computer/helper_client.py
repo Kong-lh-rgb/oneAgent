@@ -36,7 +36,14 @@ logger = logging.getLogger("vesta.computer.helper")
 
 
 class ComputerHelperError(RuntimeError):
-    """Computer Helper 错误基类（helper 返回 error response 等）。"""
+    """Computer Helper 错误基类（helper 返回 error response 等）。
+
+    ``code``：helper 返回的结构化错误码（见 app.computer.errors）；
+    非 helper 错误（传输层）时为 None。
+    """
+
+    code: str | None = None
+
 
 
 class ComputerHelperProcessError(ComputerHelperError):
@@ -292,11 +299,10 @@ class MacOSHelperClient:
             else:
                 code, message = None, str(error)
             detail = f"{code}: {message}" if code is not None else str(message)
-            future.set_exception(
-                ComputerHelperError(
-                    f"computer helper error: {detail}"
-                )
-            )
+            exc = ComputerHelperError(f"computer helper error: {detail}")
+            if code is not None:
+                exc.code = str(code)
+            future.set_exception(exc)
             return
 
         result = payload.get("result")

@@ -7,6 +7,7 @@ import logging
 import uuid
 from pathlib import Path
 
+from . import errors as computer_errors
 from .helper_client import (
     ComputerHelperError,
     ComputerHelperProcessError,
@@ -27,36 +28,49 @@ from .models import (
     VerificationStatus,
     Window,
 )
+from .session import (
+    ComputerSession,
+    ComputerSessionManager,
+)
 
 __all__ = ["MacOSComputerRuntime"]
 logger = logging.getLogger("vesta.computer.macos")
 _TEXT_ENTRY_ROLES = frozenset({"text_area", "text_field", "combo_box"})
 
+# 结构化错误码 → 模型友好的 recovery hint。
 _RECOVERY_HINTS = {
-    "app_activation_failed": (
+    computer_errors.FOREGROUND_ACTIVATION_FAILED: (
         "应用已经启动但没有成为前台；继续 observe 已绑定的 target，执行副作用前"
         "Runtime 会再次尝试激活"
     ),
     "editable_target_required": (
         "重新调用 computer_observe，并把返回的 editable element_ref 传给 computer_type"
     ),
-    "element_not_editable": (
+    computer_errors.ELEMENT_NOT_EDITABLE: (
         "重新观察并选择 editable=true 的 element_ref"
     ),
-    "stale_observation": (
+    computer_errors.STALE_SNAPSHOT: (
         "目标或窗口已经变化；重新调用 computer_observe 获取新的 observation_id"
     ),
-    "action_not_supported": (
+    computer_errors.ACTION_NOT_SUPPORTED: (
         "重新观察目标并选择 actions 中包含所需动作的元素"
     ),
-    "target_not_running": "目标应用已经退出；先重新调用 computer_open_app",
+    computer_errors.TARGET_NOT_RUNNING: (
+        "目标应用已经退出；先重新调用 computer_open_app"
+    ),
+    computer_errors.SESSION_NOT_ACTIVE: (
+        "computer_* 必须在一次活跃 Run 内执行；请重新发起一次 Run"
+    ),
+    computer_errors.SESSION_MISMATCH: (
+        "请求的 session 已过期；Run 结束后请重新发起"
+    ),
 }
 
 
-def _with_recovery_hint(message: str) -> str:
-    for code, hint in _RECOVERY_HINTS.items():
-        if code in message:
-            return f"{message}; recovery: {hint}"
+def _with_recovery_hint(code: str | None, message: str) -> str:
+    hint = _RECOVERY_HINTS.get(code or "")
+    if hint:
+        return f"{message}; recovery: {hint}"
     return message
 
 
@@ -107,7 +121,10 @@ class MacOSComputerRuntime:
     """把 ComputerRuntime 契约委托给长驻 Swift helper。"""
 
     def __init__(
-        self, helper_client: MacOSHelperClient, screenshot_dir: Path | None = None
+        self,
+        helper_client: MacOSHelperClient,
+        screenshot_dir: Path | None = None,
+        session_manager: ComputerSessionManager | None = None,
     ) -> None:
         self.helper_client = helper_client
         self.screenshot_dir = (
@@ -121,8 +138,48 @@ class MacOSComputerRuntime:
             .expanduser()
             .resolve()
         )
+        self._session_manager = session_manager or ComputerSessionManager()
         self._last_observation_id: str | None = None
         self._last_observation: Observation | None = None
+
+    # ------------------------------------------------------------------
+    # Session 生命周期
+    # ------------------------------------------------------------------
+
+    def set_session_manager(self, manager: ComputerSessionManager) -> None:
+        """由 composition root 注入共享 SessionManager（与 LeaseHook 共用）。"""
+
+        self._session_manager = manager
+
+    def begin_session(self, run_id: str) -> ComputerSession:
+        return self._session_manager.begin(run_id)
+
+    async def end_session(self, run_id: str) -> bool:
+        """结束 Run 的 Session：清 Python 状态，并通知 helper 清 Native 状态。
+
+        幂等；helper 不可用时不阻断 Run 终态。
+        """
+
+        session = self._session_manager.get(run_id)
+        ended = self._session_manager.end(run_id)
+        if session is not None:
+            try:
+                await self.helper_client.ensure_started()
+                await self.helper_client.call(
+                    "end_session",
+                    {"session_id": session.session_id},
+                )
+            except Exception:  # noqa: BLE001 - 清理失败不影响 Run 终态
+                logger.exception(
+                    "failed to end computer session on helper (run %s)", run_id
+                )
+        return ended
+
+    def _require_session(self) -> ComputerSession:
+        return self._session_manager.require_active()
+
+    def _session_params(self, session: ComputerSession) -> dict[str, object]:
+        return {"session_id": session.session_id}
 
     def _invalidate(self) -> None:
         self._last_observation_id = None
@@ -133,23 +190,38 @@ class MacOSComputerRuntime:
             raise ValueError("fresh observation required before computer action")
         return self._last_observation_id
 
-    async def _mutation_call(self, method: str, params: dict[str, object]) -> dict:
-        """副作用请求绝不重放；不确定或 stale 时丢弃本地 Observation。"""
+    async def _mutation_call(
+        self,
+        method: str,
+        params: dict[str, object],
+        *,
+        session: ComputerSession | None = None,
+    ) -> dict:
+        """副作用请求绝不重放；结构化错误码规范化，不确定/stale 时丢弃本地观察。"""
 
+        session = session or self._require_session()
+        payload = self._session_params(session)
+        payload.update(params)
         try:
-            return await self.helper_client.call(method, params)
+            return await self.helper_client.call(method, payload)
         except asyncio.CancelledError:
             self._invalidate()
             raise
         except ComputerHelperError as exc:
+            raw_code = getattr(exc, "code", None)
+            code = computer_errors.canonicalize(raw_code)
             uncertain = isinstance(
                 exc, (ComputerHelperProcessError, ComputerHelperProtocolError)
             ) or "timed out" in str(exc)
-            stale = "stale_observation" in str(exc)
+            stale = code == computer_errors.STALE_SNAPSHOT or (
+                "stale_observation" in str(exc)
+            )
             if uncertain or stale:
                 self._invalidate()
             if type(exc) is ComputerHelperError:
-                raise ComputerHelperError(_with_recovery_hint(str(exc))) from exc
+                raise ComputerHelperError(
+                    _with_recovery_hint(code, str(exc))
+                ) from exc
             raise
 
     async def start(self) -> None:
@@ -161,11 +233,25 @@ class MacOSComputerRuntime:
     async def open_app(self, app: str) -> ActionResult:
         if not isinstance(app, str) or not app.strip():
             raise ValueError("'app' must be a non-empty string")
-        result = await self._mutation_call("open_app", {"app": app})
+        session = self._require_session()
+        result = await self._mutation_call("open_app", {"app": app}, session=session)
+        # open_app 把 Session Target 显式绑定到启动的应用（best effort 前台）。
+        # helper 返回 {app, bundle_id, process_id}（无 name 字段），此处归一化。
+        target = _active_app(
+            {
+                "name": result.get("app"),
+                "bundle_id": result.get("bundle_id"),
+                "process_id": result.get("process_id"),
+            }
+        )
+        if target is not None:
+            session.begin_target(target)
         self._invalidate()
         return ActionResult(
             success=True,
             action=ActionName.OPEN_APP,
+            method=result.get("method") or "activate",
+            execution_mode=result.get("execution_mode") or "foreground_fallback",
             metadata={
                 "app": result.get("app"),
                 "bundle_id": result.get("bundle_id"),
@@ -181,20 +267,28 @@ class MacOSComputerRuntime:
     async def observe(self, include_screenshot: bool = True) -> Observation:
         if not isinstance(include_screenshot, bool):
             raise ValueError("'include_screenshot' must be a boolean")
+        session = self._require_session()
         observation_id = uuid.uuid4().hex
         await self.helper_client.ensure_started()
-        params: dict[str, object] = {
-            "observation_id": observation_id,
-            "include_screenshot": include_screenshot,
-        }
+        params: dict[str, object] = self._session_params(session)
+        params.update(
+            {
+                "observation_id": observation_id,
+                "include_screenshot": include_screenshot,
+            }
+        )
         if include_screenshot:
             self.screenshot_dir.mkdir(parents=True, exist_ok=True)
             params["screenshot_path"] = str(
                 self.screenshot_dir / f"{observation_id}.png"
             )
         result = await self.helper_client.call("observe", params)
-        active_app = _active_app(result.get("active_app"))
-        target = _active_app(result.get("target")) or active_app
+        target = _active_app(result.get("target"))
+        user_frontmost = _active_app(result.get("user_frontmost_app"))
+        if target is None:
+            target = _active_app(result.get("active_app"))
+        if user_frontmost is None:
+            user_frontmost = _active_app(result.get("active_app"))
         windows = tuple(
             _window(item)
             for item in (result.get("windows") or [])
@@ -223,9 +317,10 @@ class MacOSComputerRuntime:
             )
         observation = Observation(
             id=observation_id,
-            active_app=active_app,
+            active_app=target,
             target=target,
             target_is_frontmost=bool(result.get("target_is_frontmost", False)),
+            user_frontmost_app=user_frontmost,
             active_window=active_window,
             windows=windows,
             elements=elements,
@@ -240,6 +335,12 @@ class MacOSComputerRuntime:
             ),
             screenshot_ref=screenshot_ref,
         )
+        # Target-bound：写回 Session（初始 observe 以当前 frontmost 为 target 时
+        # 也显式落库，之后不随 frontmost 漂移）。
+        if target is not None:
+            session.begin_target(target)
+        session.previous_user_focus = user_frontmost
+        session.attach_snapshot(observation)
         self._last_observation_id = observation_id
         self._last_observation = observation
         return observation
@@ -255,19 +356,23 @@ class MacOSComputerRuntime:
             )
             metadata = {
                 "element_ref": target.element_ref,
-                "method": "ax_press",
                 "action": result.get("action"),
             }
+            method = result.get("method") or "ax_press"
         elif isinstance(target, CoordinateTarget):
             result = await self._mutation_call(
                 "click_coordinate",
-                {"observation_id": target.observation_id, "x": target.x, "y": target.y},
+                {
+                    "observation_id": target.observation_id,
+                    "x": target.x,
+                    "y": target.y,
+                },
             )
             metadata = {
-                "method": "coordinate",
                 "x": result.get("x", target.x),
                 "y": result.get("y", target.y),
             }
+            method = result.get("method") or "coordinate"
         else:
             raise ValueError("unsupported click target")
         self._invalidate()
@@ -275,6 +380,10 @@ class MacOSComputerRuntime:
             success=True,
             action=ActionName.CLICK,
             observation_id=target.observation_id,
+            method=method,
+            execution_mode=result.get("execution_mode") or (
+                "background" if method != "coordinate" else "foreground_fallback"
+            ),
             metadata=metadata,
         )
 
@@ -309,6 +418,8 @@ class MacOSComputerRuntime:
                 result.get("delivery_status", DeliveryStatus.DELIVERED)
             ),
             verification_status=verification_status,
+            method=result.get("method") or "cg_event_pid",
+            execution_mode=result.get("execution_mode") or "background",
             metadata={
                 "characters": result.get("characters", 0),
                 "element_ref": result.get("element_ref", target_ref),
@@ -385,6 +496,8 @@ class MacOSComputerRuntime:
         return ActionResult(
             success=True,
             action=ActionName.KEY,
+            method=result.get("method") or "cg_event_pid",
+            execution_mode=result.get("execution_mode") or "background",
             metadata={
                 "key": result.get("key"),
                 "modifiers": result.get("modifiers", []),
@@ -410,6 +523,8 @@ class MacOSComputerRuntime:
         return ActionResult(
             success=True,
             action=ActionName.SCROLL,
+            method=result.get("method") or "cg_event_pid",
+            execution_mode=result.get("execution_mode") or "background",
             metadata={
                 "delta_x": result.get("delta_x", delta_x),
                 "delta_y": result.get("delta_y", delta_y),
@@ -428,5 +543,7 @@ class MacOSComputerRuntime:
             success=True,
             action=ActionName.FOCUS_WINDOW,
             observation_id=observation_id,
+            method=result.get("method") or "ax_raise",
+            execution_mode=result.get("execution_mode") or "foreground_fallback",
             metadata={"window_ref": result.get("window_ref", window_ref)},
         )

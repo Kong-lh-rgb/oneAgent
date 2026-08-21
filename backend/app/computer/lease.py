@@ -9,8 +9,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
+from typing import TYPE_CHECKING
 
 from app.tools.hooks import ToolExecutionContext, ToolHook, ToolHookDecision
+
+if TYPE_CHECKING:
+    from .session import ComputerSessionManager
 
 logger = logging.getLogger("vesta.computer.lease")
 
@@ -114,12 +118,22 @@ class ComputerLeaseManager:
 
 
 class ComputerLeaseHook(ToolHook):
-    """只拦截 computer_*，生产链缺 run_id 时 fail closed。"""
+    """只拦截 computer_*，生产链缺 run_id 时 fail closed。
+
+    acquire 成功后同时 ``begin`` Run-scoped ComputerSession（V2）：
+    Lease 保证单 Run 控制 Computer，Session 负责把 target / snapshot 状态
+    归属到该 Run，并在 Run 结束时清除。
+    """
 
     critical = True
 
-    def __init__(self, manager: ComputerLeaseManager) -> None:
+    def __init__(
+        self,
+        manager: ComputerLeaseManager,
+        session_manager: ComputerSessionManager | None = None,
+    ) -> None:
         self.manager = manager
+        self.session_manager = session_manager
 
     async def before_execute(
         self, context: ToolExecutionContext
@@ -134,6 +148,8 @@ class ComputerLeaseHook(ToolHook):
             self.manager.acquire(context.run_id)
         except ComputerBusyError as exc:
             return ToolHookDecision(denied_reason=str(exc))
+        if self.session_manager is not None:
+            self.session_manager.begin(context.run_id)
         return None
 
 

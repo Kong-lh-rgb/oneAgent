@@ -81,12 +81,16 @@ class StubHelperClient:
         self.error = error
         self.per_method = per_method or {}
         self.calls: list[tuple[str, dict]] = []
+        self.session_ids: list[str | None] = []
 
     async def ensure_started(self) -> None:
         return None
 
     async def call(self, method: str, params: dict | None = None, **kwargs):
-        self.calls.append((method, params or {}))
+        params = params or {}
+        # V2：session_id 单独记录，不影响既有断言；新协议由专门用例验证。
+        self.session_ids.append(params.pop("session_id", None))
+        self.calls.append((method, params))
         if self.error is not None:
             raise self.error
         if method in self.per_method:
@@ -96,6 +100,8 @@ class StubHelperClient:
 
 def _runtime(stub: StubHelperClient) -> MacOSComputerRuntime:
     runtime = MacOSComputerRuntime(stub)  # type: ignore[arg-type]
+    # V2：所有请求都需要 Run-scoped active session；测试用固定 run 建立。
+    runtime.begin_session("test-run")
     # 旧能力测试直接验证请求映射；V8 专门用独立用例验证缺少 fresh observe。
     runtime._last_observation_id = "obs-current"
     runtime._last_observation = Observation(
@@ -524,8 +530,8 @@ async def test_click_converts_to_action_result() -> None:
     assert result.success is True
     assert result.action is ActionName.CLICK
     assert result.observation_id == "obs-1"
+    assert result.method == "ax_press"
     assert result.metadata["element_ref"] == "e1"
-    assert result.metadata["method"] == "ax_press"
     assert result.metadata["action"] == "press"
 
 
@@ -557,7 +563,8 @@ async def test_click_coordinate_target_calls_helper() -> None:
     assert stub.calls == [
         ("click_coordinate", {"observation_id": "obs-1", "x": 10, "y": 20})
     ]
-    assert result.metadata == {"method": "coordinate", "x": 10, "y": 20}
+    assert result.method == "coordinate"
+    assert result.metadata == {"x": 10, "y": 20}
 
 
 async def test_click_does_not_break_observe_and_open_app() -> None:
@@ -1010,6 +1017,7 @@ async def test_observe_converts_multiple_windows_and_screenshot(tmp_path) -> Non
     )
     stub = StubHelperClient(result=payload)
     runtime = MacOSComputerRuntime(stub, screenshot_dir=tmp_path)  # type: ignore[arg-type]
+    runtime.begin_session("test-run")
     observation = await runtime.observe()
     assert [window.ref for window in observation.windows] == ["w1", "w2"]
     assert observation.active_window is observation.windows[1]
@@ -1022,6 +1030,7 @@ async def test_observe_converts_multiple_windows_and_screenshot(tmp_path) -> Non
 async def test_observe_without_screenshot_does_not_send_path(tmp_path) -> None:
     stub = StubHelperClient(result=_observe_result())
     runtime = MacOSComputerRuntime(stub, screenshot_dir=tmp_path)  # type: ignore[arg-type]
+    runtime.begin_session("test-run")
     observation = await runtime.observe(include_screenshot=False)
     assert observation.screenshot_ref is None
     assert stub.calls[0][1]["include_screenshot"] is False
@@ -1034,6 +1043,7 @@ async def test_screenshot_error_keeps_structured_observation(tmp_path) -> None:
     runtime = MacOSComputerRuntime(  # type: ignore[arg-type]
         StubHelperClient(result=payload), screenshot_dir=tmp_path
     )
+    runtime.begin_session("test-run")
     observation = await runtime.observe()
     assert observation.active_app is not None
     assert observation.active_window is not None
@@ -1051,6 +1061,7 @@ async def test_successful_mutations_invalidate_latest_observation(tmp_path) -> N
         }
     )
     runtime = MacOSComputerRuntime(stub, screenshot_dir=tmp_path)  # type: ignore[arg-type]
+    runtime.begin_session("test-run")
     await runtime.observe(False)
     assert runtime._last_observation_id is not None
     await runtime.type("")

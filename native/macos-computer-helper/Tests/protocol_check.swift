@@ -233,7 +233,7 @@ do {
     let missingApp = try request([
         "id": 22,
         "method": "open_app",
-        "params": ["app": "VestaDefinitelyMissingApp_9f3a2b"],
+        "params": ["app": "VestaDefinitelyMissingApp_9f3a2b", "session_id": "sess-check"],
     ])
     check(
         "open_app 不存在 → app_not_found",
@@ -297,13 +297,18 @@ do {
     //     已授权 → 校验返回结构合法（elements 数组 / truncated bool）。
     let observeRes = try request([
         "id": 41, "method": "observe",
-        "params": ["observation_id": "test-obs-1"],
+        "params": ["observation_id": "test-obs-1", "session_id": "sess-check"],
     ])
     if trusted == true {
         let result = observeRes["result"] as? [String: Any]
         check("observe(已授权) 返回 result 对象", result != nil)
         check("observe elements 是数组", result?["elements"] is [Any])
         check("observe truncated 是 bool", result?["truncated"] is Bool)
+        check(
+            "observe 返回 user_frontmost_app",
+            result?["user_frontmost_app"] is [String: Any]
+                || result?["user_frontmost_app"] is NSNull
+        )
     } else {
         check(
             "observe 未授权 → accessibility_permission_required",
@@ -311,6 +316,37 @@ do {
                 == "accessibility_permission_required"
         )
     }
+
+    // 15b. Session 生命周期：end_session 幂等 + 跨 session fail closed。
+    let end1 = try request([
+        "id": 90, "method": "end_session",
+        "params": ["session_id": "sess-check"],
+    ])
+    check(
+        "end_session 结束当前 session",
+        (end1["result"] as? [String: Any])?["ended"] as? Bool == true
+    )
+    let end2 = try request([
+        "id": 91, "method": "end_session",
+        "params": ["session_id": "sess-check"],
+    ])
+    check(
+        "end_session 重复调用返回 false",
+        (end2["result"] as? [String: Any])?["ended"] as? Bool == false
+    )
+    // 新 session 建立后，旧 session 的请求必须 fail closed。
+    _ = try request([
+        "id": 92, "method": "observe",
+        "params": ["observation_id": "obs-s2", "session_id": "sess-2"],
+    ])
+    let oldSession = try request([
+        "id": 93, "method": "end_session",
+        "params": ["session_id": "sess-check"],
+    ])
+    check(
+        "旧 session 请求 fail closed",
+        (oldSession["result"] as? [String: Any])?["ended"] as? Bool == false
+    )
 
     // 16. __test_ax_logic：role / action normalize、value 截断、限制、ref 顺序
     let axLogic = try request(["id": 42, "method": "__test_ax_logic", "params": [:]])

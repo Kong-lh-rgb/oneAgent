@@ -15,11 +15,18 @@ _FAILURE_CODES = (
     "editable_target_required",
     "element_not_editable",
     "stale_observation",
+    "stale_snapshot",
     "action_not_supported",
     "target_not_running",
+    "target_not_set",
+    "target_window_not_found",
     "element_not_found",
     "focus_failed",
     "input_effect_mismatch",
+    "background_action_failed",
+    "foreground_activation_failed",
+    "session_not_active",
+    "session_mismatch",
 )
 
 
@@ -137,7 +144,16 @@ def _json_object(raw: str | None) -> dict[str, object]:
 
 
 def _failure_code(error: str | None) -> str:
+    """优先读取结构化错误码；否则回退到子串匹配与正则。"""
+
     text = error or "unknown_computer_failure"
+    # helper error 协议格式：computer helper error: {code}: {message}
+    marker = "computer helper error: "
+    if marker in text:
+        rest = text.split(marker, 1)[1]
+        first = rest.split(":", 1)[0].strip()
+        if first and re.fullmatch(r"[a-z][a-z0-9_]{1,}", first):
+            return first
     for code in _FAILURE_CODES:
         if code in text:
             return code

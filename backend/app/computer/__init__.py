@@ -48,6 +48,13 @@ from .models import (
     Window,
 )
 from .runtime import ComputerRuntime
+from .session import (
+    ComputerSession,
+    ComputerSessionError,
+    ComputerSessionManager,
+    ComputerSessionMismatchError,
+    ComputerSessionNotActiveError,
+)
 from .tools import (
     ComputerClickTool,
     ComputerFocusWindowTool,
@@ -79,6 +86,11 @@ __all__ = [
     "ComputerOpenAppTool",
     "ComputerRuntime",
     "ComputerScrollTool",
+    "ComputerSession",
+    "ComputerSessionError",
+    "ComputerSessionManager",
+    "ComputerSessionMismatchError",
+    "ComputerSessionNotActiveError",
     "ComputerTypeTool",
     "CoordinateTarget",
     "DeliveryStatus",

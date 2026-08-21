@@ -45,6 +45,7 @@ from app.computer import (
     ComputerLeaseHook,
     ComputerLeaseManager,
     ComputerRuntime,
+    ComputerSessionManager,
     register_computer_tools,
 )
 from app.context import (
@@ -281,6 +282,7 @@ class Application:
         self.artifact_service: ArtifactService | None = None
         self.computer_runtime: ComputerRuntime | None = None
         self.computer_lease: ComputerLeaseManager | None = None
+        self.computer_session: ComputerSessionManager | None = None
         self.tool_registry: ToolRegistry | None = None
         self.task_store: FileTaskStore | None = None
         self.memory_manager: MemoryManager | None = None
@@ -392,12 +394,21 @@ class Application:
         # Computer Runtime 可注入真实 macOS 实现或测试 Fake；未注入则不注册，
         # 普通 CLI / Host 现有功能完全不受影响。
         computer_lease: ComputerLeaseManager | None = None
+        computer_session: ComputerSessionManager | None = None
         computer_hooks = ()
         if self._computer_runtime is not None:
+            computer_session = ComputerSessionManager()
+            set_session_manager = getattr(
+                self._computer_runtime, "set_session_manager", None
+            )
+            if callable(set_session_manager):
+                set_session_manager(computer_session)
             computer_lease = ComputerLeaseManager(
                 database.parent / "computer" / "machine.lock"
             )
-            computer_hooks = (ComputerLeaseHook(computer_lease),)
+            computer_hooks = (
+                ComputerLeaseHook(computer_lease, computer_session),
+            )
             register_computer_tools(tool_registry, self._computer_runtime)
             self.computer_runtime = self._computer_runtime
             # 真实 MacOSComputerRuntime 才有显式 start / close；
@@ -480,12 +491,21 @@ class Application:
         )
 
         run_store = SQLiteRunStore(database)
+        # Run 终态 finalizer 顺序：先 end ComputerSession（清 target/snapshot + 通知
+        # helper 清 Native 状态），再 release Machine Lease。
+        computer_finalizers: list[object] = []
+        if computer_session is not None:
+            end_session = getattr(self._computer_runtime, "end_session", None)
+            if callable(end_session):
+                computer_finalizers.append(end_session)
+        if computer_lease is not None:
+            computer_finalizers.append(computer_lease.release)
         run_manager = RunManager(
             run_store,
             checkpoint_store,
             runtime,
             approval_store=approval_store,
-            run_finalizers=(computer_lease.release,) if computer_lease else (),
+            run_finalizers=tuple(computer_finalizers),
         )
         # 启动 reconciliation（Run + Checkpoint 统一处理）。
         reconciled_runs = await run_manager.initialize()
@@ -547,6 +567,7 @@ class Application:
         self.mcp_statuses = mcp_statuses
         self.mcp_error = mcp_error
         self.computer_lease = computer_lease
+        self.computer_session = computer_session
         self.runtime = runtime
         self.run_store = run_store
         self.run_manager = run_manager
@@ -571,6 +592,8 @@ class Application:
             await self.mcp_manager.close(self.tool_registry)
         if self.computer_lease is not None:
             self.computer_lease.close()
+        if self.computer_session is not None:
+            self.computer_session.close()
         if self.computer_runtime is not None:
             # 只在确实注入真实 MacOSComputerRuntime（有 close）时关闭 helper。
             close_runtime = getattr(self.computer_runtime, "close", None)
