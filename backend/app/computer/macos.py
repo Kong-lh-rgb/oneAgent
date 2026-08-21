@@ -19,9 +19,11 @@ from .models import (
     ActiveApp,
     Bounds,
     CoordinateTarget,
+    DeliveryStatus,
     Element,
     ElementTarget,
     Observation,
+    VerificationStatus,
     Window,
 )
 
@@ -56,6 +58,7 @@ def _element(data: dict) -> Element:
         value=data.get("value"),
         enabled=data.get("enabled", True),
         focused=data.get("focused", False),
+        editable=data.get("editable", False),
         bounds=_bounds(raw_bounds) if isinstance(raw_bounds, dict) else None,
         actions=tuple(data.get("actions") or ()),
     )
@@ -80,9 +83,11 @@ class MacOSComputerRuntime:
             .resolve()
         )
         self._last_observation_id: str | None = None
+        self._last_observation: Observation | None = None
 
     def _invalidate(self) -> None:
         self._last_observation_id = None
+        self._last_observation = None
 
     def _require_fresh(self) -> str:
         if self._last_observation_id is None:
@@ -124,6 +129,7 @@ class MacOSComputerRuntime:
                 "app": result.get("app"),
                 "bundle_id": result.get("bundle_id"),
                 "process_id": result.get("process_id"),
+                "frontmost_verified": result.get("frontmost_verified", False),
             },
         )
 
@@ -176,15 +182,23 @@ class MacOSComputerRuntime:
             logger.warning(
                 "macOS screenshot unavailable: %s", result["screenshot_error"]
             )
-        self._last_observation_id = observation_id
-        return Observation(
+        observation = Observation(
             id=observation_id,
             active_app=active_app,
             active_window=active_window,
             windows=windows,
             elements=elements,
+            focused_element_ref=(
+                result.get("focused_element_ref")
+                if isinstance(result.get("focused_element_ref"), str)
+                else None
+            ),
+            truncated=bool(result.get("truncated", False)),
             screenshot_ref=screenshot_ref,
         )
+        self._last_observation_id = observation_id
+        self._last_observation = observation
+        return observation
 
     async def click(self, target: ElementTarget | CoordinateTarget) -> ActionResult:
         if isinstance(target, ElementTarget):
@@ -228,21 +242,65 @@ class MacOSComputerRuntime:
         if not isinstance(text, str):
             raise ValueError("'text' must be a string")
         observation_id = self._require_fresh()
+        observation = self._last_observation
+        if observation is None:  # pragma: no cover - 由 _require_fresh 保证
+            raise ValueError("fresh observation required before computer action")
+        target_ref = self._resolve_editable_target(observation, element_ref)
         params: dict[str, object] = {
             "text": text,
             "expected_observation_id": observation_id,
+            "element_ref": target_ref,
         }
-        if element_ref is not None:
-            if not isinstance(element_ref, str) or not element_ref.strip():
-                raise ValueError("'element_ref' must be a non-empty string")
-            params["element_ref"] = element_ref.strip()
         result = await self._mutation_call("type_text", params)
         if text:
             self._invalidate()
+        verification_status = VerificationStatus(
+            result.get("verification_status", VerificationStatus.UNVERIFIED)
+        )
         return ActionResult(
-            success=True,
+            success=verification_status is not VerificationStatus.MISMATCH,
             action=ActionName.TYPE,
-            metadata={"characters": result.get("characters", 0)},
+            observation_id=observation_id,
+            delivery_status=DeliveryStatus(
+                result.get("delivery_status", DeliveryStatus.DELIVERED)
+            ),
+            verification_status=verification_status,
+            metadata={
+                "characters": result.get("characters", 0),
+                "element_ref": result.get("element_ref", target_ref),
+                "evidence": result.get("evidence", {}),
+            },
+        )
+
+    @staticmethod
+    def _resolve_editable_target(
+        observation: Observation,
+        element_ref: str | None,
+    ) -> str:
+        """把输入绑定到明确的可编辑元素，拒绝不确定的全局输入。"""
+
+        by_ref = {element.ref: element for element in observation.elements}
+        if element_ref is not None:
+            if not isinstance(element_ref, str) or not element_ref.strip():
+                raise ValueError("'element_ref' must be a non-empty string")
+            normalized = element_ref.strip()
+            target = by_ref.get(normalized)
+            if target is None:
+                raise ValueError(
+                    "element_ref does not belong to the latest observation"
+                )
+            if not target.editable:
+                raise ValueError("element_ref must refer to an editable element")
+            return normalized
+
+        focused = [
+            element for element in observation.elements
+            if element.focused and element.editable
+        ]
+        if len(focused) == 1:
+            return focused[0].ref
+        raise ValueError(
+            "editable_target_required: provide element_ref from the latest observation"
         )
 
     async def key(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
@@ -265,6 +266,10 @@ class ToolReducer:
         content = message.content or ""
         if len(content) <= self.max_tool_result_chars:
             return message
+        if message.name == "computer_observe":
+            semantic = self._compact_computer_observation(message, content)
+            if semantic is not None:
+                return semantic
 
         head = content[: self.tool_result_head_chars]
         tail = (
@@ -284,6 +289,74 @@ class ToolReducer:
         if len(compacted_content) >= len(content):
             return message
         return message.model_copy(update={"content": compacted_content})
+
+    def _compact_computer_observation(
+        self,
+        message: Message,
+        content: str,
+    ) -> Message | None:
+        """按语义裁剪 Observation，并始终给模型合法 JSON。"""
+
+        try:
+            payload = json.loads(content)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        raw_elements = payload.get("elements")
+        if not isinstance(raw_elements, list):
+            return None
+
+        compacted = {
+            key: payload[key]
+            for key in (
+                "id",
+                "created_at",
+                "active_app",
+                "active_window",
+                "focused_element_ref",
+                "truncated",
+                "screenshot_ref",
+            )
+            if key in payload
+        }
+        compacted["windows"] = (
+            payload.get("windows", [])[:3]
+            if isinstance(payload.get("windows"), list)
+            else []
+        )
+        compacted["elements"] = []
+        compacted["compaction"] = {
+            "kind": "semantic_observation",
+            "original_elements": len(raw_elements),
+            "kept_elements": 0,
+        }
+
+        for element in raw_elements:
+            compacted["elements"].append(element)
+            compacted["compaction"]["kept_elements"] = len(
+                compacted["elements"]
+            )
+            encoded = json.dumps(
+                compacted,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            if len(encoded) > self.max_tool_result_chars:
+                compacted["elements"].pop()
+                compacted["compaction"]["kept_elements"] = len(
+                    compacted["elements"]
+                )
+                break
+
+        encoded = json.dumps(
+            compacted,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        if len(encoded) >= len(content):
+            return message
+        return message.model_copy(update={"content": encoded})
 
     @staticmethod
     def _result(

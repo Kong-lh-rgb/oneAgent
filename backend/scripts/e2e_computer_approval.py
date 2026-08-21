@@ -30,7 +30,12 @@ DEFAULT_CONTENT = "打开备忘录，输入测试两个字"
 def req(method: str, params: dict | None = None) -> dict:
     global _request_id
     _request_id += 1
-    return {"jsonrpc": "2.0", "id": _request_id, "method": method, "params": params or {}}
+    return {
+        "jsonrpc": "2.0",
+        "id": _request_id,
+        "method": method,
+        "params": params or {},
+    }
 
 
 async def call(ws, method, params=None, timeout=15):
@@ -73,14 +78,18 @@ async def main() -> int:
         while asyncio.get_event_loop().time() - start < 120:
             try:
                 msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=20))
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 print("20s 无事件，继续等待……")
                 continue
             method = msg.get("method")
             params = msg.get("params") or {}
             if method == "approval.required":
                 appr = params.get("approval") or {}
-                print("approval.required:", appr.get("tool_name"), appr.get("id", "")[:8])
+                print(
+                    "approval.required:",
+                    appr.get("tool_name"),
+                    appr.get("id", "")[:8],
+                )
                 if appr.get("tool_name", "").startswith("computer_"):
                     approval_id = appr.get("id")
                     break
@@ -96,7 +105,8 @@ async def main() -> int:
 
         print(">>> 捕获到 computer approval，approve 中……")
         result = await call(ws, "approval.approve", {"approval_id": approval_id})
-        print("approval.approve ->", result.get("result", {}).get("approval", {}).get("status"))
+        status = result.get("result", {}).get("approval", {}).get("status")
+        print("approval.approve ->", status)
 
         resolved_deadline = asyncio.get_event_loop().time() + 10
         while asyncio.get_event_loop().time() < resolved_deadline:

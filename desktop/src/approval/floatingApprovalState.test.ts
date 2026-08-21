@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import type { AgentEvent, ApprovalRequest } from '../api/types'
 import {
   floatingApprovalDismissDelay,
+  floatingApprovalShouldBeVisible,
   initialFloatingApprovalState,
   reduceFloatingApprovalState,
 } from './floatingApprovalState'
@@ -218,5 +219,23 @@ describe('floatingApprovalDismissDelay', () => {
     expect(floatingApprovalDismissDelay('denied')).toBe(1500)
     expect(floatingApprovalDismissDelay('run_failed')).toBe(7000)
     expect(floatingApprovalDismissDelay('executing')).toBeNull()
+  })
+})
+
+describe('floatingApprovalShouldBeVisible', () => {
+  it('审批交互与终态可见', () => {
+    expect(floatingApprovalShouldBeVisible('pending')).toBe(true)
+    expect(floatingApprovalShouldBeVisible('submitting')).toBe(true)
+    expect(floatingApprovalShouldBeVisible('rpc_error')).toBe(true)
+    expect(floatingApprovalShouldBeVisible('denied')).toBe(true)
+    expect(floatingApprovalShouldBeVisible('run_completed')).toBe(true)
+    expect(floatingApprovalShouldBeVisible('run_failed')).toBe(true)
+  })
+
+  it('批准后的执行阶段隐藏，避免 Electron 抢回前台', () => {
+    expect(floatingApprovalShouldBeVisible('executing')).toBe(false)
+    expect(floatingApprovalShouldBeVisible('action_delivered')).toBe(false)
+    expect(floatingApprovalShouldBeVisible('action_failed')).toBe(false)
+    expect(floatingApprovalShouldBeVisible('continuing')).toBe(false)
   })
 })

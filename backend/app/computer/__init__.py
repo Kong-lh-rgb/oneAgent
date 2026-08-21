@@ -40,10 +40,12 @@ from .models import (
     ActiveApp,
     Bounds,
     CoordinateTarget,
+    DeliveryStatus,
     Element,
     ElementTarget,
     Observation,
     Target,
+    VerificationStatus,
     Window,
 )
 from .runtime import ComputerRuntime
@@ -80,6 +82,7 @@ __all__ = [
     "ComputerScrollTool",
     "ComputerTypeTool",
     "CoordinateTarget",
+    "DeliveryStatus",
     "Element",
     "ElementTarget",
     "FakeComputerRuntime",
@@ -87,6 +90,7 @@ __all__ = [
     "MacOSHelperClient",
     "Observation",
     "Target",
+    "VerificationStatus",
     "Window",
     "build_macos_computer",
     "computer_enabled",

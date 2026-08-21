@@ -26,7 +26,10 @@ for seq in SEQS:
     print(f"=== seq={seq} ===")
     print("active_app:", data.get("active_app"))
     aw = data.get("active_window") or {}
-    print("active_window:", aw.get("title"), "ref:", aw.get("ref"), "bounds:", aw.get("bounds"))
+    print(
+        "active_window:", aw.get("title"), "ref:", aw.get("ref"),
+        "bounds:", aw.get("bounds"),
+    )
     elems = data.get("elements") or []
     print(f"elements={len(elems)} truncated={data.get('truncated')}")
     focused = [e for e in elems if e.get("focused")]

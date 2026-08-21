@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 
 import pytest
@@ -140,6 +141,64 @@ def test_tool_reducer_shortens_only_unprotected_old_results() -> None:
     assert "omitted 960 characters" in (compacted.content or "")
     assert result.messages[-1] == recent_two[-1]
     assert original[1].content == "H" * 500 + "T" * 500
+
+
+def test_computer_observation_compaction_keeps_valid_semantic_json() -> None:
+    payload = {
+        "id": "obs-1",
+        "active_app": {"name": "Notes"},
+        "active_window": {"ref": "w1", "title": "Notes"},
+        "focused_element_ref": "editor",
+        "truncated": True,
+        "elements": [
+            {
+                "ref": "editor",
+                "role": "text_area",
+                "focused": True,
+                "editable": True,
+                "value": "重要编辑内容",
+            },
+            *(
+                {
+                    "ref": f"sidebar-{index}",
+                    "role": "cell",
+                    "title": "侧边栏" + "x" * 80,
+                }
+                for index in range(100)
+            ),
+        ],
+    }
+    round_messages = (
+        Message(
+            role=MessageRole.ASSISTANT,
+            tool_calls=(ToolCall(id="observe-1", name="computer_observe"),),
+        ),
+        Message(
+            role=MessageRole.TOOL,
+            name="computer_observe",
+            tool_call_id="observe-1",
+            content=json.dumps(payload, ensure_ascii=False),
+        ),
+    )
+    reducer = ToolReducer(
+        keep_recent_tool_rounds=0,
+        max_tool_result_chars=700,
+        tool_result_head_chars=100,
+        tool_result_tail_chars=100,
+    )
+    result = reducer.reduce(
+        partition_messages(round_messages),
+        current_messages=(),
+        initial_estimated_input_tokens=10_000,
+        target_tokens=2_000,
+        estimate=_estimate,
+    )
+
+    compacted = json.loads(result.messages[1].content or "{}")
+    assert compacted["focused_element_ref"] == "editor"
+    assert compacted["elements"][0]["ref"] == "editor"
+    assert compacted["compaction"]["kind"] == "semantic_observation"
+    assert len(result.messages[1].content or "") <= 700
 
 
 def test_tool_reducer_removes_oldest_round_and_stops_at_target() -> None:

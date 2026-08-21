@@ -320,6 +320,8 @@ class AgentRuntime:
         # Plan Mode：本轮是否创建/更新了 PENDING Task，以及最新 Task ID。
         plan_task_created = False
         plan_task_id: str | None = None
+        finalization_pending = False
+        computer_verification_pending = False
 
         await emitter.emit(
             AgentEventType.AGENT_STARTED,
@@ -349,12 +351,18 @@ class AgentRuntime:
                 summary_state=current_summary_state,
             )
 
-        for step in range(1, self._max_steps + 1):
+        for step in range(1, self._max_steps + 2):
+            finalization_step = step > self._max_steps
+            if finalization_step and not finalization_pending:
+                break
             if self._checkpoint_store is not None:
                 await self._checkpoint_store.before_model(run_id, step=step)
             force_final_answer = (
-                self._max_tool_rounds is not None
-                and len(tool_rounds) >= self._max_tool_rounds
+                finalization_step
+                or (
+                    self._max_tool_rounds is not None
+                    and len(tool_rounds) >= self._max_tool_rounds
+                )
             )
             # 原始历史保持不变；模型请求视图会移除旧版持久提示词中的固定日期。
             request_messages = tuple(
@@ -453,9 +461,10 @@ class AgentRuntime:
                         Message(
                             role=MessageRole.SYSTEM,
                             content=(
-                                "工具调用轮次已用完。请停止调用工具，直接根据已经"
-                                "获得的信息回答用户；如果信息有限，请明确说明，不要"
-                                "继续搜索。"
+                                "工具调用轮次已用完。请读取最后一条工具结果，停止"
+                                "调用工具并直接回答用户。对于 verification_status="
+                                "unverified 的电脑操作，只能说明事件已投递、效果未"
+                                "确认，不能宣称界面操作已经完成。"
                             ),
                         ),
                     )
@@ -617,7 +626,28 @@ class AgentRuntime:
                 usage=response.usage,
             )
             tool_calls_in_message = assistant_message.tool_calls
+            if finalization_step and tool_calls_in_message:
+                # 最终化请求没有提供工具定义；即使模型伪造工具调用也不执行。
+                break
             if not tool_calls_in_message:
+                if finalization_step and _looks_like_textual_tool_call(
+                    assistant_message.content
+                ):
+                    # 部分模型在 tools=() 时仍会把 Provider 工具协议作为普通文本
+                    # 输出。它没有被执行，不能因此把 Run 标为 completed。
+                    break
+                if computer_verification_pending:
+                    messages.append(
+                        Message(
+                            role=MessageRole.SYSTEM,
+                            content=(
+                                "最近一次 computer_type 只确认输入事件已投递，尚未"
+                                "确认界面效果。必须先调用 computer_observe 获取新证据，"
+                                "不能直接向用户宣称操作完成。"
+                            ),
+                        )
+                    )
+                    continue
                 final_message = assistant_message
                 if mode is AgentMode.PLAN:
                     # Plan Mode 完成条件：不仅要 task_create/task_update 成功，
@@ -760,6 +790,17 @@ class AgentRuntime:
                 round_records.append(record)
                 tool_calls.append(record)
                 messages.append(self._tool_result_message(result))
+                if tool_call.name == "computer_type" and result.success:
+                    computer_verification_pending = (
+                        _computer_verification_status(result.output)
+                        == "unverified"
+                    )
+                elif (
+                    tool_call.name == "computer_observe"
+                    and result.success
+                    and computer_verification_pending
+                ):
+                    computer_verification_pending = False
                 if tool_call.name == TOOL_SEARCH_NAME and result.success:
                     pending_activations.update(
                         name
@@ -786,6 +827,13 @@ class AgentRuntime:
             )
             # 本轮模型没有见过新定义，必须等下一步请求后才能调用。
             activated_tools.update(pending_activations)
+            finalization_pending = (
+                step == self._max_steps
+                and any(
+                    call.name == "computer_observe"
+                    for call in tool_calls_in_message
+                )
+            )
 
         error = MaxStepsExceededError(self._max_steps)
         return self._result(
@@ -1418,6 +1466,37 @@ class AgentRuntime:
             default=str,
         )
         return f"{tool_call.name}:{canonical_arguments}"
+
+
+def _computer_verification_status(output: object) -> str | None:
+    """从统一工具输出中读取电脑输入的效果验证状态。"""
+
+    if not isinstance(output, str):
+        return None
+    try:
+        payload = json.loads(output)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    status = payload.get("verification_status")
+    return status if isinstance(status, str) else None
+
+
+def _looks_like_textual_tool_call(content: str | None) -> bool:
+    """识别被模型错误输出为普通文本的常见工具协议标记。"""
+
+    if not content:
+        return False
+    lowered = content.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "<tool_calls",
+            "<｜｜dsml｜｜tool_calls",
+            "<｜｜dsml｜｜invoke",
+        )
+    )
 
 
 def _skill_read_activated_name(output: object) -> str | None:

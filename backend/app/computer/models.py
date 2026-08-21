@@ -32,6 +32,23 @@ class ActionName(StrEnum):
     FOCUS_WINDOW = "focus_window"
 
 
+class DeliveryStatus(StrEnum):
+    """系统输入事件是否已经投递到目标进程。"""
+
+    NOT_APPLICABLE = "not_applicable"
+    DELIVERED = "delivered"
+    FAILED = "failed"
+
+
+class VerificationStatus(StrEnum):
+    """动作对界面造成的效果是否已经通过 AX 状态确认。"""
+
+    NOT_APPLICABLE = "not_applicable"
+    VERIFIED = "verified"
+    UNVERIFIED = "unverified"
+    MISMATCH = "mismatch"
+
+
 class Bounds(BaseModel):
     """统一的矩形区域（整数坐标与尺寸，避免浮点抖动）。"""
 
@@ -108,6 +125,7 @@ class Element(BaseModel):
     value: str | None = None
     enabled: bool = True
     focused: bool = False
+    editable: bool = False
     bounds: Bounds | None = None
     # 元素可执行的动作（AX 语义，如 "press" / "select"），与
     # ComputerRuntime 的 ActionName 是不同词汇表，因此用字符串表达。
@@ -133,6 +151,8 @@ class Observation(BaseModel):
     active_window: Window | None = None
     windows: tuple[Window, ...] = ()
     elements: tuple[Element, ...] = ()
+    focused_element_ref: str | None = None
+    truncated: bool = False
     screenshot_ref: str | None = None
 
     @field_validator("id")
@@ -207,6 +227,8 @@ class ActionResult(BaseModel):
     action: ActionName
     observation_id: str | None = None
     error: str | None = None
+    delivery_status: DeliveryStatus = DeliveryStatus.NOT_APPLICABLE
+    verification_status: VerificationStatus = VerificationStatus.NOT_APPLICABLE
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -216,9 +238,11 @@ __all__ = [
     "ActiveApp",
     "Bounds",
     "CoordinateTarget",
+    "DeliveryStatus",
     "Element",
     "ElementTarget",
     "Observation",
     "Target",
+    "VerificationStatus",
     "Window",
 ]

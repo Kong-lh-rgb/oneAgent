@@ -54,8 +54,11 @@ from app.computer import (
     ComputerHelperError,
     ComputerHelperProcessError,
     CoordinateTarget,
+    Element,
     ElementTarget,
     MacOSComputerRuntime,
+    Observation,
+    VerificationStatus,
 )
 
 
@@ -95,6 +98,13 @@ def _runtime(stub: StubHelperClient) -> MacOSComputerRuntime:
     runtime = MacOSComputerRuntime(stub)  # type: ignore[arg-type]
     # 旧能力测试直接验证请求映射；V8 专门用独立用例验证缺少 fresh observe。
     runtime._last_observation_id = "obs-current"
+    runtime._last_observation = Observation(
+        id="obs-current",
+        elements=(
+            Element(ref="e1", role="text_area", focused=True, editable=True),
+            Element(ref="e2", role="text_field", editable=True),
+        ),
+    )
     return runtime
 
 
@@ -142,7 +152,25 @@ async def test_open_app_converts_to_action_result() -> None:
     assert result.metadata["app"] == "TextEdit"
     assert result.metadata["bundle_id"] == "com.apple.TextEdit"
     assert result.metadata["process_id"] == 4242
+    assert result.metadata["frontmost_verified"] is False
     assert result.error is None
+
+
+async def test_open_app_preserves_frontmost_verification() -> None:
+    runtime = _runtime(
+        StubHelperClient(
+            result={
+                "app": "Notes",
+                "bundle_id": "com.apple.Notes",
+                "process_id": 4242,
+                "frontmost_verified": True,
+            }
+        )
+    )
+
+    result = await runtime.open_app("Notes")
+
+    assert result.metadata["frontmost_verified"] is True
 
 
 async def test_open_app_bundle_id_hint() -> None:
@@ -230,6 +258,7 @@ def _observe_result_with_elements() -> dict:
             "value": "hello world",
             "enabled": True,
             "focused": True,
+            "editable": True,
             "bounds": {"x": 10, "y": 20, "width": 300, "height": 200},
             "actions": [],
         },
@@ -274,6 +303,7 @@ async def test_observe_converts_elements() -> None:
     assert e1.title is None
     assert e1.enabled is True
     assert e1.focused is True
+    assert e1.editable is True
     assert e1.actions == ()
     assert e1.bounds is not None
     assert (e1.bounds.x, e1.bounds.y, e1.bounds.width, e1.bounds.height) == (
@@ -512,7 +542,11 @@ async def test_click_does_not_break_observe_and_open_app() -> None:
 
 
 def _type_result(characters: int = 14) -> dict:
-    return {"characters": characters}
+    return {
+        "characters": characters,
+        "delivery_status": "delivered",
+        "verification_status": "verified",
+    }
 
 
 async def test_type_calls_type_text() -> None:
@@ -524,7 +558,11 @@ async def test_type_calls_type_text() -> None:
     assert stub.calls == [
         (
             "type_text",
-            {"text": "Hello Vesta", "expected_observation_id": "obs-current"},
+            {
+                "text": "Hello Vesta",
+                "expected_observation_id": "obs-current",
+                "element_ref": "e1",
+            },
         )
     ]
     assert result.success is True
@@ -538,7 +576,11 @@ async def test_type_converts_to_action_result() -> None:
 
     assert isinstance(result, ActionResult)
     assert result.action is ActionName.TYPE
-    assert result.metadata == {"characters": 14}
+    assert result.metadata == {
+        "characters": 14,
+        "element_ref": "e1",
+        "evidence": {},
+    }
     # 不保存完整 text（避免复制长/敏感内容）。
     assert "text" not in result.metadata
 
@@ -550,9 +592,16 @@ async def test_type_empty_string() -> None:
     result = await runtime.type("")
 
     assert stub.calls == [
-        ("type_text", {"text": "", "expected_observation_id": "obs-current"})
+        (
+            "type_text",
+            {
+                "text": "",
+                "expected_observation_id": "obs-current",
+                "element_ref": "e1",
+            },
+        )
     ]
-    assert result.metadata == {"characters": 0}
+    assert result.metadata["characters"] == 0
 
 
 async def test_type_non_string_rejected() -> None:
@@ -595,6 +644,38 @@ async def test_type_element_ref_validation() -> None:
     assert stub.calls == []
 
 
+async def test_type_rejects_non_editable_or_unknown_target() -> None:
+    runtime = _runtime(StubHelperClient(result=_type_result()))
+    runtime._last_observation = Observation(
+        id="obs-current",
+        elements=(Element(ref="button", role="button"),),
+    )
+
+    with pytest.raises(ValueError, match="editable_target_required"):
+        await runtime.type("hi")
+    with pytest.raises(ValueError, match="editable element"):
+        await runtime.type("hi", element_ref="button")
+    with pytest.raises(ValueError, match="latest observation"):
+        await runtime.type("hi", element_ref="missing")
+
+
+async def test_type_reports_delivery_separately_from_effect_verification() -> None:
+    stub = StubHelperClient(
+        result={
+            "characters": 3,
+            "element_ref": "e1",
+            "delivery_status": "delivered",
+            "verification_status": "mismatch",
+            "evidence": {"value_changed": False},
+        }
+    )
+    result = await _runtime(stub).type("465")
+
+    assert result.success is False
+    assert result.verification_status is VerificationStatus.MISMATCH
+    assert result.metadata["evidence"] == {"value_changed": False}
+
+
 async def test_type_permission_error_propagates() -> None:
     stub = StubHelperClient(
         error=ComputerHelperError(
@@ -611,7 +692,7 @@ async def test_type_permission_error_propagates() -> None:
 async def test_type_does_not_break_others() -> None:
     stub = StubHelperClient(
         per_method={
-            "observe": _observe_result(),
+            "observe": _observe_result_with_elements(),
             "click_element": _click_result(),
             "type_text": _type_result(5),
             "open_app": {
@@ -629,7 +710,7 @@ async def test_type_does_not_break_others() -> None:
     type_result = await runtime.type("hello")
     await runtime.open_app("TextEdit")
 
-    assert type_result.metadata == {"characters": 5}
+    assert type_result.metadata["characters"] == 5
     assert [m for m, _ in stub.calls] == [
         "observe",
         "click_element",
@@ -760,7 +841,7 @@ async def test_key_rejects_invalid_modifier_tuple(
 async def test_key_does_not_break_existing_operations() -> None:
     stub = StubHelperClient(
         per_method={
-            "observe": _observe_result(),
+            "observe": _observe_result_with_elements(),
             "click_element": _click_result(),
             "type_text": _type_result(5),
             "key_press": _key_result("tab"),
@@ -801,7 +882,7 @@ async def test_key_does_not_break_existing_operations() -> None:
 async def test_scroll_and_focus_window_are_implemented() -> None:
     stub = StubHelperClient(
         per_method={
-            "observe": _observe_result(),
+            "observe": _observe_result_with_elements(),
             "scroll": {"delta_x": 0, "delta_y": -10},
             "focus_window": {"window_ref": "w1"},
         }
@@ -890,7 +971,7 @@ async def test_screenshot_error_keeps_structured_observation(tmp_path) -> None:
 async def test_successful_mutations_invalidate_latest_observation(tmp_path) -> None:
     stub = StubHelperClient(
         per_method={
-            "observe": _observe_result(),
+            "observe": _observe_result_with_elements(),
             "type_text": {"characters": 1},
             "key_press": {"key": "enter", "modifiers": []},
             "open_app": {},

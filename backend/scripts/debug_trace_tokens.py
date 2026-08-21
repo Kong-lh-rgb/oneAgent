@@ -1,7 +1,6 @@
 """解析 Run 7c775080 的 model_started 预算字段，核对 trace 数字。"""
 import json
 import sqlite3
-import sys
 
 DB = "/Users/linghang/agent/vesta/backend/.vesta/vesta.db"
 RUN = "7c77508048e34a07a03bb477df96f6d2"

@@ -11,6 +11,7 @@ var currentScreenshotMapping: ScreenshotMapping? = nil
 var currentFrontmostPID: pid_t? = nil
 var currentFocusedWindow: AXUIElement? = nil
 var currentFocusedWindowBounds: CGRect? = nil
+var currentFocusedElementRef: String? = nil
 
 func clearObservationCache() {
     currentObservationID = nil
@@ -20,6 +21,7 @@ func clearObservationCache() {
     currentFrontmostPID = nil
     currentFocusedWindow = nil
     currentFocusedWindowBounds = nil
+    currentFocusedElementRef = nil
 }
 
 private func nearlyEqual(_ lhs: CGFloat, _ rhs: CGFloat) -> Bool {

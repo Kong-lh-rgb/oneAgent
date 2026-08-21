@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from app.models.types import ToolDefinition, ToolPermission, ToolUiScope
@@ -74,7 +75,7 @@ class ComputerObserveTool(BaseTool):
         observation = await self._runtime.observe(
             include_screenshot=include_screenshot,
         )
-        return observation.model_dump(mode="json")
+        return _bounded_observation_payload(observation.model_dump(mode="json"))
 
 
 class ComputerClickTool(BaseTool):
@@ -137,7 +138,7 @@ class ComputerClickTool(BaseTool):
 
 
 class ComputerTypeTool(BaseTool):
-    """在当前焦点输入文本（HUMAN_APPROVAL）。"""
+    """向明确的可编辑元素输入文本（HUMAN_APPROVAL）。"""
 
     def __init__(self, runtime: ComputerRuntime) -> None:
         self._runtime = runtime
@@ -147,9 +148,10 @@ class ComputerTypeTool(BaseTool):
         return ToolDefinition(
             name="computer_type",
             description=(
-                "在当前焦点处输入文本。不要操作剪贴板。"
-                "可选 element_ref：指定本次 Observation 中的元素 ref 时，"
-                "先聚焦该元素（如编辑器 text_area）再输入，避免打错位置。"
+                "向最近一次 Observation 中明确的可编辑元素输入文本，不操作剪贴板。"
+                "优先提供 element_ref；省略时只会自动使用唯一的 focused+editable "
+                "元素，否则安全拒绝。返回 delivery_status 和 verification_status；"
+                "unverified 表示事件已投递但仍须再次 observe，不能宣称界面已完成。"
             ),
             parameters={
                 "type": "object",
@@ -160,7 +162,9 @@ class ComputerTypeTool(BaseTool):
                     },
                     "element_ref": {
                         "type": "string",
-                        "description": "可选：先聚焦该元素再输入（来自本次 Observation）。",
+                        "description": (
+                            "建议提供：来自最近 Observation 的 editable 元素 ref。"
+                        ),
                     },
                 },
                 "required": ["text"],
@@ -187,6 +191,11 @@ class ComputerTypeTool(BaseTool):
             raise ValueError("'text' must be a string")
         element_ref = _optional_element_ref(arguments.get("element_ref"))
         result = await self._runtime.type(text, element_ref=element_ref)
+        if not result.success:
+            raise RuntimeError(
+                "input_effect_mismatch: event was delivered but the editable "
+                "element value did not change"
+            )
         return result.model_dump(mode="json")
 
 
@@ -219,7 +228,10 @@ class ComputerKeyTool(BaseTool):
                     },
                     "element_ref": {
                         "type": "string",
-                        "description": "可选：先聚焦该元素再发送按键（来自本次 Observation）。",
+                        "description": (
+                            "可选：先聚焦该元素再发送按键"
+                            "（来自本次 Observation）。"
+                        ),
                     },
                 },
                 "required": ["key"],
@@ -399,6 +411,38 @@ class ComputerFocusWindowTool(BaseTool):
             raise ValueError("'window_ref' must be a non-empty string")
         result = await self._runtime.focus_window(window_ref)
         return result.model_dump(mode="json")
+
+
+def _bounded_observation_payload(
+    payload: dict[str, Any],
+    *,
+    max_chars: int = 18_000,
+) -> dict[str, Any]:
+    """在工具执行器截断前裁剪元素，保证 Observation 始终是完整 JSON。"""
+
+    raw_elements = payload.get("elements")
+    if not isinstance(raw_elements, list):
+        return payload
+    bounded = {key: value for key, value in payload.items() if key != "elements"}
+    bounded["elements"] = []
+    bounded["element_stats"] = {
+        "observed": len(raw_elements),
+        "returned": 0,
+    }
+    for element in raw_elements:
+        bounded["elements"].append(element)
+        bounded["element_stats"]["returned"] = len(bounded["elements"])
+        encoded = json.dumps(
+            bounded,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        if len(encoded) > max_chars:
+            bounded["elements"].pop()
+            bounded["element_stats"]["returned"] = len(bounded["elements"])
+            bounded["truncated"] = True
+            break
+    return bounded
 
 
 def _optional_element_ref(raw: Any) -> str | None:

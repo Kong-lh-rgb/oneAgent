@@ -1798,9 +1798,9 @@ Multi-Agent / Task Graph / Planner DAG。Pattern Mining V1 完全用一次结构
 ### 40.2 Server 只是"薄壳"，不复制 Agent 逻辑
 
 - 发消息必须走 `ConversationService.dispatch`；recover 走现有 `RunManager.recover`
-  （旧 Run   （旧 Run   （旧 Run   （旧 Run   （旧 Run   （旧 Run   （旧  �  （旧 Run   （旧 Run   （旧 Run   （旧 Run   （旧 Run   （旧 Run   �ext`（结构化 schedule，无自然语言解析）。
+  （旧 Run   （旧 Run   （旧 Run   （旧 Run   （旧 Run   （旧 Run   （旧    （旧 Run   （旧 Run   （旧 Run   （旧 Run   （旧 Run   （旧 Run   ext`（结构化 schedule，无自然语言解析）。
 
-### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSoc + �### 40.3 WebSocket 事件流：复用 Agen### 40.3 W��者### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事件流：复用 Agen### 40.3 Webler。### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket �ath�### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事件流：复用 AgxtI### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事件流：复�API### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事���### 40.3 WebSocket 事件流：复用 Agen### 40.3 Webecute`（只有 execute_with_context）：
+### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSoc + ### 40.3 WebSocket 事件流：复用 Agen### 40.3 W者### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事件流：复用 Agen### 40.3 Webler。### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket ath### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事件流：复用 AgxtI### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事件流：复API### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事件流：复用 Agen### 40.3 WebSocket 事### 40.3 WebSocket 事件流：复用 Agen### 40.3 Webecute`（只有 execute_with_context）：
   由于 `register_automation_tools` 此前从未被任何测试触发，这个"实例化即崩"的 bug
   一直潜伏；Desktop Server 启动注册工具时暴露，补一个 stub 修复。
 - 同步 TestClient 下无法用 POST 制造"运行中的 Run"做 cancel 测试 —— 用
@@ -1813,3 +1813,41 @@ Multi-Agent / Task Graph / Planner DAG。Pattern Mining V1 完全用一次结构
   automation CRUD·control / WS 收到 AgentEvent / automation Run 也广播并产生
   source=automation Run / shutdown 正确关闭资源 / Application start-close 幂等。
 - 后端全量 `pytest` 604 通过；Desktop `typecheck` / `build` 通过。
+
+## 41. Computer Runtime：从“事件发送”到“效果可证明”（2026-08-21）
+
+### 41.1 Observation 是给模型的工作视图，不是 AX 树转储
+
+- 原生层仍遍历 AX 树建立完整的短期 ref 映射，但输出顺序必须服务于决策。
+- Helper 直接读取 `AXFocusedUIElement`，保证真实焦点即使位于 DFS 截断范围外也能进入结果。
+- 元素优先级固定为：真实焦点 → 可编辑 → 可操作 → 其它信息元素。
+- 工具层在执行器的 20K 硬上限之前主动裁剪到 18K；上下文层再次压缩时重建合法 JSON，不能做字符串腰斩。
+
+### 41.2 输入目标必须来自最近一次 Observation
+
+- `element_ref` 不是永久 UI ID，只对最近 Observation 有效。
+- `computer_type` 的显式 ref 必须存在且 `editable=true`。
+- 没有 ref 时，只允许自动绑定唯一的 `focused=true && editable=true` 元素；否则返回 `editable_target_required`。
+- 审批窗口造成焦点漂移后，Helper 先恢复 App/Window，再聚焦已批准元素，并把事件定向投递到目标 PID。
+
+### 41.3 成功分成投递成功与效果成功
+
+- `delivery_status=delivered`：CGEvent 已发给目标进程，只说明命令送达。
+- `verification_status=verified`：输入前后完整 AXValue 确实发生变化。
+- `verification_status=unverified`：目标不暴露可读 AXValue；需要重新 Observe，不能宣称完成。
+- `verification_status=mismatch`：AXValue 可读但轮询后未变化，工具按失败处理。
+- 验证只保存字符数和是否变化，不把输入前后的正文写入 Trace，避免泄露敏感内容。
+
+### 41.4 Agent Loop 的最后一步也必须能消费证据
+
+- `max_steps` 限制正常工具循环，但最后一步若刚执行 `computer_observe`，再给一次 tools=() 的最终化调用。
+- 这次调用只能读取最后证据并回答，不能继续操作。
+- 若 `computer_type` 仍是 unverified，Runtime 会拒绝模型的无证据成功声明，直到出现新的 Observe 或安全停止。
+
+## 42. Desktop 浮窗与 macOS frontmost 不是同一个概念（2026-08-21）
+
+- `focusable:false` 只保证 BrowserWindow 不成为键盘焦点窗口，不能保证 Electron application 永远不成为 frontmost。
+- `showInactive()` 解决首次显示不主动聚焦，但浮窗点击、状态更新和窗口 resize 仍可能改变 App 级激活状态。
+- 因此审批 UI 的安全生命周期必须分段：pending/submitting 时显示；批准后执行期间隐藏；Run 终态后才能再次显示结果。
+- `open_app` 的“进程启动成功”也不等于“用户正在看到该 App”。可靠语义必须继续验证 `frontmostApplication.pid == target.pid`。
+- Agent 最终回答同样需要执行证据：Provider 工具协议如果只是普通文本，没有形成 `ToolCall`，就没有被执行，Run 不能标记 completed。

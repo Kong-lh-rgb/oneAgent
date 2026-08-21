@@ -2100,3 +2100,44 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 - [ ] 规划层设计（`task/`、`scheduler/`、`memory/` 目录目前为空）
 - [ ] 工具层：工具并行执行、输出结构化、schema 字段级校验
 - [ ] 将 `ConsoleApprovalGate` 接入 CLI / API（`chat.py` 目前仍是纯聊天，未接工具层），让人工审核真正可用
+
+## 2026-08-21
+
+### 完成：Computer Runtime 输入可靠性闭环
+
+#### Bad Case
+
+- [x] Notes 的 AX 树先输出侧边栏，编辑区可能在 20,000 字符截断后消失
+- [x] `computer_type` 允许省略 `element_ref`，事件可能发到 table/cell 等错误焦点
+- [x] `characters=3` 只代表 CGEvent 已投递，却被模型误解为界面已经输入成功
+- [x] 通用工具结果截断会从中间切断 Observation JSON，模型拿到不可解析的半段结构
+- [x] 最后一步调用 `computer_observe` 后立即耗尽 `max_steps`，模型没有机会读取验证结果
+
+#### 修复结果
+
+- [x] Swift Helper 直接读取真实 `AXFocusedUIElement`，按焦点、可编辑、可操作、其它元素排序
+- [x] Observation 增加 `focused_element_ref`、`editable`、`truncated`，工具层在 18K 内语义裁剪并保持合法 JSON
+- [x] Context ToolReducer 对 `computer_observe` 使用结构化压缩，保留活动窗口、焦点和高优先级元素
+- [x] `computer_type` 只接受最近 Observation 中明确的可编辑目标；省略 ref 时仅允许唯一的 focused+editable 元素
+- [x] Unicode 和按键事件使用 `postToPid` 定向投递到已批准的目标进程
+- [x] 输入后读取完整 AXValue，区分 `delivered`、`verified`、`unverified`、`mismatch`
+- [x] `mismatch` 作为工具失败；`unverified` 时 AgentRuntime 阻止模型直接宣称成功，要求重新 Observe
+- [x] 第 `max_steps` 步若执行 Observe，额外提供一次禁用工具的最终化模型调用
+- [x] 新增大 Observation、目标校验、输入验证状态、上下文合法 JSON 和最终化调用离线测试
+- [x] 全量后端 `pytest` 866 通过；相关 `ruff`、`compileall`、Swift build、协议检查通过
+
+### 修复：Notes 已打开但 Observe 持续看到 Vesta
+
+#### Bad Case
+
+- [x] `computer_open_app` 只启动进程，不保证已运行的 App 成为 frontmost
+- [x] 审批浮窗在 executing/continuing 阶段持续显示和 resize，Electron 可能重新成为 frontmost App
+- [x] 最终化请求禁用工具后，模型把 DSML 工具协议作为普通文本输出，Run 被错误标记 completed
+- [x] 实际 Run `6cca239f` 消耗 80,966 tokens，但从未执行 `computer_type`
+
+#### 修复结果
+
+- [x] Swift Helper 在 open_app 后显式激活全部目标窗口，并按 PID 验证 frontmost；失败返回 `app_activation_failed`
+- [x] Desktop 浮窗仅在待审批、提交中、RPC 错误和 Run 终态显示；批准后的执行阶段立即隐藏
+- [x] 最终化响应出现 `<tool_calls>` / DSML invoke 标记时拒绝假完成，按 `max_steps` 失败收口
+- [x] Backend 全量 `pytest` 868 通过；Desktop 136 tests、typecheck、build 通过；Native 协议检查通过

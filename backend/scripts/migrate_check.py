@@ -1,10 +1,10 @@
 """验证审批 store 旧库迁移：无 ui_scope 列时 ALTER 补列且幂等。"""
 import asyncio
 import sqlite3
+import sys
 import tempfile
 from pathlib import Path
 
-import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.approval.store import SQLiteApprovalStore  # noqa: E402

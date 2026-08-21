@@ -17,9 +17,10 @@ for seq, typ, payload in rows:
     step = p.get("step")
     if typ == "tool_started":
         tc = p.get("tool_call") or {}
+        arguments = json.dumps(tc.get("arguments"), ensure_ascii=False)
         print(
             f"seq={seq:>3} {typ:<20} step={step} "
-            f"tool={tc.get('name')} args={json.dumps(tc.get('arguments'), ensure_ascii=False)}"
+            f"tool={tc.get('name')} args={arguments}"
         )
     elif typ == "tool_completed":
         tr = p.get("tool_result") or {}
@@ -34,5 +35,10 @@ for seq, typ, payload in rows:
         msg = p.get("message") or {}
         content = (msg.get("content") or "")[:400]
         print(f"seq={seq:>3} {typ:<20} step={step} content={content!r}")
-    elif typ in ("agent_failed", "agent_completed", "memory_reflection_skipped", "memory_reflection_started"):
+    elif typ in (
+        "agent_failed",
+        "agent_completed",
+        "memory_reflection_skipped",
+        "memory_reflection_started",
+    ):
         print(f"seq={seq:>3} {typ:<20} step={step} err={p.get('error')}")

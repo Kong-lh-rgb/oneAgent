@@ -8,7 +8,10 @@
 
 import { useEffect } from 'react'
 
-import { floatingApprovalDismissDelay } from '../approval/floatingApprovalState'
+import {
+  floatingApprovalDismissDelay,
+  floatingApprovalShouldBeVisible,
+} from '../approval/floatingApprovalState'
 
 import {
   ApprovalFloatingCard,
@@ -18,7 +21,7 @@ import {
 export default function ApprovalFloatingWindow(): React.JSX.Element | null {
   const { queue, active, busy, error, phase, resolve, dismiss } =
     useComputerApprovalQueue()
-  const shouldShow = active !== null
+  const shouldShow = active !== null && floatingApprovalShouldBeVisible(phase)
 
   useEffect(() => {
     window.vesta?.setApprovalVisible?.(shouldShow)

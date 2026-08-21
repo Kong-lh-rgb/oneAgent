@@ -68,6 +68,26 @@ func resolveAppURL(_ app: String) -> URL? {
     return nil
 }
 
+/// 激活目标应用并确认它确实成为 macOS frontmost application。
+///
+/// `launchApplication` 对已经运行的 App 只保证返回进程，不保证把窗口带到前台；
+/// Computer Runtime 后续的 observe 又以 frontmost App 为准，因此这里必须闭环验证。
+func activateAndConfirmFrontmost(_ application: NSRunningApplication) -> Bool {
+    if NSWorkspace.shared.frontmostApplication?.processIdentifier
+        == application.processIdentifier {
+        return true
+    }
+    application.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+    for _ in 0..<30 {
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier
+            == application.processIdentifier {
+            return true
+        }
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+    return false
+}
+
 /// 处理 open_app 请求。
 ///
 /// 成功 → {"app":..., "bundle_id":..., "process_id":...}
@@ -107,6 +127,16 @@ func handleOpenApp(params: Any?, id: Any?) {
             configuration: [:]
         )
         clearObservationCache()
+        guard activateAndConfirmFrontmost(running) else {
+            writeResponse(
+                makeError(
+                    id: id,
+                    code: "app_activation_failed",
+                    message: "application launched but did not become frontmost: \(app)"
+                )
+            )
+            return
+        }
         // bundle id 缺省时用 NSNull，避免在 [String: Any] 里塞 nil。
         var bundleID: Any = NSNull()
         if let resolved =
@@ -120,6 +150,7 @@ func handleOpenApp(params: Any?, id: Any?) {
                 "app": app,
                 "bundle_id": bundleID,
                 "process_id": running.processIdentifier,
+                "frontmost_verified": true,
             ],
         ])
     } catch {
@@ -331,6 +362,17 @@ func readAXString(_ element: AXUIElement, _ attribute: CFString) -> String? {
     return nil
 }
 
+/// 输入验证读取完整文本，只在内存中比较，不把正文写入协议或日志。
+func readAXFullString(_ element: AXUIElement, _ attribute: CFString) -> String? {
+    var valueRef: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(
+        element, attribute, &valueRef
+    ) == .success, let value = valueRef else { return nil }
+    if let string = value as? String { return string }
+    if let number = value as? NSNumber { return number.stringValue }
+    return nil
+}
+
 /// 读取 AX 布尔属性（enabled/focused）。
 func readAXBool(_ element: AXUIElement, _ attribute: CFString) -> Bool? {
     var valueRef: CFTypeRef?
@@ -379,6 +421,29 @@ func readAXActions(_ element: AXUIElement) -> [String] {
     return names.map { normalizeActionName($0) }.sorted()
 }
 
+/// AXValue 可写才视为可编辑，避免只依赖 role 猜测输入目标。
+func isEditableElement(_ element: AXUIElement) -> Bool {
+    var settable = DarwinBoolean(false)
+    guard AXUIElementIsAttributeSettable(
+        element,
+        kAXValueAttribute as CFString,
+        &settable
+    ) == .success else { return false }
+    return settable.boolValue
+}
+
+/// 直接读取应用当前真实的键盘焦点元素，避免 DFS 截断前找不到编辑器。
+func focusedUIElement(pid: pid_t) -> AXUIElement? {
+    let appElement = AXUIElementCreateApplication(pid)
+    var elementRef: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(
+        appElement,
+        kAXFocusedUIElementAttribute as CFString,
+        &elementRef
+    ) == .success, let elementRef else { return nil }
+    return (elementRef as! AXUIElement)
+}
+
 /// 判断一个元素是否值得保留。
 /// - 有 title/description/value/focused → 保留；
 /// - 纯容器（group/scroll_area 等）无信息 → 不保留（但仍遍历 children）；
@@ -407,6 +472,7 @@ struct AXElementInfo {
     let value: String?
     let enabled: Bool
     let focused: Bool
+    let editable: Bool
     let bounds: [String: Int]
     let actions: [String]
     let axElement: AXUIElement
@@ -417,6 +483,7 @@ struct AXElementInfo {
             "role": role,
             "enabled": enabled,
             "focused": focused,
+            "editable": editable,
             "bounds": bounds,
             "actions": actions,
         ]
@@ -440,7 +507,11 @@ private struct AXNode: Hashable {
 }
 
 /// 构造单个元素（带 ref）；不适合保留则返回 nil。
-func buildElementInfo(_ element: AXUIElement, ref: String) -> AXElementInfo? {
+func buildElementInfo(
+    _ element: AXUIElement,
+    ref: String,
+    forceFocused: Bool = false
+) -> AXElementInfo? {
     let role = normalizeRole(
         readAXString(element, kAXRoleAttribute as CFString) ?? ""
     )
@@ -450,7 +521,9 @@ func buildElementInfo(_ element: AXUIElement, ref: String) -> AXElementInfo? {
     )
     let value = readAXString(element, kAXValueAttribute as CFString)
     let enabled = readAXBool(element, kAXEnabledAttribute as CFString) ?? true
-    let focused = readAXBool(element, kAXFocusedAttribute as CFString) ?? false
+    let focused = forceFocused
+        || (readAXBool(element, kAXFocusedAttribute as CFString) ?? false)
+    let editable = isEditableElement(element)
 
     guard isUsefulElement(
         role: role,
@@ -469,6 +542,7 @@ func buildElementInfo(_ element: AXUIElement, ref: String) -> AXElementInfo? {
         value: value,
         enabled: enabled,
         focused: focused,
+        editable: editable,
         bounds: [
             "x": Int(position?.x ?? 0),
             "y": Int(position?.y ?? 0),
@@ -478,6 +552,25 @@ func buildElementInfo(_ element: AXUIElement, ref: String) -> AXElementInfo? {
         actions: readAXActions(element),
         axElement: element
     )
+}
+
+/// 模型消费顺序：真实焦点 > 可编辑 > 可操作 > 其它信息元素。
+func elementPriority(_ element: AXElementInfo) -> Int {
+    if element.focused { return 0 }
+    if element.editable { return 1 }
+    if !element.actions.isEmpty { return 2 }
+    return 3
+}
+
+func semanticElementOrder(_ elements: [AXElementInfo]) -> [AXElementInfo] {
+    elements.sorted { lhs, rhs in
+        let left = elementPriority(lhs)
+        let right = elementPriority(rhs)
+        if left != right { return left < right }
+        let leftNumber = Int(lhs.ref.dropFirst()) ?? Int.max
+        let rightNumber = Int(rhs.ref.dropFirst()) ?? Int.max
+        return leftNumber < rightNumber
+    }
 }
 
 /// 递归遍历 AX children，保留有用元素，限制数量与深度，防循环。
@@ -564,6 +657,7 @@ func handleObserve(params: Any?, id: Any?) {
     var activeWindowRef: Any = NSNull()
     var windows: [[String: Any]] = []
     var elements: [[String: Any]] = []
+    var focusedElementRef: Any = NSNull()
     var truncated = false
     var newMapping: [String: AXUIElement] = [:]
     var newWindows: [String: AXUIElement] = [:]
@@ -604,10 +698,39 @@ func handleObserve(params: Any?, id: Any?) {
                 maxElements: kMaxElements,
                 maxDepth: kMaxDepth
             )
-            elements = collected.elements.map { $0.toJSON() }
+            var semanticElements = collected.elements
+            if let focusedElement = focusedUIElement(
+                pid: frontmost.processIdentifier
+            ) {
+                if let existingIndex = semanticElements.firstIndex(
+                    where: { CFEqual($0.axElement, focusedElement) }
+                ) {
+                    let existing = semanticElements[existingIndex]
+                    if let focusedInfo = buildElementInfo(
+                        focusedElement,
+                        ref: existing.ref,
+                        forceFocused: true
+                    ) {
+                        semanticElements[existingIndex] = focusedInfo
+                    }
+                    focusedElementRef = existing.ref
+                } else if let focusedInfo = buildElementInfo(
+                    focusedElement,
+                    ref: "e\(semanticElements.count + 1)",
+                    forceFocused: true
+                ) {
+                    if semanticElements.count >= kMaxElements {
+                        semanticElements.removeLast()
+                    }
+                    semanticElements.append(focusedInfo)
+                    focusedElementRef = focusedInfo.ref
+                }
+            }
+            semanticElements = semanticElementOrder(semanticElements)
+            elements = semanticElements.map { $0.toJSON() }
             truncated = collected.truncated
             newMapping = Dictionary(
-                uniqueKeysWithValues: collected.elements.map {
+                uniqueKeysWithValues: semanticElements.map {
                     ($0.ref, $0.axElement)
                 }
             )
@@ -643,6 +766,7 @@ func handleObserve(params: Any?, id: Any?) {
     currentScreenshotMapping = newScreenshotMapping
     currentFrontmostPID = observedPID
     currentFocusedWindow = newWindows["w1"]
+    currentFocusedElementRef = focusedElementRef as? String
     if let active = windows.first, let bounds = active["bounds"] as? [String: Int] {
         currentFocusedWindowBounds = CGRect(
             x: bounds["x"] ?? 0, y: bounds["y"] ?? 0,
@@ -660,6 +784,7 @@ func handleObserve(params: Any?, id: Any?) {
             "active_window_ref": activeWindowRef,
             "windows": windows,
             "elements": elements,
+            "focused_element_ref": focusedElementRef,
             "truncated": truncated,
             "screenshot_ref": screenshotRef,
             "screenshot_error": screenshotError,
@@ -916,7 +1041,7 @@ func chunkUTF16(_ text: String, chunkSize: Int) -> [[UniChar]] {
 
 /// 通过 CGEvent 发送一块 Unicode 文本（keyboardSetUnicodeString）。
 /// 失败返回 false；不抛异常、不崩溃。
-func postUnicodeChunk(_ chunk: [UniChar]) -> Bool {
+func postUnicodeChunk(_ chunk: [UniChar], pid: pid_t) -> Bool {
     guard let source = CGEventSource(stateID: .combinedSessionState) else {
         return false
     }
@@ -935,7 +1060,7 @@ func postUnicodeChunk(_ chunk: [UniChar]) -> Bool {
             unicodeString: buffer.baseAddress
         )
     }
-    down.post(tap: .cghidEventTap)
+    down.postToPid(pid)
 
     // 补一个 keyUp（不携带 unicode），让目标输入框正常收尾。
     if let up = CGEvent(
@@ -943,7 +1068,7 @@ func postUnicodeChunk(_ chunk: [UniChar]) -> Bool {
         virtualKey: 0,
         keyDown: false
     ) {
-        up.post(tap: .cghidEventTap)
+        up.postToPid(pid)
     }
     return true
 }
@@ -960,12 +1085,14 @@ private enum FocusError: Error {
     case staleObservation
     case elementNotFound
     case focusFailed
+    case elementNotEditable
 
     var code: String {
         switch self {
         case .staleObservation: return "stale_observation"
         case .elementNotFound: return "element_not_found"
         case .focusFailed: return "focus_failed"
+        case .elementNotEditable: return "element_not_editable"
         }
     }
 }
@@ -974,13 +1101,17 @@ private enum FocusError: Error {
 /// 失败返回错误码：stale_observation / element_not_found / focus_failed。
 fileprivate func focusElement(
     observationID: String,
-    elementRef: String
+    elementRef: String,
+    requireEditable: Bool = false
 ) -> Result<AXUIElement, FocusError> {
     guard observationID == currentObservationID else {
         return .failure(.staleObservation)
     }
     guard let element = currentElements[elementRef] else {
         return .failure(.elementNotFound)
+    }
+    guard !requireEditable || isEditableElement(element) else {
+        return .failure(.elementNotEditable)
     }
     guard AXUIElementSetAttributeValue(
         element,
@@ -1057,7 +1188,8 @@ func handleTypeText(params: Any?, id: Any?) {
     if parsedElementRef.provided {
         if case .failure(let error) = focusElement(
             observationID: expectedObservationID,
-            elementRef: parsedElementRef.value
+            elementRef: parsedElementRef.value,
+            requireEditable: true
         ) {
             writeResponse(makeError(id: id, code: error.code, message: error.code))
             return
@@ -1084,9 +1216,21 @@ func handleTypeText(params: Any?, id: Any?) {
         return
     }
 
+    guard let targetPID = currentFrontmostPID,
+          let targetElement = currentElements[parsedElementRef.value] else {
+        writeResponse(makeError(
+            id: id,
+            code: "editable_target_required",
+            message: "type_text requires an editable element_ref"
+        ))
+        return
+    }
+    let beforeValue = readAXFullString(
+        targetElement, kAXValueAttribute as CFString
+    )
     let chunks = chunkUTF16(text, chunkSize: 100)
     for chunk in chunks {
-        guard postUnicodeChunk(chunk) else {
+        guard postUnicodeChunk(chunk, pid: targetPID) else {
             writeResponse(
                 makeError(
                     id: id,
@@ -1098,9 +1242,40 @@ func handleTypeText(params: Any?, id: Any?) {
         }
     }
 
+    var afterValue = readAXFullString(
+        targetElement, kAXValueAttribute as CFString
+    )
+    for _ in 0..<8 where beforeValue != nil && afterValue == beforeValue {
+        Thread.sleep(forTimeInterval: 0.05)
+        afterValue = readAXFullString(
+            targetElement, kAXValueAttribute as CFString
+        )
+    }
+    let verificationStatus: String
+    if let beforeValue, let afterValue {
+        verificationStatus = beforeValue == afterValue ? "mismatch" : "verified"
+    } else {
+        verificationStatus = "unverified"
+    }
+    let beforeCharacters: Any = beforeValue.map { $0.count } ?? NSNull()
+    let afterCharacters: Any = afterValue.map { $0.count } ?? NSNull()
+    let evidence: [String: Any] = [
+        "value_readable": beforeValue != nil && afterValue != nil,
+        "value_changed": beforeValue != nil && afterValue != beforeValue,
+        "before_characters": beforeCharacters,
+        "after_characters": afterCharacters,
+    ]
+    clearObservationCache()
+
     writeResponse([
         "id": id ?? NSNull(),
-        "result": successfulTypePayload(text),
+        "result": [
+            "characters": characterCount(text),
+            "element_ref": parsedElementRef.value,
+            "delivery_status": "delivered",
+            "verification_status": verificationStatus,
+            "evidence": evidence,
+        ],
     ])
 }
 
@@ -1260,8 +1435,14 @@ func handleKeyPress(params: Any?, id: Any?) {
     }
     down.flags = mods.flags
     up.flags = mods.flags
-    down.post(tap: .cghidEventTap)
-    up.post(tap: .cghidEventTap)
+    guard let targetPID = currentFrontmostPID else {
+        writeResponse(makeError(
+            id: id, code: "stale_observation", message: "missing target pid"
+        ))
+        return
+    }
+    down.postToPid(targetPID)
+    up.postToPid(targetPID)
 
     writeResponse([
         "id": id ?? NSNull(),

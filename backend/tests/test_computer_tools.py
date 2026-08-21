@@ -26,6 +26,8 @@ from pydantic import SecretStr
 from app.agent.events import AgentEventType, InMemoryEventHandler
 from app.agent.runtime import AgentRuntime
 from app.computer import (
+    ActionName,
+    ActionResult,
     ComputerClickTool,
     ComputerFocusWindowTool,
     ComputerKeyTool,
@@ -33,7 +35,11 @@ from app.computer import (
     ComputerOpenAppTool,
     ComputerScrollTool,
     ComputerTypeTool,
+    DeliveryStatus,
+    Element,
     FakeComputerRuntime,
+    Observation,
+    VerificationStatus,
     default_observation,
     register_computer_tools,
 )
@@ -170,6 +176,167 @@ async def test_computer_observe_calls_runtime() -> None:
     payload = json.loads(result.output or "{}")
     assert payload["id"] == obs.id
     assert payload["active_app"]["name"] == "FakeApp"
+
+
+async def test_computer_observe_never_returns_truncated_json() -> None:
+    observation = Observation(
+        id="large-observation",
+        focused_element_ref="editor",
+        elements=(
+            Element(
+                ref="editor",
+                role="text_area",
+                value="正在编辑",
+                focused=True,
+                editable=True,
+            ),
+            *(
+                Element(
+                    ref=f"cell-{index}",
+                    role="cell",
+                    title="侧边栏" + "x" * 900,
+                )
+                for index in range(300)
+            ),
+        ),
+    )
+    registry, _ = _build(observation=observation)
+
+    result = await _executor(registry).execute(
+        ToolCall(id="large", name="computer_observe", arguments={})
+    )
+
+    payload = json.loads(result.output or "{}")
+    assert result.success is True
+    assert len(result.output or "") < 20_000
+    assert payload["elements"][0]["ref"] == "editor"
+    assert payload["element_stats"]["returned"] < 301
+    assert payload["truncated"] is True
+
+
+async def test_last_step_observation_gets_tool_free_finalization() -> None:
+    registry, adapter = _fake_registry(
+        [
+            _model_response(
+                tool_calls=(
+                    ToolCall(
+                        id="observe-final",
+                        name="computer_observe",
+                        arguments={"include_screenshot": False},
+                    ),
+                )
+            ),
+            _model_response(content="已读取最后一次观察；输入效果尚未确认。"),
+        ]
+    )
+    tools, _ = _build()
+
+    result = await AgentRuntime(
+        registry,
+        tools,
+        provider="fake",
+        max_steps=1,
+    ).run("检查界面")
+
+    assert result.ok is True
+    assert result.steps == 2
+    assert len(adapter.requests) == 2
+    assert adapter.requests[-1].tools == ()
+    assert "尚未确认" in (result.content or "")
+
+
+async def test_textual_tool_call_in_finalization_is_not_completed() -> None:
+    registry, adapter = _fake_registry(
+        [
+            _model_response(
+                tool_calls=(
+                    ToolCall(
+                        id="observe-final",
+                        name="computer_observe",
+                        arguments={"include_screenshot": False},
+                    ),
+                )
+            ),
+            _model_response(
+                content=(
+                    '<｜｜DSML｜｜tool_calls><｜｜DSML｜｜invoke '
+                    'name="computer_type">123'
+                )
+            ),
+        ]
+    )
+    tools, _ = _build()
+
+    result = await AgentRuntime(
+        registry,
+        tools,
+        provider="fake",
+        max_steps=1,
+    ).run("输入 123")
+
+    assert result.ok is False
+    assert result.stop_reason.value == "max_steps"
+    assert len(adapter.requests) == 2
+
+
+async def test_unverified_type_cannot_be_reported_as_completed() -> None:
+    class UnverifiedComputer(FakeComputerRuntime):
+        async def type(
+            self,
+            text: str,
+            element_ref: str | None = None,
+        ) -> ActionResult:
+            return ActionResult(
+                success=True,
+                action=ActionName.TYPE,
+                delivery_status=DeliveryStatus.DELIVERED,
+                verification_status=VerificationStatus.UNVERIFIED,
+                metadata={"characters": len(text), "element_ref": element_ref},
+            )
+
+    registry, adapter = _fake_registry(
+        [
+            _model_response(
+                tool_calls=(
+                    ToolCall(
+                        id="type-1",
+                        name="computer_type",
+                        arguments={"text": "465", "element_ref": "e2"},
+                    ),
+                )
+            ),
+            _model_response(content="已经输入成功"),
+            _model_response(
+                tool_calls=(
+                    ToolCall(
+                        id="observe-1",
+                        name="computer_observe",
+                        arguments={"include_screenshot": False},
+                    ),
+                )
+            ),
+            _model_response(content="事件已投递，并已重新观察界面。"),
+        ]
+    )
+    tools = ToolRegistry()
+    register_computer_tools(tools, UnverifiedComputer())
+
+    result = await AgentRuntime(
+        registry,
+        tools,
+        provider="fake",
+        max_steps=4,
+        approval_gate=AutoApproveGate(),
+    ).run("输入 465")
+
+    assert result.ok is True
+    assert result.steps == 4
+    assert len(adapter.requests) == 4
+    assert any(
+        message.role is MessageRole.SYSTEM
+        and "尚未确认界面效果" in (message.content or "")
+        for message in adapter.requests[2].messages
+    )
 
 
 async def test_computer_click_element_target_parses() -> None:
