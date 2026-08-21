@@ -9,7 +9,7 @@ import {
   listConversations,
   sendMessage,
 } from '../api/conversations'
-import { cancelRun, recoverRun } from '../api/runs'
+import { cancelRun, listRuns, recoverRun } from '../api/runs'
 import { getTask, planAccept, planReject } from '../api/tasks'
 import type { AgentMode, Message, Task } from '../api/types'
 import { buildTurnView } from '../agent/turnPresentation'
@@ -90,6 +90,26 @@ export default function ChatPage({
   }, [eventsByRun, runStatuses, selectedId])
   const activeRunId = liveRunId ?? lastRunId
   const activeRunStatus = activeRunId ? runStatuses[activeRunId] : undefined
+
+  // 后端 SQLite 是权威：会话切换/挂载时同步该会话 runs 的真实状态，避免历史
+  // run 因错过实时事件而长期停留在 running（例如取消广播丢失）。
+  useEffect(() => {
+    if (!selectedId) return
+    let cancelled = false
+    void listRuns({ conversationId: selectedId, limit: 50 })
+      .then((runs) => {
+        if (cancelled) return
+        const map: Record<string, string> = {}
+        for (const run of runs) map[run.id] = run.status
+        useEventsStore.getState().syncRunStatuses(map)
+      })
+      .catch(() => {
+        /* 同步失败不影响 UI；实时事件仍会工作 */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedId])
 
   // conversation → 最近 run 状态（让会话列表呈现 Agent workspace 状态）。
   const conversationStatus = useMemo(() => {
@@ -201,7 +221,11 @@ export default function ChatPage({
   const stopRun = async (): Promise<void> => {
     if (!activeRunId) return
     try {
-      await cancelRun(activeRunId)
+      const updated = await cancelRun(activeRunId)
+      // 即使 run.status 广播错过，也立即用 RPC 响应里的权威状态覆盖 store。
+      useEventsStore
+        .getState()
+        .syncRunStatuses({ [activeRunId]: updated.status })
       void queryClient.invalidateQueries({ queryKey: ['runs'] })
       void queryClient.invalidateQueries({ queryKey: ['conversation', selectedId] })
     } catch (error) {

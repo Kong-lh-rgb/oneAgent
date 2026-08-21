@@ -19,6 +19,8 @@ interface EventsState {
   runStatuses: Record<string, string>
   connect: () => void
   disconnect: () => void
+  /** 用后端权威状态同步 run 状态（覆盖错过实时事件而 stale 的 running）。 */
+  syncRunStatuses: (updates: Record<string, string>) => void
 }
 
 const MAX_EVENTS_PER_RUN = 500
@@ -136,6 +138,11 @@ export const useEventsStore = create<EventsState>((set, get) => {
     set({ runStatuses: { ...get().runStatuses, [data.run_id]: data.status } })
   }
 
+  const syncRunStatuses = (updates: Record<string, string>): void => {
+    if (!updates || Object.keys(updates).length === 0) return
+    set({ runStatuses: { ...get().runStatuses, ...updates } })
+  }
+
   return {
     connected: false,
     eventsByRun: {},
@@ -151,6 +158,7 @@ export const useEventsStore = create<EventsState>((set, get) => {
       unsubscribeHandlers.push(rpcClient.on('run.status', handleRunStatus))
       rpcClient.connect()
     },
+    syncRunStatuses,
     disconnect: () => {
       flushNow()
       unsubscribeStatus?.()
