@@ -71,13 +71,13 @@ func resolveAppURL(_ app: String) -> URL? {
 /// 激活目标应用并确认它确实成为 macOS frontmost application。
 ///
 /// `launchApplication` 对已经运行的 App 只保证返回进程，不保证把窗口带到前台；
-/// Computer Runtime 后续的 observe 又以 frontmost App 为准，因此这里必须闭环验证。
+/// Target 与 frontmost 已分离；这里的确认结果只描述激活状态，不决定启动成功。
 func activateAndConfirmFrontmost(_ application: NSRunningApplication) -> Bool {
     if NSWorkspace.shared.frontmostApplication?.processIdentifier
         == application.processIdentifier {
         return true
     }
-    application.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+    requestApplicationFrontmost(application)
     for _ in 0..<30 {
         if NSWorkspace.shared.frontmostApplication?.processIdentifier
             == application.processIdentifier {
@@ -90,7 +90,7 @@ func activateAndConfirmFrontmost(_ application: NSRunningApplication) -> Bool {
 
 /// 处理 open_app 请求。
 ///
-/// 成功 → {"app":..., "bundle_id":..., "process_id":...}
+/// 启动成功 → 返回进程身份以及独立的 launch_status / activation_status。
 /// 参数缺失/空 → invalid_params；找不到应用 → app_not_found；
 /// 启动失败 → app_launch_failed。不返回假的 success。
 func handleOpenApp(params: Any?, id: Any?) {
@@ -127,16 +127,8 @@ func handleOpenApp(params: Any?, id: Any?) {
             configuration: [:]
         )
         clearObservationCache()
-        guard activateAndConfirmFrontmost(running) else {
-            writeResponse(
-                makeError(
-                    id: id,
-                    code: "app_activation_failed",
-                    message: "application launched but did not become frontmost: \(app)"
-                )
-            )
-            return
-        }
+        setComputerTarget(running)
+        let activationConfirmed = activateAndConfirmFrontmost(running)
         // bundle id 缺省时用 NSNull，避免在 [String: Any] 里塞 nil。
         var bundleID: Any = NSNull()
         if let resolved =
@@ -150,7 +142,11 @@ func handleOpenApp(params: Any?, id: Any?) {
                 "app": app,
                 "bundle_id": bundleID,
                 "process_id": running.processIdentifier,
-                "frontmost_verified": true,
+                "launch_status": "running",
+                "activation_status": (
+                    activationConfirmed ? "frontmost" : "not_frontmost"
+                ),
+                "frontmost_verified": activationConfirmed,
             ],
         ])
     } catch {
@@ -287,8 +283,18 @@ func handleBasicObserve(params: Any?, id: Any?) {
 /// AX 遍历上限。
 private let kMaxElements = 300
 private let kMaxDepth = 12
+private let kMaxVisitedNodes = 3000
+private let kMaxRepetitiveElements = 80
 /// value 字符串截断上限。
 private let kMaxValueLength = 1000
+
+/// 大型列表里最容易淹没有效控件的重复角色。
+private let kRepetitiveRoles: Set<String> = [
+    "row", "cell", "list_item", "outline_row", "static_text",
+]
+private let kTextEntryRoles: Set<String> = [
+    "text_area", "text_field", "combo_box",
+]
 
 /// 纯容器角色：本身没有信息就不返回，但仍继续遍历 children。
 private let kContainerRoles: Set<String> = [
@@ -432,6 +438,15 @@ func isEditableElement(_ element: AXUIElement) -> Bool {
     return settable.boolValue
 }
 
+/// 已取得真实 AXFocusedUIElement 时，忽略其它节点不可靠的 AXFocused 标记。
+func resolvedElementFocus(
+    forceFocused: Bool,
+    reportedFocused: Bool,
+    allowReportedFocus: Bool
+) -> Bool {
+    forceFocused || (allowReportedFocus && reportedFocused)
+}
+
 /// 直接读取应用当前真实的键盘焦点元素，避免 DFS 截断前找不到编辑器。
 func focusedUIElement(pid: pid_t) -> AXUIElement? {
     let appElement = AXUIElementCreateApplication(pid)
@@ -510,7 +525,8 @@ private struct AXNode: Hashable {
 func buildElementInfo(
     _ element: AXUIElement,
     ref: String,
-    forceFocused: Bool = false
+    forceFocused: Bool = false,
+    allowReportedFocus: Bool = true
 ) -> AXElementInfo? {
     let role = normalizeRole(
         readAXString(element, kAXRoleAttribute as CFString) ?? ""
@@ -521,8 +537,13 @@ func buildElementInfo(
     )
     let value = readAXString(element, kAXValueAttribute as CFString)
     let enabled = readAXBool(element, kAXEnabledAttribute as CFString) ?? true
-    let focused = forceFocused
-        || (readAXBool(element, kAXFocusedAttribute as CFString) ?? false)
+    let focused = resolvedElementFocus(
+        forceFocused: forceFocused,
+        reportedFocused: (
+            readAXBool(element, kAXFocusedAttribute as CFString) ?? false
+        ),
+        allowReportedFocus: allowReportedFocus
+    )
     let editable = isEditableElement(element)
 
     guard isUsefulElement(
@@ -554,12 +575,14 @@ func buildElementInfo(
     )
 }
 
-/// 模型消费顺序：真实焦点 > 可编辑 > 可操作 > 其它信息元素。
+/// 模型消费顺序：真实焦点 > 文本输入 > 其它可写控件 > 可操作 > 其它 > 重复项。
 func elementPriority(_ element: AXElementInfo) -> Int {
     if element.focused { return 0 }
-    if element.editable { return 1 }
-    if !element.actions.isEmpty { return 2 }
-    return 3
+    if element.editable && kTextEntryRoles.contains(element.role) { return 1 }
+    if element.editable { return 2 }
+    if !element.actions.isEmpty { return 3 }
+    if kRepetitiveRoles.contains(element.role) { return 5 }
+    return 4
 }
 
 func semanticElementOrder(_ elements: [AXElementInfo]) -> [AXElementInfo] {
@@ -573,32 +596,88 @@ func semanticElementOrder(_ elements: [AXElementInfo]) -> [AXElementInfo] {
     }
 }
 
-/// 递归遍历 AX children，保留有用元素，限制数量与深度，防循环。
+struct AXCollectionResult {
+    let elements: [AXElementInfo]
+    let truncated: Bool
+    let observed: Int
+    let editableCount: Int
+    let actionableCount: Int
+    let repetitiveElementsDropped: Int
+}
+
+/// 在最终输出预算内优先保留焦点、可编辑和可操作元素，并限制重复列表项。
+func selectSemanticElements(
+    _ candidates: [AXElementInfo],
+    maxElements: Int,
+    maxRepetitiveElements: Int
+) -> (elements: [AXElementInfo], repetitiveDropped: Int) {
+    let ordered = semanticElementOrder(candidates)
+    var selected: [AXElementInfo] = []
+    var repetitiveKept = 0
+    var repetitiveDropped = 0
+    for candidate in ordered {
+        let repetitive = kRepetitiveRoles.contains(candidate.role)
+        if repetitive && repetitiveKept >= maxRepetitiveElements {
+            repetitiveDropped += 1
+            continue
+        }
+        if selected.count >= maxElements {
+            if repetitive { repetitiveDropped += 1 }
+            continue
+        }
+        selected.append(candidate)
+        if repetitive { repetitiveKept += 1 }
+    }
+    return (selected, repetitiveDropped)
+}
+
+/// 递归遍历 AX children。遍历预算与输出预算分离，避免前 300 个列表行直接
+/// 截断树；真实焦点元素会预留进入候选集，再按语义优先级和重复角色配额输出。
 func collectElements(
     root: AXUIElement,
+    focusedElement: AXUIElement?,
     maxElements: Int,
-    maxDepth: Int
-) -> (elements: [AXElementInfo], truncated: Bool) {
-    var result: [AXElementInfo] = []
+    maxDepth: Int,
+    maxVisitedNodes: Int = kMaxVisitedNodes
+) -> AXCollectionResult {
+    var candidates: [AXElementInfo] = []
     var visited = Set<AXNode>()
-    var truncated = false
+    var traversalTruncated = false
+    var nextRef = 1
+
+    func appendCandidate(_ element: AXUIElement, forceFocused: Bool = false) {
+        let ref = "e\(nextRef)"
+        nextRef += 1
+        if let info = buildElementInfo(
+            element,
+            ref: ref,
+            forceFocused: forceFocused,
+            // 能直接读到 AXFocusedUIElement 时，只信这一份真实焦点证据。
+            // Notes 等 App 会让大量 cell 同时报告 AXFocused=true。
+            allowReportedFocus: focusedElement == nil
+        ) {
+            candidates.append(info)
+        }
+    }
+
+    if let focusedElement {
+        appendCandidate(focusedElement, forceFocused: true)
+    }
 
     func visit(_ element: AXUIElement, _ depth: Int) {
-        if truncated { return }
         if depth > maxDepth { return }
+        if visited.count >= maxVisitedNodes {
+            traversalTruncated = true
+            return
+        }
 
         let node = AXNode(element: element)
         if visited.contains(node) { return }
         visited.insert(node)
-
-        if result.count < maxElements {
-            let ref = "e\(result.count + 1)"
-            if let info = buildElementInfo(element, ref: ref) {
-                result.append(info)
-            }
+        if let focusedElement, CFEqual(element, focusedElement) {
+            // 已作为最高优先级候选加入，但仍继续遍历它的 children。
         } else {
-            truncated = true
-            return
+            appendCandidate(element)
         }
 
         var childrenRef: CFTypeRef?
@@ -612,12 +691,24 @@ func collectElements(
         else { return }
         for child in children {
             visit(child, depth + 1)
-            if truncated { return }
+            if traversalTruncated { return }
         }
     }
 
     visit(root, 0)
-    return (result, truncated)
+    let selected = selectSemanticElements(
+        candidates,
+        maxElements: maxElements,
+        maxRepetitiveElements: kMaxRepetitiveElements
+    )
+    return AXCollectionResult(
+        elements: selected.elements,
+        truncated: traversalTruncated || candidates.count > selected.elements.count,
+        observed: candidates.count,
+        editableCount: candidates.lazy.filter(\.editable).count,
+        actionableCount: candidates.lazy.filter { !$0.actions.isEmpty }.count,
+        repetitiveElementsDropped: selected.repetitiveDropped
+    )
 }
 
 /// 处理 observe 请求（V3）。
@@ -665,16 +756,43 @@ func handleObserve(params: Any?, id: Any?) {
     var screenshotError: Any = NSNull()
     var newScreenshotMapping: ScreenshotMapping? = nil
     var observedPID: pid_t? = nil
+    var targetIsFrontmost = false
+    var elementStats: [String: Int] = [
+        "observed": 0,
+        "returned": 0,
+        "editable_count": 0,
+        "actionable_count": 0,
+        "repetitive_elements_dropped": 0,
+    ]
 
-    if let frontmost = NSWorkspace.shared.frontmostApplication {
-        observedPID = frontmost.processIdentifier
-        activeApp = frontmostAppDict(frontmost)
-        let appElement = AXUIElementCreateApplication(frontmost.processIdentifier)
+    let targetApplication: NSRunningApplication?
+    if computerTargetPID != nil {
+        targetApplication = runningComputerTarget()
+        if targetApplication == nil {
+            clearComputerTarget()
+            writeResponse(makeError(
+                id: id,
+                code: "target_not_running",
+                message: "computer target exited; open the target app again"
+            ))
+            return
+        }
+    } else {
+        targetApplication = NSWorkspace.shared.frontmostApplication
+        if let targetApplication { setComputerTarget(targetApplication) }
+    }
+
+    if let target = targetApplication {
+        observedPID = target.processIdentifier
+        targetIsFrontmost = NSWorkspace.shared.frontmostApplication?
+            .processIdentifier == target.processIdentifier
+        activeApp = frontmostAppDict(target)
+        let appElement = AXUIElementCreateApplication(target.processIdentifier)
         var windowsRef: CFTypeRef?
         let axWindows = (AXUIElementCopyAttributeValue(
             appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success
             ? windowsRef as? [AXUIElement] : nil) ?? []
-        let focused = focusedWindow(pid: frontmost.processIdentifier)
+        let focused = focusedWindow(pid: target.processIdentifier)
         var sourceWindows = axWindows
         if let focused, !sourceWindows.contains(where: { CFEqual($0, focused.element) }) {
             sourceWindows.insert(focused.element, at: 0)
@@ -695,40 +813,23 @@ func handleObserve(params: Any?, id: Any?) {
             activeWindow = info; activeWindowRef = "w1"
             let collected = collectElements(
                 root: windowElement,
+                focusedElement: focusedUIElement(pid: target.processIdentifier),
                 maxElements: kMaxElements,
                 maxDepth: kMaxDepth
             )
-            var semanticElements = collected.elements
-            if let focusedElement = focusedUIElement(
-                pid: frontmost.processIdentifier
-            ) {
-                if let existingIndex = semanticElements.firstIndex(
-                    where: { CFEqual($0.axElement, focusedElement) }
-                ) {
-                    let existing = semanticElements[existingIndex]
-                    if let focusedInfo = buildElementInfo(
-                        focusedElement,
-                        ref: existing.ref,
-                        forceFocused: true
-                    ) {
-                        semanticElements[existingIndex] = focusedInfo
-                    }
-                    focusedElementRef = existing.ref
-                } else if let focusedInfo = buildElementInfo(
-                    focusedElement,
-                    ref: "e\(semanticElements.count + 1)",
-                    forceFocused: true
-                ) {
-                    if semanticElements.count >= kMaxElements {
-                        semanticElements.removeLast()
-                    }
-                    semanticElements.append(focusedInfo)
-                    focusedElementRef = focusedInfo.ref
-                }
+            let semanticElements = collected.elements
+            if let focusedRef = semanticElements.first(where: \.focused)?.ref {
+                focusedElementRef = focusedRef
             }
-            semanticElements = semanticElementOrder(semanticElements)
             elements = semanticElements.map { $0.toJSON() }
             truncated = collected.truncated
+            elementStats = [
+                "observed": collected.observed,
+                "returned": semanticElements.count,
+                "editable_count": collected.editableCount,
+                "actionable_count": collected.actionableCount,
+                "repetitive_elements_dropped": collected.repetitiveElementsDropped,
+            ]
             newMapping = Dictionary(
                 uniqueKeysWithValues: semanticElements.map {
                     ($0.ref, $0.axElement)
@@ -739,7 +840,7 @@ func handleObserve(params: Any?, id: Any?) {
                 let position = readAXPoint(windowElement, kAXPositionAttribute as CFString) ?? .zero
                 let size = readAXSize(windowElement, kAXSizeAttribute as CFString) ?? .zero
                 if #available(macOS 14.0, *) {
-                    switch captureWindow(pid: frontmost.processIdentifier,
+                    switch captureWindow(pid: target.processIdentifier,
                                          bounds: CGRect(origin: position, size: size),
                                          title: readAXString(windowElement, kAXTitleAttribute as CFString) ?? "",
                                          outputPath: path) {
@@ -780,12 +881,15 @@ func handleObserve(params: Any?, id: Any?) {
         "id": id ?? NSNull(),
         "result": [
             "active_app": activeApp,
+            "target": activeApp,
+            "target_is_frontmost": targetIsFrontmost,
             "active_window": activeWindow,
             "active_window_ref": activeWindowRef,
             "windows": windows,
             "elements": elements,
             "focused_element_ref": focusedElementRef,
             "truncated": truncated,
+            "element_stats": elementStats,
             "screenshot_ref": screenshotRef,
             "screenshot_error": screenshotError,
         ],
@@ -822,8 +926,90 @@ func handleTestAXLogic(params: Any?, id: Any?) {
             "limits": [
                 "max_elements": kMaxElements,
                 "max_depth": kMaxDepth,
+                "max_visited_nodes": kMaxVisitedNodes,
+                "max_repetitive_elements": kMaxRepetitiveElements,
+            ],
+            "semantic_priorities": [
+                "focused": 0,
+                "text_entry": 1,
+                "editable": 2,
+                "actionable": 3,
+                "meaningful": 4,
+                "repetitive": 5,
+            ],
+            "focus_resolution": [
+                "real_focused": resolvedElementFocus(
+                    forceFocused: true,
+                    reportedFocused: false,
+                    allowReportedFocus: false
+                ),
+                "pseudo_focus_suppressed": resolvedElementFocus(
+                    forceFocused: false,
+                    reportedFocused: true,
+                    allowReportedFocus: false
+                ),
+                "reported_focus_fallback": resolvedElementFocus(
+                    forceFocused: false,
+                    reportedFocused: true,
+                    allowReportedFocus: true
+                ),
             ],
             "refs": ["e1", "e2", "e3"],
+        ],
+    ])
+}
+
+/// 测试辅助：验证清空 Observation 不会丢失稳定 Target。
+func handleTestTargetCache(params: Any?, id: Any?) {
+    computerTargetPID = 321
+    computerTargetBundleID = "com.example.Target"
+    computerTargetName = "Target"
+    currentObservationID = "obs-target"
+    currentFrontmostPID = 321
+    clearObservationCache()
+    let targetPreserved = computerTargetPID == 321
+        && computerTargetBundleID == "com.example.Target"
+        && computerTargetName == "Target"
+    clearComputerTarget()
+    writeResponse([
+        "id": id ?? NSNull(),
+        "result": [
+            "target_preserved_after_observation_clear": targetPreserved,
+            "target_cleared_explicitly": computerTargetPID == nil
+                && computerTargetBundleID == nil && computerTargetName == nil,
+        ],
+    ])
+}
+
+/// 测试辅助：用纯数据验证大量重复行不会挤掉末尾的可编辑控件。
+func handleTestSemanticBudget(params: Any?, id: Any?) {
+    let fake = AXUIElementCreateApplication(1)
+    var candidates: [AXElementInfo] = (1...350).map { index in
+        AXElementInfo(
+            ref: "e\(index)", role: "row", title: "row \(index)",
+            value: nil, enabled: true, focused: false, editable: false,
+            bounds: [:], actions: [], axElement: fake
+        )
+    }
+    candidates.append(AXElementInfo(
+        ref: "e351", role: "text_area", title: nil, value: nil,
+        enabled: true, focused: false, editable: true,
+        bounds: [:], actions: [], axElement: fake
+    ))
+    let selected = selectSemanticElements(
+        candidates,
+        maxElements: kMaxElements,
+        maxRepetitiveElements: kMaxRepetitiveElements
+    )
+    writeResponse([
+        "id": id ?? NSNull(),
+        "result": [
+            "returned": selected.elements.count,
+            "editable_retained": selected.elements.contains { $0.editable },
+            "repetitive_returned": selected.elements.filter {
+                kRepetitiveRoles.contains($0.role)
+            }.count,
+            "repetitive_dropped": selected.repetitiveDropped,
         ],
     ])
 }
@@ -928,7 +1114,11 @@ func handleClickElement(params: Any?, id: Any?) {
     }
 
     // click_element 需要人工审批，审批 UI 会抢焦点：漂移时先恢复已批准目标再执行。
-    guard requireFreshObservation(observationID, id: id, restoreOnDrift: true) else { return }
+    guard requireFreshObservation(
+        observationID,
+        id: id,
+        restoreOnDrift: true
+    ) else { return }
 
     switch resolveClickTarget(
         observationID: observationID,
@@ -1599,12 +1789,19 @@ func handleTestFreshGuard(params: Any?, id: Any?) {
 func handleTestRestoreTarget(params: Any?, id: Any?) {
     seedFakeMapping(observationID: "obs-restore", refs: ["e1"])
     currentFrontmostPID = 999_999  // 不存在的 PID → activate 无效果
+    computerTargetPID = 999_999
+    computerTargetBundleID = "com.example.Exited"
+    computerTargetName = "Exited"
     currentFocusedWindow = AXUIElementCreateApplication(1)  // fake window
     currentFocusedWindowBounds = CGRect(x: 0, y: 0, width: 100, height: 100)
     let restored = restoreRecordedTarget()
+    let cacheKept = currentObservationID == "obs-restore"
+    let targetExited = runningComputerTarget() == nil
+    clearComputerTarget()
     writeResponse(["id": id ?? NSNull(), "result": [
         "restored": restored,
-        "cache_kept": currentObservationID == "obs-restore",
+        "cache_kept": cacheKept,
+        "target_exited": targetExited,
     ]])
 }
 
@@ -1660,7 +1857,9 @@ func handleFocusWindow(params: Any?, id: Any?) {
         writeResponse(makeError(id: id, code: "stale_observation",
                                 message: "stale observation")); return
     }
-    guard requireFreshObservation(observationID, id: id) else { return }
+    guard requireFreshObservation(
+        observationID, id: id, restoreOnDrift: true
+    ) else { return }
     guard AXIsProcessTrusted() else {
         writeResponse(makeError(id: id, code: "accessibility_permission_required",
                                 message: "macOS Accessibility permission is required")); return
@@ -1690,7 +1889,9 @@ func handleScroll(params: Any?, id: Any?) {
         writeResponse(makeError(id: id, code: "invalid_params",
                                 message: "scroll deltas must contain a non-zero integer")); return
     }
-    guard requireFreshObservation(expectedObservationID, id: id) else { return }
+    guard requireFreshObservation(
+        expectedObservationID, id: id, restoreOnDrift: true
+    ) else { return }
     guard AXIsProcessTrusted() else {
         writeResponse(makeError(id: id, code: "accessibility_permission_required",
                                 message: "macOS Accessibility permission is required")); return
@@ -1716,7 +1917,12 @@ func handleClickCoordinate(params: Any?, id: Any?) {
                                 message: "stale observation")); return
     }
     // click_coordinate 需要人工审批，审批 UI 会抢焦点：漂移时先恢复已批准目标再执行。
-    guard requireFreshObservation(observationID, id: id, restoreOnDrift: true) else { return }
+    guard requireFreshObservation(
+        observationID,
+        id: id,
+        restoreOnDrift: true,
+        requireStableBounds: true
+    ) else { return }
     guard let mapping = currentScreenshotMapping else {
         writeResponse(makeError(id: id, code: "screenshot_unavailable",
                                 message: "current observation has no screenshot mapping")); return
@@ -1807,6 +2013,12 @@ func handleRequest(_ payload: [String: Any]) {
 
     case "__test_ax_logic":
         handleTestAXLogic(params: payload["params"], id: id)
+
+    case "__test_target_cache":
+        handleTestTargetCache(params: payload["params"], id: id)
+
+    case "__test_semantic_budget":
+        handleTestSemanticBudget(params: payload["params"], id: id)
 
     case "__test_element_mapping":
         handleTestElementMapping(params: payload["params"], id: id)

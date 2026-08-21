@@ -1,16 +1,14 @@
-"""Computer Runtime V0：屏幕观察 / 交互目标的纯数据契约与假实现。
+"""Computer Runtime：目标绑定的屏幕观察、交互与 macOS 原生实现。
 
 本轮提供：
 - ``models``：Observation / ElementTarget / CoordinateTarget / ActionResult；
 - ``runtime``：ComputerRuntime 异步接口（Protocol）；
-- ``fake``：FakeComputerRuntime（供未来 Agent Tool 单测使用）；
+- ``fake``：FakeComputerRuntime（供 Agent Tool 离线单测使用）；
 - ``tools``：computer_observe / click / type / key / scroll / open_app /
   focus_window 七个 Agent 工具 + ``register_computer_tools``；
 - ``helper_client``：MacOSHelperClient（Python ↔ Swift helper 的 JSON Lines
   长驻 subprocess 客户端）；
-- ``macos``：MacOSComputerRuntime（真实 macOS 骨架，本轮只建立生命周期）。
-
-不包含任何真实 macOS 实现（AXUIElement / ScreenCaptureKit / CGEvent）。
+- ``macos``：MacOSComputerRuntime（AXUIElement / ScreenCaptureKit / CGEvent）。
 """
 
 from .bootstrap import (
@@ -42,6 +40,7 @@ from .models import (
     CoordinateTarget,
     DeliveryStatus,
     Element,
+    ElementStats,
     ElementTarget,
     Observation,
     Target,
@@ -84,6 +83,7 @@ __all__ = [
     "CoordinateTarget",
     "DeliveryStatus",
     "Element",
+    "ElementStats",
     "ElementTarget",
     "FakeComputerRuntime",
     "MacOSComputerRuntime",

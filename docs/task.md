@@ -2141,3 +2141,39 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 - [x] Desktop 浮窗仅在待审批、提交中、RPC 错误和 Run 终态显示；批准后的执行阶段立即隐藏
 - [x] 最终化响应出现 `<tool_calls>` / DSML invoke 标记时拒绝假完成，按 `max_steps` 失败收口
 - [x] Backend 全量 `pytest` 868 通过；Desktop 136 tests、typecheck、build 通过；Native 协议检查通过
+
+### 完成：Computer Target & Recovery V1
+
+#### Bad Case
+
+- [x] `computer_observe` 无条件跟随 `frontmostApplication`，审批浮窗或用户切换 App 后会把 Notes 错认成 Vesta/Finder
+- [x] App 已经启动但激活未确认时，旧 `open_app` 返回失败，模型反复 open/observe 空转
+- [x] AX DFS 在收集 300 个元素后立即停止，大型 row/cell 列表会让后面的编辑区永远进不了候选集
+- [x] 完全相同调用检测无法识别 click/key/type 交替但持续返回同一错误的策略循环
+- [x] 工具错误只说明失败，没有告诉模型应该重新 observe、选择 editable 元素或换语义动作
+
+#### 修复结果
+
+- [x] Native Helper 持久维护 target PID、bundle id、app name；清空 Observation 不清空 target，显式 open 新 App 或 target 退出才切换/失效
+- [x] `computer_observe` 使用 `AXUIElementCreateApplication(targetPID)` 读取稳定目标，窗口截图也按目标 PID/window 捕获
+- [x] `open_app` 拆分 `launch_status` 与 `activation_status`；启动成功即建立 target，激活只做 best effort，不再伪造 launch failure
+- [x] freshness 继续绑定 observation id、target PID 和 target window；所有副作用执行前恢复并验证已批准 target，无法恢复则 `stale_observation`
+- [x] AX 遍历预算与输出预算分离：最多检查 3000 节点、最多输出 300 元素，重复 row/cell/list 配额 80，焦点/可编辑/可操作元素优先
+- [x] Observation 保留合法有界 JSON，并报告 observed、returned、editable_count、actionable_count、repetitive_elements_dropped
+- [x] 新增 ComputerStagnationGuard：同 target、同错误、桌面 revision 无变化时第二次给纠偏提示，第三次禁用 Computer 工具并要求形成最终答复
+- [x] stale/editable/action_not_supported/target exit 等错误增加明确恢复建议
+- [x] Notes 真机观察：1931 个候选、7 个可编辑元素，重复列表丢弃 1340 个后编辑元素仍被保留
+- [x] TextEdit 真机闭环：临时文档识别唯一 focused+editable `e1`，输入 25 字符后 AXValue 11→36，`verification_status=verified`，二次 observe 验证文本存在；临时文件和窗口已清理
+- [x] 验证：Backend `pytest` 882 通过，`ruff`、`compileall`、`git diff --check` 通过；Swift build 与协议检查全部通过
+
+#### 真实 Run 回归：`e0e73492`
+
+- [x] Target-bound observe 正常：连续四次都读取备忘录 PID `67467`，即使 `target_is_frontmost=false` 也没有漂回 Vesta
+- [x] 发现 Notes 会让大量 outline/cell 同时报告 `AXFocused=true`，导致 18K 裁剪前 65 个元素全是伪焦点，7 个 editable 全部消失
+- [x] 发现语义副作用恢复把窗口坐标变化也判为身份变化；同一 AX window 从 `x=233` 移到 `x=670` 后持续返回 `stale_observation`
+- [x] 只信直接读取的 `AXFocusedUIElement`；存在真实焦点时抑制其它节点的伪焦点属性
+- [x] 文本输入元素优先于 splitter/scroll_bar 等仅数值可写控件，`computer_type` 只接受 text_area/text_field/combo_box
+- [x] freshness 拆分语义窗口身份与坐标稳定性：语义动作允许同一窗口移动，坐标点击继续要求 bounds 不变
+- [x] 激活恢复增加 AXFrontmost、AXMain、AXFocused 与 AXRaise，仍只作用于已批准 target PID/window
+- [x] 停滞指纹忽略纯 bounds/statistics 抖动，窗口移动不再被误认为任务取得有效进展
+- [x] 修复后 Notes 真机 observe：真实焦点后立即返回 7 个 editable，`text_area e1929`、`text_field e1950` 均位于输出前列

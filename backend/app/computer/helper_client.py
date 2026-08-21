@@ -18,7 +18,7 @@
 - ``ComputerHelperProcessError``：进程未启动 / 意外退出 / 无法写入；
 - ``ComputerHelperProtocolError``：helper 返回了无法关联或结构非法的响应。
 
-本轮 V0 只提供传输层；不包含任何真实电脑控制逻辑。
+本模块只负责传输；真实电脑控制逻辑位于 Swift helper。
 """
 
 from __future__ import annotations

@@ -1851,3 +1851,40 @@ Multi-Agent / Task Graph / Planner DAG。Pattern Mining V1 完全用一次结构
 - 因此审批 UI 的安全生命周期必须分段：pending/submitting 时显示；批准后执行期间隐藏；Run 终态后才能再次显示结果。
 - `open_app` 的“进程启动成功”也不等于“用户正在看到该 App”。可靠语义必须继续验证 `frontmostApplication.pid == target.pid`。
 - Agent 最终回答同样需要执行证据：Provider 工具协议如果只是普通文本，没有形成 `ToolCall`，就没有被执行，Run 不能标记 completed。
+
+## 43. Computer Target & Recovery：目标、观察和前台是三种状态（2026-08-21）
+
+### 43.1 Target 不应由每次 observe 临时猜测
+
+- `frontmost app` 只是此刻位于系统最前面的应用，可能是审批窗口、Finder 或用户临时切换的 App。
+- `computer target` 是本轮桌面任务明确要操作的进程，由 PID、bundle id、app name 组成；`open_app` 成功启动进程后建立。
+- `observation target` 是某次快照绑定的 target PID + window + observation id。清空元素 ref 不能顺便忘掉长期到下一次 open 的 target。
+- 因此 observe 可以读取后台 target 的 AX Tree；真正执行 click/type/key/scroll 时，才恢复 target 到前台并重新验证。
+
+### 43.2 launch 成功与 activation 成功必须独立表达
+
+- launch 回答“目标进程是否存在”，activation 回答“目标是否成为 frontmost”。
+- 已运行但未抢到前台的 App 仍是成功建立的 target，不能返回假的打开失败。
+- 副作用前再做 `activate → raise window → freshness verify → execute`，失败时不向当前任意前台 App 发送输入。
+
+### 43.3 AX 遍历预算与模型输出预算不是一回事
+
+- 旧策略在 DFS 收到 300 个元素时停止：后续排序再聪明，也看不到第 301 个之后的编辑器。
+- 新策略最多访问 3000 个节点形成候选，再按“真实焦点 → 可编辑 → 可操作 → 有意义控件 → 重复列表项”选择最多 300 个。
+- row/cell/list 等重复角色单独设 80 个配额，避免大型侧边栏吃光预算；最终 18K 裁剪仍输出完整 JSON。
+- `element_stats` 同时报告候选数、返回数、编辑/动作数量与重复丢弃数，让模型和 Trace 能判断观察质量。
+
+### 43.4 停滞不是“调用参数相同”，而是“世界状态没变”
+
+- open/observe/type 交替调用的签名都不同，但如果 target 相同、错误码相同、Observation 证据没有变化，本质上仍是同一失败策略。
+- ComputerStagnationGuard 用 target identity、desktop revision 和 failure code 组成失败键。
+- 第一次失败允许正常恢复；第二次把纠偏建议写入工具结果；第三次隐藏 Computer 工具，要求模型说明阻塞并收尾，避免烧到 `max_steps`。
+- 新 Observation 指纹发生变化或已验证输入成功时推进 desktop revision，旧失败计数自然失效，不会把真实进展误判成停滞。
+
+### 43.5 AXFocused 和窗口 bounds 不是稳定身份
+
+- Notes 的 AX Tree 会让许多 outline/cell 同时返回 `AXFocused=true`；真正可靠的焦点来源是应用级 `AXFocusedUIElement`。
+- 一旦取得真实焦点，就应抑制其它节点的 reported focus，否则伪焦点会排在 text_area 前面并耗尽序列化预算。
+- `AXValue` 可写不等于能够输入文本：splitter、scroll bar 也可能 editable。文本输入必须进一步限制为 text_area/text_field/combo_box。
+- AX window identity 与 window bounds 是不同概念。同一窗口被系统移动后，语义 element ref 仍可安全使用；只有基于截图的坐标点击必须要求 bounds 保持不变。
+- 停滞指纹同样应忽略 bounds 和统计数量的小幅抖动，只把目标变化、语义控件变化或已验证副作用视为真正进展。

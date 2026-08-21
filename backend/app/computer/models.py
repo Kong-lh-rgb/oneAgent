@@ -70,7 +70,7 @@ class Bounds(BaseModel):
 
 
 class ActiveApp(BaseModel):
-    """当前活动应用。"""
+    """一次观察绑定的应用进程。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -140,6 +140,25 @@ class Element(BaseModel):
         return normalized
 
 
+class ElementStats(BaseModel):
+    """AX 遍历与输出预算统计，帮助模型识别观察是否完整。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    observed: int = 0
+    returned: int = 0
+    editable_count: int = 0
+    actionable_count: int = 0
+    repetitive_elements_dropped: int = 0
+
+    @field_validator("*")
+    @classmethod
+    def non_negative(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("element stats must be non-negative")
+        return value
+
+
 class Observation(BaseModel):
     """一次屏幕观察的结构化快照。"""
 
@@ -148,11 +167,14 @@ class Observation(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     active_app: ActiveApp | None = None
+    target: ActiveApp | None = None
+    target_is_frontmost: bool = False
     active_window: Window | None = None
     windows: tuple[Window, ...] = ()
     elements: tuple[Element, ...] = ()
     focused_element_ref: str | None = None
     truncated: bool = False
+    element_stats: ElementStats = Field(default_factory=ElementStats)
     screenshot_ref: str | None = None
 
     @field_validator("id")

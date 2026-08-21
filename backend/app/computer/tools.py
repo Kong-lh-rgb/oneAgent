@@ -1,9 +1,9 @@
-"""Computer Runtime V0 工具层：把 ComputerRuntime 契约暴露给 Agent。
+"""Computer Runtime 工具层：把 ComputerRuntime 契约暴露给 Agent。
 
 所有工具只做三件事：
 - 定义 ToolDefinition（含参数 schema 与权限档位）；
 - 把 JSON 参数解析成 ``computer.models`` 的 Target / 参数；
-- 调用注入的 ComputerRuntime（V0 用 FakeComputerRuntime，不操作系统）。
+- 调用 composition root 注入的 ComputerRuntime；测试使用 Fake 实现。
 
 不直接操作系统、不 import pyautogui、不写任何 macOS API。ComputerRuntime
 必须由 Application composition root 注入，Tool 不自建 Runtime。
@@ -149,8 +149,10 @@ class ComputerTypeTool(BaseTool):
             name="computer_type",
             description=(
                 "向最近一次 Observation 中明确的可编辑元素输入文本，不操作剪贴板。"
-                "优先提供 element_ref；省略时只会自动使用唯一的 focused+editable "
-                "元素，否则安全拒绝。返回 delivery_status 和 verification_status；"
+                "element_ref 必须是 editable=true 的 text_area/text_field/combo_box，"
+                "不要选择 splitter/scroll_bar 等仅数值可写控件。省略时只会自动使用"
+                "唯一的 focused+editable 文本输入元素，否则安全拒绝。"
+                "返回 delivery_status 和 verification_status；"
                 "unverified 表示事件已投递但仍须再次 observe，不能宣称界面已完成。"
             ),
             parameters={
@@ -425,10 +427,14 @@ def _bounded_observation_payload(
         return payload
     bounded = {key: value for key, value in payload.items() if key != "elements"}
     bounded["elements"] = []
-    bounded["element_stats"] = {
-        "observed": len(raw_elements),
-        "returned": 0,
-    }
+    raw_stats = payload.get("element_stats")
+    element_stats = dict(raw_stats) if isinstance(raw_stats, dict) else {}
+    element_stats.setdefault("observed", len(raw_elements))
+    element_stats.setdefault("editable_count", 0)
+    element_stats.setdefault("actionable_count", 0)
+    element_stats.setdefault("repetitive_elements_dropped", 0)
+    element_stats["returned"] = 0
+    bounded["element_stats"] = element_stats
     for element in raw_elements:
         bounded["elements"].append(element)
         bounded["element_stats"]["returned"] = len(bounded["elements"])

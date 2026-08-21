@@ -173,6 +173,27 @@ async def test_open_app_preserves_frontmost_verification() -> None:
     assert result.metadata["frontmost_verified"] is True
 
 
+async def test_open_app_launch_success_does_not_require_frontmost() -> None:
+    runtime = _runtime(
+        StubHelperClient(
+            result={
+                "app": "Notes",
+                "bundle_id": "com.apple.Notes",
+                "process_id": 4242,
+                "launch_status": "running",
+                "activation_status": "not_frontmost",
+                "frontmost_verified": False,
+            }
+        )
+    )
+
+    result = await runtime.open_app("Notes")
+
+    assert result.success is True
+    assert result.metadata["launch_status"] == "running"
+    assert result.metadata["activation_status"] == "not_frontmost"
+
+
 async def test_open_app_bundle_id_hint() -> None:
     # 以 bundle id 形式传入也要原样转发给 helper。
     stub = StubHelperClient(
@@ -333,6 +354,41 @@ async def test_observe_converts_active_app() -> None:
     assert obs.active_app.name == "TextEdit"
     assert obs.active_app.bundle_id == "com.apple.TextEdit"
     assert obs.active_app.pid == 1234
+
+
+async def test_observe_converts_stable_target_and_element_stats() -> None:
+    raw = _observe_result_with_elements()
+    raw.update(
+        {
+            "target": {
+                "name": "Notes",
+                "bundle_id": "com.apple.Notes",
+                "process_id": 9876,
+            },
+            "target_is_frontmost": False,
+            "truncated": True,
+            "element_stats": {
+                "observed": 1200,
+                "returned": 300,
+                "editable_count": 2,
+                "actionable_count": 8,
+                "repetitive_elements_dropped": 820,
+            },
+        }
+    )
+
+    obs = await _runtime(StubHelperClient(result=raw)).observe()
+
+    assert obs.target is not None
+    assert obs.target.name == "Notes"
+    assert obs.target.pid == 9876
+    assert obs.target_is_frontmost is False
+    assert obs.truncated is True
+    assert obs.element_stats.observed == 1200
+    assert obs.element_stats.returned == 300
+    assert obs.element_stats.editable_count == 2
+    assert obs.element_stats.actionable_count == 8
+    assert obs.element_stats.repetitive_elements_dropped == 820
 
 
 async def test_observe_converts_active_window() -> None:
@@ -653,10 +709,26 @@ async def test_type_rejects_non_editable_or_unknown_target() -> None:
 
     with pytest.raises(ValueError, match="editable_target_required"):
         await runtime.type("hi")
-    with pytest.raises(ValueError, match="editable element"):
+    with pytest.raises(ValueError, match="element_not_editable"):
         await runtime.type("hi", element_ref="button")
     with pytest.raises(ValueError, match="latest observation"):
         await runtime.type("hi", element_ref="missing")
+
+
+async def test_type_rejects_non_text_value_settable_control() -> None:
+    runtime = _runtime(StubHelperClient(result=_type_result()))
+    runtime._last_observation = Observation(
+        id="obs-current",
+        elements=(
+            Element(ref="split", role="splitter", editable=True),
+            Element(ref="editor", role="text_area", editable=True),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="text-entry"):
+        await runtime.type("hi", element_ref="split")
+    result = await runtime.type("hi", element_ref="editor")
+    assert result.success is True
 
 
 async def test_type_reports_delivery_separately_from_effect_verification() -> None:

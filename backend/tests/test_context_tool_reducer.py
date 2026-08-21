@@ -147,9 +147,18 @@ def test_computer_observation_compaction_keeps_valid_semantic_json() -> None:
     payload = {
         "id": "obs-1",
         "active_app": {"name": "Notes"},
+        "target": {"name": "Notes", "pid": 42},
+        "target_is_frontmost": False,
         "active_window": {"ref": "w1", "title": "Notes"},
         "focused_element_ref": "editor",
         "truncated": True,
+        "element_stats": {
+            "observed": 1800,
+            "returned": 101,
+            "editable_count": 1,
+            "actionable_count": 2,
+            "repetitive_elements_dropped": 1200,
+        },
         "elements": [
             {
                 "ref": "editor",
@@ -195,6 +204,9 @@ def test_computer_observation_compaction_keeps_valid_semantic_json() -> None:
     )
 
     compacted = json.loads(result.messages[1].content or "{}")
+    assert compacted["target"] == {"name": "Notes", "pid": 42}
+    assert compacted["target_is_frontmost"] is False
+    assert compacted["element_stats"]["editable_count"] == 1
     assert compacted["focused_element_ref"] == "editor"
     assert compacted["elements"][0]["ref"] == "editor"
     assert compacted["compaction"]["kind"] == "semantic_observation"

@@ -341,6 +341,63 @@ do {
     let limits = logic?["limits"] as? [String: Any]
     check("max_elements == 300", limits?["max_elements"] as? Int == 300)
     check("max_depth == 12", limits?["max_depth"] as? Int == 12)
+    check(
+        "遍历预算独立于输出预算",
+        limits?["max_visited_nodes"] as? Int == 3000
+    )
+    check(
+        "重复元素配额 == 80",
+        limits?["max_repetitive_elements"] as? Int == 80
+    )
+    let priorities = logic?["semantic_priorities"] as? [String: Any]
+    check(
+        "语义优先级：可编辑先于重复列表",
+        (priorities?["editable"] as? Int ?? 99)
+            < (priorities?["repetitive"] as? Int ?? 0)
+    )
+    let focusResolution = logic?["focus_resolution"] as? [String: Any]
+    check(
+        "真实 AXFocusedUIElement 保留焦点",
+        focusResolution?["real_focused"] as? Bool == true
+    )
+    check(
+        "存在真实焦点时抑制 cell 伪焦点",
+        focusResolution?["pseudo_focus_suppressed"] as? Bool == false
+    )
+    check(
+        "无法取得真实焦点时保留 AXFocused fallback",
+        focusResolution?["reported_focus_fallback"] as? Bool == true
+    )
+
+    // 16b. Observation cache 与稳定 Target 生命周期相互独立
+    let targetCache = try request([
+        "id": 421, "method": "__test_target_cache", "params": [:]
+    ])
+    let targetState = targetCache["result"] as? [String: Any]
+    check(
+        "清空 Observation 保留稳定 Target",
+        targetState?["target_preserved_after_observation_clear"] as? Bool == true
+    )
+    check(
+        "Target 只在显式清理时消失",
+        targetState?["target_cleared_explicitly"] as? Bool == true
+    )
+    let semanticBudget = try request([
+        "id": 422, "method": "__test_semantic_budget", "params": [:]
+    ])
+    let semanticResult = semanticBudget["result"] as? [String: Any]
+    check(
+        "350 个重复行不会挤掉末尾可编辑控件",
+        semanticResult?["editable_retained"] as? Bool == true
+    )
+    check(
+        "重复行返回数受配额约束",
+        semanticResult?["repetitive_returned"] as? Int == 80
+    )
+    check(
+        "重复行丢弃数可诊断",
+        semanticResult?["repetitive_dropped"] as? Int == 270
+    )
     check("ref 顺序 e1/e2/e3", (logic?["refs"] as? [String]) == ["e1", "e2", "e3"])
 
     // 17. __test_element_mapping：新 observation 替换旧 mapping
@@ -680,6 +737,8 @@ do {
           restoreResult?["restored"] as? Bool == false)
     check("restore 失败不清空 Observation cache",
           restoreResult?["cache_kept"] as? Bool == true)
+    check("Target 进程退出会安全拒绝恢复",
+          restoreResult?["target_exited"] as? Bool == true)
 
     // 25c. focusElement 判定逻辑：stale / not_found / fake 元素不可聚焦
     let focusStale = try request([

@@ -21,6 +21,7 @@ from .models import (
     CoordinateTarget,
     DeliveryStatus,
     Element,
+    ElementStats,
     ElementTarget,
     Observation,
     VerificationStatus,
@@ -29,6 +30,34 @@ from .models import (
 
 __all__ = ["MacOSComputerRuntime"]
 logger = logging.getLogger("vesta.computer.macos")
+_TEXT_ENTRY_ROLES = frozenset({"text_area", "text_field", "combo_box"})
+
+_RECOVERY_HINTS = {
+    "app_activation_failed": (
+        "应用已经启动但没有成为前台；继续 observe 已绑定的 target，执行副作用前"
+        "Runtime 会再次尝试激活"
+    ),
+    "editable_target_required": (
+        "重新调用 computer_observe，并把返回的 editable element_ref 传给 computer_type"
+    ),
+    "element_not_editable": (
+        "重新观察并选择 editable=true 的 element_ref"
+    ),
+    "stale_observation": (
+        "目标或窗口已经变化；重新调用 computer_observe 获取新的 observation_id"
+    ),
+    "action_not_supported": (
+        "重新观察目标并选择 actions 中包含所需动作的元素"
+    ),
+    "target_not_running": "目标应用已经退出；先重新调用 computer_open_app",
+}
+
+
+def _with_recovery_hint(message: str) -> str:
+    for code, hint in _RECOVERY_HINTS.items():
+        if code in message:
+            return f"{message}; recovery: {hint}"
+    return message
 
 
 def _bounds(data: object) -> Bounds:
@@ -61,6 +90,16 @@ def _element(data: dict) -> Element:
         editable=data.get("editable", False),
         bounds=_bounds(raw_bounds) if isinstance(raw_bounds, dict) else None,
         actions=tuple(data.get("actions") or ()),
+    )
+
+
+def _active_app(data: object) -> ActiveApp | None:
+    if not isinstance(data, dict):
+        return None
+    return ActiveApp(
+        name=data.get("name") or "unknown",
+        bundle_id=data.get("bundle_id"),
+        pid=data.get("process_id"),
     )
 
 
@@ -109,6 +148,8 @@ class MacOSComputerRuntime:
             stale = "stale_observation" in str(exc)
             if uncertain or stale:
                 self._invalidate()
+            if type(exc) is ComputerHelperError:
+                raise ComputerHelperError(_with_recovery_hint(str(exc))) from exc
             raise
 
     async def start(self) -> None:
@@ -129,6 +170,10 @@ class MacOSComputerRuntime:
                 "app": result.get("app"),
                 "bundle_id": result.get("bundle_id"),
                 "process_id": result.get("process_id"),
+                "launch_status": result.get("launch_status", "running"),
+                "activation_status": result.get(
+                    "activation_status", "not_frontmost"
+                ),
                 "frontmost_verified": result.get("frontmost_verified", False),
             },
         )
@@ -148,14 +193,8 @@ class MacOSComputerRuntime:
                 self.screenshot_dir / f"{observation_id}.png"
             )
         result = await self.helper_client.call("observe", params)
-        app_data = result.get("active_app")
-        active_app = None
-        if isinstance(app_data, dict):
-            active_app = ActiveApp(
-                name=app_data.get("name") or "unknown",
-                bundle_id=app_data.get("bundle_id"),
-                pid=app_data.get("process_id"),
-            )
+        active_app = _active_app(result.get("active_app"))
+        target = _active_app(result.get("target")) or active_app
         windows = tuple(
             _window(item)
             for item in (result.get("windows") or [])
@@ -185,6 +224,8 @@ class MacOSComputerRuntime:
         observation = Observation(
             id=observation_id,
             active_app=active_app,
+            target=target,
+            target_is_frontmost=bool(result.get("target_is_frontmost", False)),
             active_window=active_window,
             windows=windows,
             elements=elements,
@@ -194,6 +235,9 @@ class MacOSComputerRuntime:
                 else None
             ),
             truncated=bool(result.get("truncated", False)),
+            element_stats=ElementStats.model_validate(
+                result.get("element_stats") or {}
+            ),
             screenshot_ref=screenshot_ref,
         )
         self._last_observation_id = observation_id
@@ -287,20 +331,31 @@ class MacOSComputerRuntime:
             target = by_ref.get(normalized)
             if target is None:
                 raise ValueError(
-                    "element_ref does not belong to the latest observation"
+                    "element_ref does not belong to the latest observation; "
+                    "recovery: call computer_observe again"
                 )
-            if not target.editable:
-                raise ValueError("element_ref must refer to an editable element")
+            if not target.editable or target.role not in _TEXT_ENTRY_ROLES:
+                raise ValueError(
+                    "element_not_editable: element_ref must refer to a text-entry "
+                    "element (text_area/text_field/combo_box) with editable=true; "
+                    "recovery: choose a text-entry role from computer_observe"
+                )
             return normalized
 
         focused = [
             element for element in observation.elements
-            if element.focused and element.editable
+            if (
+                element.focused
+                and element.editable
+                and element.role in _TEXT_ENTRY_ROLES
+            )
         ]
         if len(focused) == 1:
             return focused[0].ref
         raise ValueError(
-            "editable_target_required: provide element_ref from the latest observation"
+            "editable_target_required: provide element_ref from the latest "
+            "observation; "
+            "recovery: call computer_observe and choose editable=true"
         )
 
     async def key(

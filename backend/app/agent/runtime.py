@@ -58,6 +58,7 @@ from app.tools.permissions.policy import PermissionPolicyEngine
 from app.tools.permissions.store import PermissionRuleStore
 from app.tools.registry import ToolRegistry
 
+from .computer_guard import ComputerStagnationGuard
 from .errors import (
     AgentRuntimeError,
     ContextPreparationError,
@@ -327,6 +328,8 @@ class AgentRuntime:
         plan_task_id: str | None = None
         finalization_pending = False
         computer_verification_pending = False
+        computer_guard = ComputerStagnationGuard()
+        computer_halted = False
 
         await emitter.emit(
             AgentEventType.AGENT_STARTED,
@@ -364,6 +367,7 @@ class AgentRuntime:
                 await self._checkpoint_store.before_model(run_id, step=step)
             force_final_answer = (
                 finalization_step
+                or computer_halted
                 or (
                     self._max_tool_rounds is not None
                     and len(tool_rounds) >= self._max_tool_rounds
@@ -461,16 +465,23 @@ class AgentRuntime:
                         *request_messages[historical_message_count:],
                     )
                 if force_final_answer:
+                    final_instruction = (
+                        "Computer 操作已因同一失败且桌面无进展而停止。不要再输出或"
+                        "伪造任何工具调用；请根据已有证据直接说明阻塞原因、已经完成"
+                        "的部分和用户可采取的恢复步骤。"
+                        if computer_halted
+                        else (
+                            "工具调用轮次已用完。请读取最后一条工具结果，停止"
+                            "调用工具并直接回答用户。对于 verification_status="
+                            "unverified 的电脑操作，只能说明事件已投递、效果未"
+                            "确认，不能宣称界面操作已经完成。"
+                        )
+                    )
                     request_messages = (
                         *request_messages,
                         Message(
                             role=MessageRole.SYSTEM,
-                            content=(
-                                "工具调用轮次已用完。请读取最后一条工具结果，停止"
-                                "调用工具并直接回答用户。对于 verification_status="
-                                "unverified 的电脑操作，只能说明事件已投递、效果未"
-                                "确认，不能宣称界面操作已经完成。"
-                            ),
+                            content=final_instruction,
                         ),
                     )
             except Exception as exc:
@@ -643,17 +654,17 @@ class AgentRuntime:
                 usage=response.usage,
             )
             tool_calls_in_message = assistant_message.tool_calls
-            if finalization_step and tool_calls_in_message:
+            if force_final_answer and tool_calls_in_message:
                 # 最终化请求没有提供工具定义；即使模型伪造工具调用也不执行。
                 break
             if not tool_calls_in_message:
-                if finalization_step and _looks_like_textual_tool_call(
+                if force_final_answer and _looks_like_textual_tool_call(
                     assistant_message.content
                 ):
                     # 部分模型在 tools=() 时仍会把 Provider 工具协议作为普通文本
                     # 输出。它没有被执行，不能因此把 Run 标为 completed。
                     break
-                if computer_verification_pending:
+                if computer_verification_pending and not computer_halted:
                     messages.append(
                         Message(
                             role=MessageRole.SYSTEM,
@@ -746,7 +757,20 @@ class AgentRuntime:
                     metadata={"active_skill_names": tuple(active_skills)},
                     mode=mode,
                 )
-                if (
+                if computer_halted and tool_call.name.startswith("computer_"):
+                    await tool_event_hook.before_execute(execution_context)
+                    result = ToolResult(
+                        tool_call_id=tool_call.id,
+                        tool_name=tool_call.name,
+                        success=False,
+                        error=(
+                            "computer_attempts_halted: repeated failures without "
+                            "desktop progress; explain the blocker instead"
+                        ),
+                        duration_ms=0,
+                    )
+                    await tool_event_hook.after_execute(execution_context, result)
+                elif (
                     mode is AgentMode.PLAN
                     and not self._tool_registry.is_allowed_for_mode(
                         tool_call.name,
@@ -787,6 +811,22 @@ class AgentRuntime:
                         context=execution_context,
                         hook=tool_event_hook,
                     )
+                guard_decision = computer_guard.record(tool_call, result)
+                if guard_decision.feedback:
+                    result = result.model_copy(
+                        update={
+                            "error": "\n".join(
+                                part
+                                for part in (
+                                    result.error,
+                                    guard_decision.feedback,
+                                )
+                                if part
+                            )
+                        }
+                    )
+                if guard_decision.halt:
+                    computer_halted = True
                 if self._checkpoint_store is not None:
                     await self._checkpoint_store.complete_tool(run_id, result)
                 if (
@@ -846,9 +886,12 @@ class AgentRuntime:
             activated_tools.update(pending_activations)
             finalization_pending = (
                 step == self._max_steps
-                and any(
-                    call.name == "computer_observe"
-                    for call in tool_calls_in_message
+                and (
+                    computer_halted
+                    or any(
+                        call.name == "computer_observe"
+                        for call in tool_calls_in_message
+                    )
                 )
             )
 

@@ -313,9 +313,12 @@ class ToolReducer:
                 "id",
                 "created_at",
                 "active_app",
+                "target",
+                "target_is_frontmost",
                 "active_window",
                 "focused_element_ref",
                 "truncated",
+                "element_stats",
                 "screenshot_ref",
             )
             if key in payload
