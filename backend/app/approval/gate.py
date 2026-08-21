@@ -91,6 +91,7 @@ class DesktopApprovalGate(ApprovalGate):
             tool_call_id=request.tool_call_id,
             arguments=request.arguments,
             reason=request.description,
+            ui_scope=request.ui_scope,
         )
         loop = asyncio.get_running_loop()
         future: asyncio.Future[ApprovalResponse] = loop.create_future()

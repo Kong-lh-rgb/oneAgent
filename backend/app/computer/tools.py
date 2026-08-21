@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.models.types import ToolDefinition, ToolPermission
+from app.models.types import ToolDefinition, ToolPermission, ToolUiScope
 
 from ..tools.base import BaseTool
 from ..tools.registry import ToolRegistry
@@ -53,6 +53,7 @@ class ComputerObserveTool(BaseTool):
                 "additionalProperties": False,
             },
             permission=ToolPermission.ALLOWED,
+            ui_scope=ToolUiScope.DESKTOP,
             strict=False,
         )
 
@@ -115,6 +116,7 @@ class ComputerClickTool(BaseTool):
                 "additionalProperties": False,
             },
             permission=ToolPermission.HUMAN_APPROVAL,
+            ui_scope=ToolUiScope.DESKTOP,
             strict=False,
         )
 
@@ -165,6 +167,7 @@ class ComputerTypeTool(BaseTool):
                 "additionalProperties": False,
             },
             permission=ToolPermission.HUMAN_APPROVAL,
+            ui_scope=ToolUiScope.DESKTOP,
             strict=False,
         )
 
@@ -223,6 +226,7 @@ class ComputerKeyTool(BaseTool):
                 "additionalProperties": False,
             },
             permission=ToolPermission.HUMAN_APPROVAL,
+            ui_scope=ToolUiScope.DESKTOP,
             strict=False,
         )
 
@@ -280,6 +284,7 @@ class ComputerScrollTool(BaseTool):
                 "additionalProperties": False,
             },
             permission=ToolPermission.ALLOWED,
+            ui_scope=ToolUiScope.DESKTOP,
             strict=False,
         )
 
@@ -329,6 +334,7 @@ class ComputerOpenAppTool(BaseTool):
                 "additionalProperties": False,
             },
             permission=ToolPermission.ALLOWED,
+            ui_scope=ToolUiScope.DESKTOP,
             strict=False,
         )
 
@@ -373,6 +379,7 @@ class ComputerFocusWindowTool(BaseTool):
                 "additionalProperties": False,
             },
             permission=ToolPermission.ALLOWED,
+            ui_scope=ToolUiScope.DESKTOP,
             strict=False,
         )
 

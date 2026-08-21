@@ -1840,76 +1840,249 @@ textarea,
   }
 }
 
-/* 独立浮动审批小窗（Electron 无边框窗口内使用） */
+/* 独立浮动审批小窗（Electron 无边框窗口内使用）
+   目标：compact / native / calm / trustworthy —— 接近 macOS 权限面板。 */
+body.approval-app {
+  height: auto;
+  overflow: visible;
+  background: #f5f6f8;
+}
+
+body.approval-app #root {
+  height: auto;
+  min-height: 100%;
+  overflow: visible;
+}
+
 .floating-approval {
-  position: relative;
+  box-sizing: border-box;
+  width: 100%;
   display: flex;
   flex-direction: column;
-  width: 100%;
-  height: 100vh;
-  padding: 12px 16px 16px;
-  border: 1px solid rgba(255, 255, 255, 0.78);
-  border-radius: var(--radius-composer);
-  background: var(--bg-surface-raised);
-  box-shadow: 0 22px 60px rgba(40, 55, 80, 0.22),
-    inset 0 1px 0 rgba(255, 255, 255, 0.85);
-  -webkit-backdrop-filter: blur(24px) saturate(145%);
-  backdrop-filter: blur(24px) saturate(145%);
-  animation: floating-in var(--transition-layout) both;
+  padding: 16px 20px 18px;
+  background: #ffffff;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
-@keyframes floating-in {
-  from { transform: translateY(8px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
-}
-
-.floating-approval__drag {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 26px;
+/* 顶部整条可拖动；其它交互元素保持 no-drag。 */
+.floating-approval__bar {
   -webkit-app-region: drag;
   app-region: drag;
-}
-
-.floating-approval__header {
-  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin: 4px 2px 2px;
+  padding: 0 0 2px;
+  user-select: none;
 }
 
-.floating-approval__eyebrow {
+.floating-approval__brand {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  color: var(--text-tertiary);
-  font-size: 10.5px;
+  color: var(--text-secondary);
+  font-size: 12px;
   font-weight: 650;
-  letter-spacing: 0.06em;
+}
+
+.floating-approval__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.floating-approval__waiting {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.floating-approval__body {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+  margin-top: 16px;
+}
+
+.floating-approval__eyebrow {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 
-.floating-approval .approval-card {
-  width: 100%;
-  margin: 10px 0 0;
-  padding: 12px 2px 2px;
-  border: none;
-  border-left: 2px solid var(--warning);
-  border-radius: 0;
-  background: transparent;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
+.floating-approval__title {
+  margin: 6px 0 4px;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
-.floating-approval .approval-card__details pre {
-  max-height: 130px;
+.floating-approval__desc {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.floating-approval__summary {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-surface);
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 620;
+  text-align: center;
+}
+
+.floating-approval__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  background: rgba(79, 115, 217, 0.08);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 620;
+}
+
+.floating-approval__status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.floating-approval__status--working .floating-approval__status-dot {
+  animation: floating-approval-pulse 1.25s ease-in-out infinite;
+}
+
+.floating-approval__status--success {
+  background: rgba(41, 151, 104, 0.09);
+}
+
+.floating-approval__status--success .floating-approval__status-dot {
+  background: #299768;
+}
+
+.floating-approval__status--danger {
+  background: rgba(196, 65, 65, 0.08);
+  color: var(--danger);
+}
+
+.floating-approval__status--danger .floating-approval__status-dot {
+  background: var(--danger);
+}
+
+.floating-approval__status--neutral .floating-approval__status-dot {
+  background: var(--text-tertiary);
+}
+
+@keyframes floating-approval-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.82);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.floating-approval__details {
+  margin-top: 10px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.floating-approval__details summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.floating-approval__tech {
+  margin-top: 8px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+
+.floating-approval__json {
+  max-height: 150px;
+  margin: 8px 0 0;
+  padding: 9px;
+  overflow: auto;
+  border-radius: 7px;
+  background: rgba(248, 250, 253, 0.8);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .floating-approval__error {
   margin-top: 10px;
-  font-size: 11.5px;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.floating-approval__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
+.floating-approval__btn {
+  min-height: 28px;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 620;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast),
+    opacity var(--transition-fast);
+}
+
+.floating-approval__btn:focus-visible {
+  outline: 2px solid rgba(79, 115, 217, 0.66);
+  outline-offset: 2px;
+}
+
+.floating-approval__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.floating-approval__btn--deny:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.floating-approval__btn--allow {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.floating-approval__btn--allow:hover:not(:disabled) {
+  background: var(--accent-hover);
 }

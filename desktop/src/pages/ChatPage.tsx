@@ -11,6 +11,7 @@ import {
 } from '../api/conversations'
 import { getTask, planAccept, planReject } from '../api/tasks'
 import type { AgentMode, Message, Task } from '../api/types'
+import { chatShouldShowApproval } from '../approval/computerApproval'
 import ApprovalCard from '../components/ApprovalCard'
 import ChatEmptyState from '../components/ChatEmptyState'
 import ChatHeader from '../components/ChatHeader'
@@ -89,8 +90,11 @@ export default function ChatPage(): React.JSX.Element {
     refetchInterval: 2000,
     enabled: activeRunId !== null,
   })
+  // Chat 只负责 sandbox 审批；desktop 审批始终归独立浮窗。
   const pendingApproval =
-    approvalsQuery.data?.find((approval) => approval.run_id === activeRunId) ?? null
+    approvalsQuery.data?.find(
+      (approval) => chatShouldShowApproval(approval, activeRunId),
+    ) ?? null
 
   const artifactsQuery = useQuery({
     queryKey: ['chat-artifacts', activeRunId],

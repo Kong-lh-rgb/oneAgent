@@ -25,6 +25,9 @@ const desktopApi = {
   setApprovalVisible: (visible: boolean): void => {
     ipcRenderer.send('vesta:approval-set-visible', visible)
   },
+  setApprovalSize: (height: number): void => {
+    ipcRenderer.send('vesta:approval-set-size', height)
+  },
 } as const
 
 contextBridge.exposeInMainWorld('vesta', desktopApi)

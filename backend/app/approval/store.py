@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS approvals (
     tool_call_id TEXT NOT NULL,
     arguments_json TEXT NOT NULL DEFAULT '{}',
     reason TEXT NOT NULL DEFAULT '',
+    ui_scope TEXT NOT NULL DEFAULT 'sandbox',
     status TEXT NOT NULL,
     created_at TEXT NOT NULL,
     resolved_at TEXT
@@ -54,6 +55,15 @@ class SQLiteApprovalStore:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         async with self._connect() as database:
             await database.executescript(_SCHEMA)
+            # 迁移：旧库补充 ui_scope 列（默认 sandbox，兼容历史审批）。
+            columns = await database.execute_fetchall(
+                "PRAGMA table_info(approvals)"
+            )
+            if not any(row[1] == "ui_scope" for row in columns):
+                await database.execute(
+                    "ALTER TABLE approvals "
+                    "ADD COLUMN ui_scope TEXT NOT NULL DEFAULT 'sandbox'"
+                )
             await database.commit()
 
     async def create(
@@ -65,6 +75,7 @@ class SQLiteApprovalStore:
         tool_call_id: str,
         arguments: dict[str, Any] | None = None,
         reason: str = "",
+        ui_scope: str = "sandbox",
     ) -> ApprovalRequest:
         """创建一个 PENDING ApprovalRequest 并返回完整记录。"""
 
@@ -77,8 +88,8 @@ class SQLiteApprovalStore:
                 """
                 INSERT INTO approvals (
                     id, run_id, conversation_id, tool_name, tool_call_id,
-                    arguments_json, reason, status, created_at, resolved_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    arguments_json, reason, ui_scope, status, created_at, resolved_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     approval_id,
@@ -92,6 +103,7 @@ class SQLiteApprovalStore:
                         separators=(",", ":"),
                     ),
                     reason or "",
+                    ui_scope or "sandbox",
                     ApprovalRequestStatus.PENDING.value,
                     now,
                     None,
@@ -302,6 +314,7 @@ def _approval_from_row(row: aiosqlite.Row) -> ApprovalRequest:
         tool_call_id=row["tool_call_id"],
         arguments=json.loads(row["arguments_json"] or "{}"),
         reason=row["reason"] or "",
+        ui_scope=row["ui_scope"] or "sandbox",
         status=ApprovalRequestStatus(row["status"]),
         created_at=datetime.fromisoformat(row["created_at"]),
         resolved_at=(

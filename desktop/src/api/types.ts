@@ -192,6 +192,8 @@ export interface ApprovalRequest {
   tool_call_id: string
   arguments: Record<string, unknown>
   reason: string
+  /** 声明式审批落点：desktop（跟随用户注意力，可进浮窗）/ sandbox（进 Chat）。 */
+  ui_scope?: 'desktop' | 'sandbox'
   status: ApprovalStatus
   created_at: string
   resolved_at: string | null

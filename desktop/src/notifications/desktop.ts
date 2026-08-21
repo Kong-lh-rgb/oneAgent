@@ -50,9 +50,12 @@ export class DesktopNotificationController {
   }
 
   private onApproval(params: unknown): void {
-    const data = params as { approval?: { id?: string } }
+    const data = params as { approval?: { id?: string; tool_name?: string } }
     const id = data.approval?.id
     if (!id || !this.isHidden()) return
+    // Computer approval 由独立 Floating Window 负责提醒，不再发 macOS
+    // 原生 Notification，避免同一审批出现双提醒。
+    if (data.approval?.tool_name?.startsWith('computer_')) return
     this.deliver(`approval:${id}`, {
       title: 'Vesta needs your approval',
       body: 'A tool is waiting for your decision.',
