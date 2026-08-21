@@ -23,32 +23,87 @@ interface EventsState {
 
 const MAX_EVENTS_PER_RUN = 500
 
+// ---------------------------------------------------------------------------
+// 流式增量批量提交：model_output_delta / model_reasoning_delta 是高频事件
+// （每个 token 一个），不直接触发 Zustand set（避免整个 Renderer 每 token
+// 全量重渲染）。先把增量攒进 pending buffer，~33ms flush 一次，批量合并。
+// 收到结构化事件 / 断开时立即 flush，保证 complete 时文本不丢失。
+// ---------------------------------------------------------------------------
+
+const STREAM_FLUSH_MS = 33
+
+interface PendingStreamDelta {
+  runId: string
+  step: number
+  delta: string
+}
+
+let pendingText: PendingStreamDelta[] = []
+let pendingReasoning: PendingStreamDelta[] = []
+let flushTimer: ReturnType<typeof setTimeout> | null = null
+
+type StoreApi = EventsState
+
+function flushPending(api: {
+  getState: () => StoreApi
+  setState: (partial: Partial<EventsState>) => void
+}): void {
+  if (flushTimer !== null) {
+    clearTimeout(flushTimer)
+    flushTimer = null
+  }
+  if (pendingText.length === 0 && pendingReasoning.length === 0) return
+
+  const state = api.getState()
+  const streamTextByRun: EventsState['streamTextByRun'] = { ...state.streamTextByRun }
+  const reasoningByRun: EventsState['reasoningByRun'] = { ...state.reasoningByRun }
+
+  for (const item of pendingText) {
+    const runText = { ...(streamTextByRun[item.runId] ?? {}) }
+    runText[item.step] = `${runText[item.step] ?? ''}${item.delta}`
+    streamTextByRun[item.runId] = runText
+  }
+  for (const item of pendingReasoning) {
+    const runReasoning = { ...(reasoningByRun[item.runId] ?? {}) }
+    runReasoning[item.step] = `${runReasoning[item.step] ?? ''}${item.delta}`
+    reasoningByRun[item.runId] = runReasoning
+  }
+
+  pendingText = []
+  pendingReasoning = []
+  api.setState({ streamTextByRun, reasoningByRun })
+}
+
+function scheduleFlush(api: {
+  getState: () => StoreApi
+  setState: (partial: Partial<EventsState>) => void
+}): void {
+  if (flushTimer !== null) return
+  flushTimer = setTimeout(() => flushPending(api), STREAM_FLUSH_MS)
+}
+
 export const useEventsStore = create<EventsState>((set, get) => {
   let unsubscribeStatus: (() => void) | null = null
   const unsubscribeHandlers: Array<() => void> = []
 
+  // 供 flushPending 使用的轻量 api 适配。
+  const flushApi = {
+    getState: () => get(),
+    setState: (partial: Partial<EventsState>) => set(partial),
+  }
+
+  const flushNow = (): void => flushPending(flushApi)
+
   const handleAgentEvent = (params: unknown): void => {
     const agentEvent = params as AgentEvent
     const runId = agentEvent.run_id
-    const existing = get().eventsByRun[runId] ?? []
-    if (existing.some((item) => item.event_id === agentEvent.event_id)) {
-      return
-    }
     if (
       agentEvent.type === 'model_output_delta' &&
       agentEvent.step !== null &&
       agentEvent.delta
     ) {
-      const runText = get().streamTextByRun[runId] ?? {}
-      set({
-        streamTextByRun: {
-          ...get().streamTextByRun,
-          [runId]: {
-            ...runText,
-            [agentEvent.step]: `${runText[agentEvent.step] ?? ''}${agentEvent.delta}`,
-          },
-        },
-      })
+      pendingText.push({ runId, step: agentEvent.step, delta: agentEvent.delta })
+      scheduleFlush(flushApi)
       return
     }
     if (
@@ -56,17 +111,20 @@ export const useEventsStore = create<EventsState>((set, get) => {
       agentEvent.step !== null &&
       agentEvent.reasoning_delta
     ) {
-      const runReasoning = get().reasoningByRun[runId] ?? {}
-      set({
-        reasoningByRun: {
-          ...get().reasoningByRun,
-          [runId]: {
-            ...runReasoning,
-            [agentEvent.step]:
-              `${runReasoning[agentEvent.step] ?? ''}${agentEvent.reasoning_delta}`,
-          },
-        },
+      pendingReasoning.push({
+        runId,
+        step: agentEvent.step,
+        delta: agentEvent.reasoning_delta,
       })
+      scheduleFlush(flushApi)
+      return
+    }
+
+    // 结构化事件：先把流式缓冲落盘，避免漏字。
+    flushNow()
+
+    const existing = get().eventsByRun[runId] ?? []
+    if (existing.some((item) => item.event_id === agentEvent.event_id)) {
       return
     }
     const next = [...existing, agentEvent].slice(-MAX_EVENTS_PER_RUN)
@@ -94,6 +152,7 @@ export const useEventsStore = create<EventsState>((set, get) => {
       rpcClient.connect()
     },
     disconnect: () => {
+      flushNow()
       unsubscribeStatus?.()
       unsubscribeStatus = null
       while (unsubscribeHandlers.length > 0) {

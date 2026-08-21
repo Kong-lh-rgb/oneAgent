@@ -2402,6 +2402,128 @@ body.approval-app #root {
   border-color: var(--accent);
 }
 
+/* ============ Agent Turn 连续执行流（Thinking → Tool → Approval → Verify → Final → Usage） ============ */
+
+.turn-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  max-height: 360px;
+  overflow: hidden;
+  transition:
+    max-height 300ms ease,
+    opacity 300ms ease,
+    margin 300ms ease;
+}
+
+.live-turn--settling .turn-timeline {
+  max-height: 0;
+  opacity: 0;
+  margin: 0;
+}
+
+.turn-tool {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.turn-tool__marker {
+  width: 17px;
+  height: 17px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 17px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.turn-tool__marker--done {
+  color: var(--success);
+}
+
+.turn-tool__marker--failed {
+  color: var(--danger);
+}
+
+.turn-tool__marker--active,
+.turn-tool__marker--waiting {
+  color: var(--accent);
+}
+
+.turn-tool--active .turn-tool__marker--active,
+.turn-tool--waiting .turn-tool__marker--waiting {
+  animation: turn-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes turn-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.turn-tool--done .turn-tool__label {
+  color: var(--text-tertiary);
+}
+
+.turn-tool--failed .turn-tool__label {
+  color: var(--danger);
+}
+
+.turn-tool__hint {
+  color: var(--warning);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.turn-tool__hint--warn {
+  color: var(--warning);
+}
+
+.turn-tool__details {
+  margin-left: 25px;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+}
+
+.turn-tool__details summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.turn-tool__details pre {
+  max-height: 140px;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: 7px;
+  background: #101216;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.turn-usage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+}
+
 /* 侧栏导航徽标 */
 .nav-badge {
   position: absolute;

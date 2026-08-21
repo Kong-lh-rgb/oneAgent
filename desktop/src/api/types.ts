@@ -156,6 +156,8 @@ export interface AgentEvent {
   usage: ModelUsage | null
   stop_reason: string | null
   approval_decision: string | null
+  /** agent_completed / agent_failed 携带的最终结果（含 usage / steps）。 */
+  result?: AgentResult | null
   [key: string]: unknown
 }
 

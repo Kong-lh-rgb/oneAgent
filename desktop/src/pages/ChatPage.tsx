@@ -30,8 +30,6 @@ export default function ChatPage(): React.JSX.Element {
   const queryClient = useQueryClient()
   const eventsByRun = useEventsStore((state) => state.eventsByRun)
   const runStatuses = useEventsStore((state) => state.runStatuses)
-  const streamTextByRun = useEventsStore((state) => state.streamTextByRun)
-  const reasoningByRun = useEventsStore((state) => state.reasoningByRun)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [lastRunId, setLastRunId] = useState<string | null>(null)
   const [mode, setMode] = useState<AgentMode>('normal')
@@ -198,66 +196,11 @@ export default function ChatPage(): React.JSX.Element {
   const latestModelStep = [...activeEvents]
     .reverse()
     .find((event) => event.type === 'model_started')?.step
-  const streamedText =
-    progressRunId && latestModelStep !== null && latestModelStep !== undefined
-      ? (streamTextByRun[progressRunId]?.[latestModelStep] ?? '')
-      : ''
-  // 流式实时思考（model_reasoning_delta 累积）优先；回退到 model_completed 携带的 reasoning。
-  const streamedReasoning =
-    progressRunId && latestModelStep !== null && latestModelStep !== undefined
-      ? (reasoningByRun[progressRunId]?.[latestModelStep] ?? '')
-      : ''
-  const completedReasoning =
-    [...activeEvents]
-      .reverse()
-      .find((event) => event.type === 'model_completed')?.message?.reasoning ?? ''
-  const latestModelReasoning = streamedReasoning || completedReasoning
+  // 流式正文/思考由 LiveAgentTurn 内部按 run+step 细粒度订阅，ChatPage 不参与高频渲染。
 
-  // 流式揭示：100ms 节流快照 —— 每次直接把最新文本交给渲染（不逐字），
-  // 渲染频率 ~10Hz；文本始终最新且不落后。追平后自然暂停不 setState。
-  const STREAM_TICK_MS = 100
-  const [revealedText, setRevealedText] = useState('')
-  const revealedCountRef = useRef(0)
-  const targetRef = useRef('')
-  const textIdentityRef = useRef('')
-
-  // 新 Run / 新 step 开始时重置揭示进度；非流式状态直接显示全部。
-  useEffect(() => {
-    const identity = `${progressRunId}:${latestModelStep ?? ''}`
-    if (textIdentityRef.current !== identity) {
-      textIdentityRef.current = identity
-      revealedCountRef.current = 0
-      // 立即清空，避免上一轮回复的残留文本冒充新回复。
-      setRevealedText('')
-    }
-    targetRef.current = streamedText
-    if (!(liveTurnActive && !liveTurnSettling && sendMutation.isPending)) {
-      revealedCountRef.current = streamedText.length
-      setRevealedText(streamedText)
-    }
-  }, [
-    liveTurnActive,
-    liveTurnSettling,
-    sendMutation.isPending,
-    streamedText,
-    progressRunId,
-    latestModelStep,
-  ])
-
-  // 流式期间开启节流快照循环，输出完毕/收起时由上面的 effect 一次性补全。
-  useEffect(() => {
-    const streaming =
-      liveTurnActive && !liveTurnSettling && sendMutation.isPending
-    if (!streaming) return undefined
-    const interval = window.setInterval(() => {
-      const target = targetRef.current
-      if (revealedCountRef.current !== target.length) {
-        revealedCountRef.current = target.length
-        setRevealedText(target)
-      }
-    }, STREAM_TICK_MS)
-    return () => window.clearInterval(interval)
-  }, [liveTurnActive, liveTurnSettling, sendMutation.isPending])
+  // 流式揭示：已删除二次打字机（revealedText / setInterval / STREAM_TICK_MS / CHARS_PER_TICK）。
+  // Provider delta 由 events store 短时 batching（~33ms flush）批量提交，
+  // LiveAgentTurn 内部按 run+step 细粒度订阅，直接渲染最新文本；complete 时 store 立即 flush。
 
   const chooseExamplePrompt = (prompt: string): void => {
     setDraft(prompt)
@@ -266,14 +209,33 @@ export default function ChatPage(): React.JSX.Element {
     }
   }
 
-  // Agent 回复（流式文本 / 事件 / 新消息 / 结果出现）时自动滚动到底部。
+  // stick-to-bottom：用户靠近底部时自动跟随，向上滚动后停止强制拉底；
+  // 滚动更新用 rAF 合并，避免每个字符增量都强制同步布局。
+  const conversationScrollRef = useRef<HTMLDivElement>(null)
+  const stickToBottomRef = useRef(true)
+  const scrollFrameRef = useRef<number | null>(null)
+
+  const handleConversationScroll = (): void => {
+    const el = conversationScrollRef.current
+    if (!el) return
+    stickToBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 120
+  }
+
+  const scheduleScroll = (): void => {
+    if (scrollFrameRef.current !== null) return
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      scrollFrameRef.current = null
+      const el = conversationScrollRef.current
+      if (el && stickToBottomRef.current) el.scrollTop = el.scrollHeight
+    })
+  }
+
   // 用聚合 key 而非原始引用，避免轮询 refetch（2s approvals / 3s artifacts）
   // 每次返回新引用导致空闲时反复拽回底部。
-  const conversationScrollRef = useRef<HTMLDivElement>(null)
   const autoScrollKey = [
     messages.length,
     messages.at(-1)?.content?.length ?? 0,
-    revealedText.length,
     activeEvents.length,
     sendMutation.isPending,
     artifacts.length,
@@ -284,8 +246,13 @@ export default function ChatPage(): React.JSX.Element {
     liveTurnActive,
   ].join('|')
   useEffect(() => {
-    const el = conversationScrollRef.current
-    if (el) el.scrollTop = el.scrollHeight
+    scheduleScroll()
+    return () => {
+      if (scrollFrameRef.current !== null) {
+        cancelAnimationFrame(scrollFrameRef.current)
+        scrollFrameRef.current = null
+      }
+    }
   }, [autoScrollKey])
 
   // 输出完毕（isPending 变 false 且会话数据已刷新）后：先让活动块平滑收起，
@@ -339,7 +306,11 @@ export default function ChatPage(): React.JSX.Element {
           onToggleActivity={() => setActivityOpen((open) => !open)}
         />
 
-        <div ref={conversationScrollRef} className={`conversation-scroll ${showNewConversationHome ? 'conversation-scroll--empty' : ''}`}>
+        <div
+          ref={conversationScrollRef}
+          onScroll={handleConversationScroll}
+          className={`conversation-scroll ${showNewConversationHome ? 'conversation-scroll--empty' : ''}`}
+        >
           <div className="message-thread">
             {selectedId === null ? (
               <section className="no-conversation">
@@ -363,9 +334,9 @@ export default function ChatPage(): React.JSX.Element {
 
             {liveTurnActive ? (
               <LiveAgentTurn
+                runId={progressRunId}
+                step={latestModelStep ?? null}
                 events={activeEvents}
-                streamText={revealedText}
-                reasoning={latestModelReasoning}
                 settling={liveTurnSettling}
               />
             ) : null}

@@ -61,4 +61,17 @@ describe('AssistantContent', () => {
     expect(html).toContain('target="_blank"')
     expect(html).toContain('rel="noreferrer"')
   })
+
+  it('streaming=true 时 markdown 正常渲染，代码块保持纯文本（不做 Shiki）', () => {
+    const html = renderToStaticMarkup(
+      <AssistantContent
+        streaming
+        content={'**加粗**\n\n```ts\nconst a = 1\n```'}
+      />,
+    )
+    expect(html).toContain('<strong>加粗</strong>')
+    expect(html).toContain('<pre class="assistant-code">')
+    expect(html).toContain('const a = 1')
+    expect(html).not.toContain('shiki')
+  })
 })
