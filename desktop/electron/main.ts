@@ -3,6 +3,7 @@ import {
   BrowserWindow,
   ipcMain,
   Notification,
+  screen,
   shell,
 } from 'electron'
 import path from 'node:path'
@@ -13,6 +14,7 @@ const MAX_NOTIFICATION_TITLE = 100
 const MAX_NOTIFICATION_BODY = 240
 
 let mainWindow: BrowserWindow | null = null
+let approvalWindow: BrowserWindow | null = null
 let isQuitting = false
 
 interface NotificationPayload {
@@ -28,6 +30,72 @@ function showMainWindow(): void {
   }
   mainWindow.show()
   mainWindow.focus()
+}
+
+/** 独立浮动审批小窗：无边框、置顶、不抢焦点（showInactive），空闲时隐藏。 */
+function createApprovalWindow(): void {
+  if (approvalWindow !== null && !approvalWindow.isDestroyed()) return
+  const win = new BrowserWindow({
+    width: 400,
+    height: 480,
+    show: false,
+    frame: false,
+    resizable: false,
+    movable: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    fullscreenable: false,
+    minimizable: false,
+    maximizable: false,
+    title: 'Vesta Approval',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      // 安全边界：Renderer 不获得任意 Node 权限。
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      // 窗口隐藏期间保持 RPC / WebSocket 活跃，能实时收到审批事件。
+      backgroundThrottling: false,
+    },
+  })
+  approvalWindow = win
+
+  if (!app.isPackaged) {
+    void win.loadURL(`${DEV_SERVER_URL}/approval.html`)
+  } else {
+    // 从 dist-electron/electron 回到桌面根目录再进入 Vite 产物。
+    void win.loadFile(path.join(__dirname, '..', '..', 'dist', 'approval.html'))
+  }
+
+  win.on('closed', () => {
+    if (approvalWindow === win) approvalWindow = null
+  })
+}
+
+/** 把浮窗放到主显示器右上角（避开系统通知区）。 */
+function positionApprovalWindow(): void {
+  if (approvalWindow === null || approvalWindow.isDestroyed()) return
+  const workArea = screen.getPrimaryDisplay().workArea
+  const [width, height] = approvalWindow.getSize()
+  approvalWindow.setPosition(
+    workArea.x + workArea.width - width - 20,
+    workArea.y + 28,
+  )
+}
+
+/** 显示/隐藏浮动审批小窗（由浮窗 Renderer 触发）。 */
+function setApprovalVisible(visible: boolean): void {
+  if (!visible) {
+    if (approvalWindow !== null && !approvalWindow.isDestroyed()) {
+      approvalWindow.hide()
+    }
+    return
+  }
+  createApprovalWindow()
+  if (approvalWindow === null || approvalWindow.isDestroyed()) return
+  positionApprovalWindow()
+  // showInactive：浮在屏幕上但尽量不抢当前 App 的键盘焦点。
+  approvalWindow.showInactive()
 }
 
 function createWindow(): void {
@@ -107,8 +175,15 @@ ipcMain.on('vesta:notify', (_event, payload: unknown) => {
   notification.show()
 })
 
+ipcMain.on('vesta:approval-set-visible', (_event, visible: unknown) => {
+  if (visible !== true && visible !== false) return
+  setApprovalVisible(visible)
+})
+
 void app.whenReady().then(() => {
   createWindow()
+  // 浮窗常驻（隐藏），保持 WS 订阅，审批到来时立即弹出。
+  createApprovalWindow()
   app.on('activate', () => {
     showMainWindow()
   })

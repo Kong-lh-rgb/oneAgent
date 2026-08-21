@@ -13,6 +13,8 @@ interface VestaDesktopApi {
     body: string
     kind: 'approval' | 'run' | 'artifact'
   }) => void
+  /** 独立浮动审批小窗的显隐（只有 Electron Main 能 show/hide 窗口）。 */
+  setApprovalVisible: (visible: boolean) => void
 }
 
 interface Window {

@@ -22,6 +22,9 @@ const desktopApi = {
   notify: (notification: DesktopNotification): void => {
     ipcRenderer.send('vesta:notify', notification)
   },
+  setApprovalVisible: (visible: boolean): void => {
+    ipcRenderer.send('vesta:approval-set-visible', visible)
+  },
 } as const
 
 contextBridge.exposeInMainWorld('vesta', desktopApi)
