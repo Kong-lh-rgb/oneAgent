@@ -229,6 +229,24 @@ do {
             == "invalid_params"
     )
 
+    // 8b. 显式 begin_session：唯一创建 Native Session 的入口。
+    let begin1 = try request([
+        "id": 24, "method": "begin_session",
+        "params": ["session_id": "sess-check"],
+    ])
+    check(
+        "begin_session 建立 session",
+        (begin1["result"] as? [String: Any])?["accepted"] as? Bool == true
+    )
+    let beginRepeat = try request([
+        "id": 25, "method": "begin_session",
+        "params": ["session_id": "sess-check"],
+    ])
+    check(
+        "begin_session 同 session 幂等",
+        (beginRepeat["result"] as? [String: Any])?["accepted"] as? Bool == true
+    )
+
     // 9. 不存在的 app → app_not_found（不会真正启动任何东西）
     let missingApp = try request([
         "id": 22,
@@ -317,7 +335,7 @@ do {
         )
     }
 
-    // 15b. Session 生命周期：end_session 幂等 + 跨 session fail closed。
+    // 15b. Session 生命周期：显式 begin / end 幂等 + 跨 session fail closed。
     let end1 = try request([
         "id": 90, "method": "end_session",
         "params": ["session_id": "sess-check"],
@@ -334,13 +352,37 @@ do {
         "end_session 重复调用返回 false",
         (end2["result"] as? [String: Any])?["ended"] as? Bool == false
     )
-    // 新 session 建立后，旧 session 的请求必须 fail closed。
-    _ = try request([
+    // 未 begin 的 session：普通请求必须 fail closed（session_not_active）。
+    let noActive = try request([
         "id": 92, "method": "observe",
         "params": ["observation_id": "obs-s2", "session_id": "sess-2"],
     ])
+    check(
+        "未 begin 的 session 请求 → session_not_active",
+        (noActive["error"] as? [String: Any])?["code"] as? String
+            == "session_not_active"
+    )
+    // 显式 begin 新 session。
+    let begin2 = try request([
+        "id": 93, "method": "begin_session",
+        "params": ["session_id": "sess-2"],
+    ])
+    check(
+        "begin_session 建立新 session",
+        (begin2["result"] as? [String: Any])?["accepted"] as? Bool == true
+    )
+    // active session 已存在时，begin 其它 session 必须拒绝（不接管）。
+    let begin3 = try request([
+        "id": 94, "method": "begin_session",
+        "params": ["session_id": "sess-3"],
+    ])
+    check(
+        "已有 active session 时 begin 其它 → 拒绝",
+        (begin3["result"] as? [String: Any])?["accepted"] as? Bool == false
+    )
+    // 旧 session 的请求必须 fail closed（session_mismatch）。
     let oldSession = try request([
-        "id": 93, "method": "end_session",
+        "id": 95, "method": "end_session",
         "params": ["session_id": "sess-check"],
     ])
     check(

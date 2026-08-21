@@ -102,16 +102,24 @@ def _runtime(stub: StubHelperClient) -> MacOSComputerRuntime:
     runtime = MacOSComputerRuntime(stub)  # type: ignore[arg-type]
     # V2：所有请求都需要 Run-scoped active session；测试用固定 run 建立。
     runtime.begin_session("test-run")
-    # 旧能力测试直接验证请求映射；V8 专门用独立用例验证缺少 fresh observe。
-    runtime._last_observation_id = "obs-current"
-    runtime._last_observation = Observation(
+    # Snapshot 单一真源在 ComputerSession.current_snapshot。
+    _attach(runtime, Observation(
         id="obs-current",
         elements=(
             Element(ref="e1", role="text_area", focused=True, editable=True),
             Element(ref="e2", role="text_field", editable=True),
         ),
-    )
+    ))
     return runtime
+
+
+def _snapshot(runtime: MacOSComputerRuntime) -> Observation | None:
+    session = runtime._session_manager.get_active()
+    return session.current_snapshot if session else None
+
+
+def _attach(runtime: MacOSComputerRuntime, observation: Observation) -> None:
+    runtime._session_manager.require_active().attach_snapshot(observation)
 
 
 # ---------------------------------------------------------------------------
@@ -709,10 +717,10 @@ async def test_type_element_ref_validation() -> None:
 
 async def test_type_rejects_non_editable_or_unknown_target() -> None:
     runtime = _runtime(StubHelperClient(result=_type_result()))
-    runtime._last_observation = Observation(
+    _attach(runtime, Observation(
         id="obs-current",
         elements=(Element(ref="button", role="button"),),
-    )
+    ))
 
     with pytest.raises(ValueError, match="editable_target_required"):
         await runtime.type("hi")
@@ -724,13 +732,13 @@ async def test_type_rejects_non_editable_or_unknown_target() -> None:
 
 async def test_type_rejects_non_text_value_settable_control() -> None:
     runtime = _runtime(StubHelperClient(result=_type_result()))
-    runtime._last_observation = Observation(
+    _attach(runtime, Observation(
         id="obs-current",
         elements=(
             Element(ref="split", role="splitter", editable=True),
             Element(ref="editor", role="text_area", editable=True),
         ),
-    )
+    ))
 
     with pytest.raises(ValueError, match="text-entry"):
         await runtime.type("hi", element_ref="split")
@@ -977,7 +985,7 @@ async def test_scroll_and_focus_window_are_implemented() -> None:
 
 async def test_focus_window_requires_latest_observation() -> None:
     runtime = _runtime(StubHelperClient())
-    runtime._last_observation_id = None
+    runtime._session_manager.require_active().invalidate_snapshot()
     with pytest.raises(ValueError, match="fresh observation required"):
         await runtime.focus_window("w1")
 
@@ -985,7 +993,7 @@ async def test_focus_window_requires_latest_observation() -> None:
 @pytest.mark.parametrize("action", ["type", "key", "scroll"])
 async def test_input_actions_require_fresh_observation(action: str) -> None:
     runtime = _runtime(StubHelperClient(result={}))
-    runtime._last_observation_id = None
+    runtime._session_manager.require_active().invalidate_snapshot()
     with pytest.raises(ValueError, match="fresh observation required"):
         if action == "type":
             await runtime.type("hello")
@@ -1063,11 +1071,11 @@ async def test_successful_mutations_invalidate_latest_observation(tmp_path) -> N
     runtime = MacOSComputerRuntime(stub, screenshot_dir=tmp_path)  # type: ignore[arg-type]
     runtime.begin_session("test-run")
     await runtime.observe(False)
-    assert runtime._last_observation_id is not None
+    assert _snapshot(runtime) is not None
     await runtime.type("")
-    assert runtime._last_observation_id is not None
+    assert _snapshot(runtime) is not None
     await runtime.type("x")
-    assert runtime._last_observation_id is None
+    assert _snapshot(runtime) is None
 
     for mutation in (
         runtime.key("enter"),
@@ -1076,7 +1084,7 @@ async def test_successful_mutations_invalidate_latest_observation(tmp_path) -> N
     ):
         await runtime.observe(False)
         await mutation
-        assert runtime._last_observation_id is None
+        assert _snapshot(runtime) is None
 
 
 @pytest.mark.parametrize(
@@ -1085,21 +1093,23 @@ async def test_successful_mutations_invalidate_latest_observation(tmp_path) -> N
 )
 async def test_coordinate_click_errors_propagate_and_keep_cache(code) -> None:
     runtime = _runtime(StubHelperClient(error=ComputerHelperError(code)))
-    runtime._last_observation_id = "obs-1"
+    _attach(runtime, Observation(id="obs-1"))
     with pytest.raises(ComputerHelperError, match=code):
         await runtime.click(CoordinateTarget(observation_id="obs-1", x=1, y=2))
     expected = None if code == "stale_observation" else "obs-1"
-    assert runtime._last_observation_id == expected
+    current = _snapshot(runtime)
+    assert (current.id if current else None) == expected
 
 
 async def test_scroll_error_propagates_and_keeps_cache() -> None:
     runtime = _runtime(
         StubHelperClient(error=ComputerHelperError("input_event_failed"))
     )
-    runtime._last_observation_id = "obs-1"
+    _attach(runtime, Observation(id="obs-1"))
     with pytest.raises(ComputerHelperError, match="input_event_failed"):
         await runtime.scroll(delta_y=-10)
-    assert runtime._last_observation_id == "obs-1"
+    current = _snapshot(runtime)
+    assert (current.id if current else None) == "obs-1"
 
 
 async def test_uncertain_mutation_failure_invalidates_without_retry() -> None:
@@ -1108,4 +1118,4 @@ async def test_uncertain_mutation_failure_invalidates_without_retry() -> None:
     with pytest.raises(ComputerHelperProcessError):
         await runtime.type("hello")
     assert len(stub.calls) == 1
-    assert runtime._last_observation_id is None
+    assert _snapshot(runtime) is None

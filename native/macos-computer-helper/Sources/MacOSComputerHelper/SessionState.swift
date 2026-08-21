@@ -28,13 +28,19 @@ var currentFocusedElementRef: String? = nil
 
 // MARK: - Session lifecycle
 
-/// 首次收到某个 session_id 时建立它，并清空上一个 Run 的 Target / Snapshot。
-/// 同 session 的后续请求幂等。
-func beginSessionIfNeeded(_ sessionID: String) {
-    if activeSessionID == sessionID { return }
+/// 显式 begin_session —— 唯一可以创建 Native Session 的入口。
+///
+/// - active == sessionID：幂等成功；
+/// - active 为其它 session：拒绝（绝不隐式接管 / replace 当前 session）；
+/// - active == nil：清空上一个 Run 的 Target / Snapshot 后建立新 session。
+func beginSession(_ sessionID: String) -> Bool {
+    if let active = activeSessionID {
+        return active == sessionID
+    }
     clearComputerTarget()
     clearObservationCache()
     activeSessionID = sessionID
+    return true
 }
 
 /// 结束 session：清除 Native Target / Snapshot。session 不匹配返回 false。
@@ -46,9 +52,17 @@ func endSession(_ sessionID: String) -> Bool {
     return true
 }
 
-/// 请求携带的 session_id 必须是当前 active session，否则 fail closed。
-func validateSession(_ sessionID: String) -> Bool {
-    activeSessionID == sessionID
+/// 普通请求的 session 校验（fail closed）。
+enum SessionCheck {
+    case ok
+    case notActive
+    case mismatch
+}
+
+/// 普通请求只能校验 session，绝不因陌生 session_id 自动 begin / replace。
+func checkSession(_ sessionID: String) -> SessionCheck {
+    guard let active = activeSessionID else { return .notActive }
+    return active == sessionID ? .ok : .mismatch
 }
 
 // MARK: - Target
@@ -124,7 +138,7 @@ func targetSnapshotIsFresh(
     expectedObservationID: String,
     sessionID: String
 ) -> Bool {
-    guard validateSession(sessionID),
+    guard checkSession(sessionID) == .ok,
           expectedObservationID == currentObservationID,
           let expectedPID = currentTargetPID,
           computerTargetPID == expectedPID,

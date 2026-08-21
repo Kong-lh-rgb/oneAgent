@@ -403,11 +403,20 @@ class Application:
             )
             if callable(set_session_manager):
                 set_session_manager(computer_session)
+            begin_session = getattr(
+                self._computer_runtime, "begin_session_rpc", None
+            )
             computer_lease = ComputerLeaseManager(
                 database.parent / "computer" / "machine.lock"
             )
             computer_hooks = (
-                ComputerLeaseHook(computer_lease, computer_session),
+                ComputerLeaseHook(
+                    computer_lease,
+                    computer_session,
+                    session_starter=(
+                        begin_session if callable(begin_session) else None
+                    ),
+                ),
             )
             register_computer_tools(tool_registry, self._computer_runtime)
             self.computer_runtime = self._computer_runtime

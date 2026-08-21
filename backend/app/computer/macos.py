@@ -139,8 +139,6 @@ class MacOSComputerRuntime:
             .resolve()
         )
         self._session_manager = session_manager or ComputerSessionManager()
-        self._last_observation_id: str | None = None
-        self._last_observation: Observation | None = None
 
     # ------------------------------------------------------------------
     # Session 生命周期
@@ -153,6 +151,25 @@ class MacOSComputerRuntime:
 
     def begin_session(self, run_id: str) -> ComputerSession:
         return self._session_manager.begin(run_id)
+
+    async def begin_session_rpc(self, run_id: str) -> ComputerSession:
+        """为 Run 建立 session，并通知 helper 显式 ``begin_session``（唯一入口）。
+
+        helper 端绝不隐式接管：若已存在其它 session，begin_session 拒绝，
+        这里 fail closed（回滚 Python session 并抛错）。
+        """
+
+        session = self._session_manager.begin(run_id)
+        try:
+            await self.helper_client.ensure_started()
+            await self.helper_client.call(
+                "begin_session",
+                {"session_id": session.session_id},
+            )
+        except Exception:  # noqa: BLE001 - 会话建立失败必须 fail closed
+            self._session_manager.end(run_id)
+            raise
+        return session
 
     async def end_session(self, run_id: str) -> bool:
         """结束 Run 的 Session：清 Python 状态，并通知 helper 清 Native 状态。
@@ -182,13 +199,20 @@ class MacOSComputerRuntime:
         return {"session_id": session.session_id}
 
     def _invalidate(self) -> None:
-        self._last_observation_id = None
-        self._last_observation = None
+        """使当前 Session 的 Snapshot 失效（单一真源在 ComputerSession）。"""
 
-    def _require_fresh(self) -> str:
-        if self._last_observation_id is None:
+        session = self._session_manager.get_active()
+        if session is not None:
+            session.invalidate_snapshot()
+
+    def _require_fresh(self) -> tuple[str, Observation]:
+        """从 active ComputerSession.current_snapshot 取唯一 snapshot truth。"""
+
+        session = self._require_session()
+        observation = session.current_snapshot
+        if observation is None:
             raise ValueError("fresh observation required before computer action")
-        return self._last_observation_id
+        return observation.id, observation
 
     async def _mutation_call(
         self,
@@ -341,8 +365,6 @@ class MacOSComputerRuntime:
             session.begin_target(target)
         session.previous_user_focus = user_frontmost
         session.attach_snapshot(observation)
-        self._last_observation_id = observation_id
-        self._last_observation = observation
         return observation
 
     async def click(self, target: ElementTarget | CoordinateTarget) -> ActionResult:
@@ -394,10 +416,7 @@ class MacOSComputerRuntime:
     ) -> ActionResult:
         if not isinstance(text, str):
             raise ValueError("'text' must be a string")
-        observation_id = self._require_fresh()
-        observation = self._last_observation
-        if observation is None:  # pragma: no cover - 由 _require_fresh 保证
-            raise ValueError("fresh observation required before computer action")
+        observation_id, observation = self._require_fresh()
         target_ref = self._resolve_editable_target(observation, element_ref)
         params: dict[str, object] = {
             "text": text,
@@ -481,7 +500,7 @@ class MacOSComputerRuntime:
             isinstance(item, str) for item in modifiers
         ):
             raise ValueError("'modifiers' must be a tuple of strings")
-        observation_id = self._require_fresh()
+        observation_id, _ = self._require_fresh()
         params: dict[str, object] = {
             "key": key,
             "modifiers": list(modifiers),
@@ -510,7 +529,7 @@ class MacOSComputerRuntime:
                 raise ValueError(f"'{name}' must be an integer")
         if delta_x == 0 and delta_y == 0:
             raise ValueError("at least one scroll delta must be non-zero")
-        observation_id = self._require_fresh()
+        observation_id, _ = self._require_fresh()
         result = await self._mutation_call(
             "scroll",
             {
@@ -534,7 +553,7 @@ class MacOSComputerRuntime:
     async def focus_window(self, window_ref: str) -> ActionResult:
         if not isinstance(window_ref, str) or not window_ref.strip():
             raise ValueError("'window_ref' must be a non-empty string")
-        observation_id = self._require_fresh()
+        observation_id, _ = self._require_fresh()
         result = await self._mutation_call(
             "focus_window", {"observation_id": observation_id, "window_ref": window_ref}
         )

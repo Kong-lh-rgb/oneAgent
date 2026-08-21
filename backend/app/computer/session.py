@@ -112,13 +112,18 @@ class ComputerSessionManager:
                     self._active_run_id = run_id
                 return existing
             if self._active_run_id is not None:
+                # Machine Lease 是第一层保护；Session 本身仍必须 fail closed：
+                # 已有其它 active Run 时绝不偷偷 pop 旧 session 让新 Run 接管。
                 logger.warning(
-                    "computer session active for another run %s; begin %s",
+                    "computer session active for another run %s; "
+                    "begin %s rejected",
                     self._active_run_id,
                     run_id,
                 )
-                # Machine Lease 应阻止这种情况；一旦发生，视为新 Run 接管。
-                self._sessions.pop(self._active_run_id, None)
+                raise ComputerSessionError(
+                    "computer session is already active for another run; "
+                    "end the previous session first"
+                )
             session = ComputerSession(
                 session_id=uuid4().hex,
                 run_id=run_id,

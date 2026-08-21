@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import logging
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -120,9 +121,13 @@ class ComputerLeaseManager:
 class ComputerLeaseHook(ToolHook):
     """只拦截 computer_*，生产链缺 run_id 时 fail closed。
 
-    acquire 成功后同时 ``begin`` Run-scoped ComputerSession（V2）：
+    acquire 成功后同时建立 Run-scoped ComputerSession（V2）：
     Lease 保证单 Run 控制 Computer，Session 负责把 target / snapshot 状态
     归属到该 Run，并在 Run 结束时清除。
+
+    ``session_starter``：由 composition root 注入的异步 callable
+    （MacOSComputerRuntime.begin_session_rpc），负责通知 Native helper 显式
+    ``begin_session``。缺省时回退到 Python 侧同步 begin。
     """
 
     critical = True
@@ -131,9 +136,11 @@ class ComputerLeaseHook(ToolHook):
         self,
         manager: ComputerLeaseManager,
         session_manager: ComputerSessionManager | None = None,
+        session_starter: Callable[[str], Awaitable[object] | object] | None = None,
     ) -> None:
         self.manager = manager
         self.session_manager = session_manager
+        self.session_starter = session_starter
 
     async def before_execute(
         self, context: ToolExecutionContext
@@ -148,7 +155,9 @@ class ComputerLeaseHook(ToolHook):
             self.manager.acquire(context.run_id)
         except ComputerBusyError as exc:
             return ToolHookDecision(denied_reason=str(exc))
-        if self.session_manager is not None:
+        if self.session_starter is not None:
+            await self.session_starter(context.run_id)
+        elif self.session_manager is not None:
             self.session_manager.begin(context.run_id)
         return None
 

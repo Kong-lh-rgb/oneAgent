@@ -19,6 +19,7 @@ from app.computer.errors import (
 )
 from app.computer.models import ActiveApp, Observation
 from app.computer.session import (
+    ComputerSessionError,
     ComputerSessionManager,
     ComputerSessionMismatchError,
     ComputerSessionNotActiveError,
@@ -117,13 +118,15 @@ def test_cross_run_target_never_leaks() -> None:
     assert run_b.current_snapshot is None
 
 
-def test_new_run_takes_over_active_session() -> None:
+def test_new_run_rejected_while_another_active() -> None:
+    """已有其它 active Run 时，新 Run 的 begin 必须 fail closed（绝不接管）。"""
+
     manager = ComputerSessionManager()
     manager.begin("run-a")
-    run_b = manager.begin("run-b")
-    assert manager.active_run_id == "run-b"
-    assert manager.get("run-a") is None  # 旧 session 已被替换
-    assert manager.require_active() is run_b
+    with pytest.raises(ComputerSessionError):
+        manager.begin("run-b")
+    assert manager.active_run_id == "run-a"
+    assert manager.require_active().run_id == "run-a"
 
 
 # ---------------------------------------------------------------------------
