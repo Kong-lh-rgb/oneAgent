@@ -102,10 +102,13 @@ class StreamingFakeModelAdapter(FakeModelAdapter):
         request: ModelRequest,
         *,
         on_text_delta: Callable[[str], Awaitable[None]],
+        on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> ModelResponse:
         self.requests.append(request)
         await on_text_delta("正在")
         await on_text_delta("完成")
+        if on_reasoning_delta is not None:
+            await on_reasoning_delta("先分析需求")
         response = self.responses.pop(0)
         assert isinstance(response, ModelResponse)
         return response
@@ -301,6 +304,37 @@ async def test_runtime_emits_model_text_deltas_before_completed() -> None:
     event_types = [event.type for event in handler.events]
     assert event_types.index(AgentEventType.MODEL_STARTED) < event_types.index(
         AgentEventType.MODEL_OUTPUT_DELTA
+    ) < event_types.index(AgentEventType.MODEL_COMPLETED)
+
+
+@pytest.mark.asyncio
+async def test_runtime_emits_model_reasoning_deltas_before_completed() -> None:
+    config = ProviderConfig(
+        provider="streaming-fake",
+        model="streaming-model",
+        api_key=SecretStr("offline-test-key"),
+        api_style=ApiStyle.CHAT_COMPLETIONS,
+    )
+    adapter = StreamingFakeModelAdapter(config, [model_response(content="完成")])
+    registry = ModelAdapterRegistry(ModelSettings(_env_file=None))
+    registry.register("streaming-fake", lambda _: adapter, config=config)
+    handler = InMemoryEventHandler()
+
+    await AgentRuntime(
+        registry,
+        ToolRegistry(),
+        provider="streaming-fake",
+    ).run("开始", event_handler=handler)
+
+    reasoning_deltas = [
+        event.reasoning_delta
+        for event in handler.events
+        if event.type is AgentEventType.MODEL_REASONING_DELTA
+    ]
+    assert reasoning_deltas == ["先分析需求"]
+    event_types = [event.type for event in handler.events]
+    assert event_types.index(AgentEventType.MODEL_STARTED) < event_types.index(
+        AgentEventType.MODEL_REASONING_DELTA
     ) < event_types.index(AgentEventType.MODEL_COMPLETED)
 
 

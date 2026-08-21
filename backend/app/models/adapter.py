@@ -30,6 +30,7 @@ class ModelAdapter(ABC):
         request: ModelRequest,
         *,
         on_text_delta: Callable[[str], Awaitable[None]],
+        on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> ModelResponse:
         """流式返回文本增量，并最终给出完整统一响应。
 

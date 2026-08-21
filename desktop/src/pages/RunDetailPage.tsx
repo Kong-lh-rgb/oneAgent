@@ -7,8 +7,12 @@ import { getLatestComputerObservation } from '../api/computer'
 import { cancelRun, getRun, getRunTrace, recoverRun } from '../api/runs'
 import ComputerObservationPanel from '../components/ComputerObservationPanel'
 import ArtifactList from '../components/ArtifactList'
+import { ConfirmDialog } from '../components/ConfirmDialog'
+import { ErrorState, LoadingState } from '../components/PageStates'
+import { PageShell } from '../components/PageShell'
 import RunBadge from '../components/RunBadge'
 import TraceTimeline from '../components/TraceTimeline'
+import { toast } from '../stores/toasts'
 
 function field(label: string, value: string | null | undefined): React.JSX.Element {
   return (
@@ -27,7 +31,8 @@ export default function RunDetailPage({
   onBack: () => void
 }): React.JSX.Element {
   const queryClient = useQueryClient()
-  const [notice, setNotice] = useState<string | null>(null)
+  const [confirmCancel, setConfirmCancel] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
 
   const runQuery = useQuery({
     queryKey: ['run', runId],
@@ -57,94 +62,124 @@ export default function RunDetailPage({
   const artifacts = artifactsQuery.data ?? []
 
   const doCancel = async (): Promise<void> => {
-    setNotice(null)
+    setCancelling(true)
     try {
       const updated = await cancelRun(runId)
-      setNotice(`已取消：${updated.status}`)
+      toast.success(`已取消：${updated.status}`)
       void queryClient.invalidateQueries({ queryKey: ['run', runId] })
       void queryClient.invalidateQueries({ queryKey: ['runs'] })
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : String(err))
+      toast.error(err instanceof Error ? err.message : String(err))
+    } finally {
+      setCancelling(false)
+      setConfirmCancel(false)
     }
   }
 
   const doRecover = async (): Promise<void> => {
-    setNotice(null)
     try {
       const result = await recoverRun(runId)
-      setNotice(`已恢复 → 新 Run ${result.run.id.slice(0, 8)}（${result.run.status}）`)
+      toast.success(`已恢复 → 新 Run ${result.run.id.slice(0, 8)}（${result.run.status}）`)
       void queryClient.invalidateQueries({ queryKey: ['run', runId] })
       void queryClient.invalidateQueries({ queryKey: ['runs'] })
     } catch (err) {
-      setNotice(err instanceof Error ? err.message : String(err))
+      toast.error(err instanceof Error ? err.message : String(err))
     }
   }
 
   return (
-    <div style={{ padding: 16, overflowY: 'auto', flex: 1 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-        <button className="btn btn-sm" onClick={onBack}>← 返回</button>
-        <h2 style={{ margin: 0, fontSize: 16 }}>Run Detail</h2>
-        {run && <RunBadge status={run.status} />}
-        {run && (
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-            <button className="btn btn-sm" onClick={() => void doCancel()} disabled={run.status !== 'running'}>
-              取消
-            </button>
-            <button className="btn btn-sm" onClick={() => void doRecover()} disabled={run.status !== 'interrupted'}>
-              恢复
-            </button>
-          </div>
-        )}
-      </div>
-
-      {notice && <div className="text-dim" style={{ marginBottom: 10 }}>{notice}</div>}
-
-      {run && (
-        <div
-          className="panel"
-          style={{ padding: 12, marginBottom: 14, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}
-        >
-          {field('run id', run.id)}
-          {field('conversation_id', run.conversation_id)}
-          {field('source', run.source)}
-          {run.source === 'automation' ? field('Triggered by Automation', run.source_id) : null}
-          {field('source_id', run.source_id)}
-          {field('mode', run.mode)}
-          {field('scheduled_for', run.scheduled_for)}
-          {field('triggered_at', run.triggered_at)}
-          {field('recovered_from_run_id', run.recovered_from_run_id)}
-          {field('created_at', run.created_at)}
-          {field('started_at', run.started_at)}
-          {field('completed_at', run.completed_at)}
-          {field('stop_reason', run.stop_reason)}
-          {field('error', run.error)}
-          <div style={{ gridColumn: '1 / -1' }}>
-            <span className="text-muted">user_message：</span>
-            <span>{run.user_message || '-'}</span>
-          </div>
+    <PageShell
+      title={`Run ${runId.slice(0, 8)}`}
+      subtitle={run ? `conversation ${run.conversation_id?.slice(0, 8) ?? '-'}` : '加载中…'}
+      maxWidth={1100}
+      actions={
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button className="btn btn-sm" onClick={onBack}>← 返回</button>
+          {run && <RunBadge status={run.status} />}
+          {run && (
+            <>
+              <button
+                className="btn btn-sm"
+                onClick={() => setConfirmCancel(true)}
+                disabled={run.status !== 'running'}
+              >
+                取消
+              </button>
+              <button
+                className="btn btn-sm"
+                onClick={() => void doRecover()}
+                disabled={run.status !== 'interrupted'}
+              >
+                恢复
+              </button>
+            </>
+          )}
         </div>
-      )}
+      }
+    >
+      {runQuery.isPending ? (
+        <LoadingState label="正在加载 Run…" />
+      ) : runQuery.isError ? (
+        <ErrorState
+          message={String(runQuery.error)}
+          onRetry={() => void runQuery.refetch()}
+        />
+      ) : run ? (
+        <>
+          <div
+            className="panel"
+            style={{ padding: 12, marginBottom: 14, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}
+          >
+            {field('run id', run.id)}
+            {field('conversation_id', run.conversation_id)}
+            {field('source', run.source)}
+            {run.source === 'automation' ? field('Triggered by Automation', run.source_id) : null}
+            {field('source_id', run.source_id)}
+            {field('mode', run.mode)}
+            {field('scheduled_for', run.scheduled_for)}
+            {field('triggered_at', run.triggered_at)}
+            {field('recovered_from_run_id', run.recovered_from_run_id)}
+            {field('created_at', run.created_at)}
+            {field('started_at', run.started_at)}
+            {field('completed_at', run.completed_at)}
+            {field('stop_reason', run.stop_reason)}
+            {field('error', run.error)}
+            <div style={{ gridColumn: '1 / -1' }}>
+              <span className="text-muted">user_message：</span>
+              <span>{run.user_message || '-'}</span>
+            </div>
+          </div>
 
-      <h3 style={{ fontSize: 14, margin: '0 0 8px' }}>Trace Timeline</h3>
-      <div className="panel" style={{ padding: 12 }}>
-        <TraceTimeline events={events} />
-      </div>
+          <h3 style={{ fontSize: 14, margin: '0 0 8px' }}>Trace Timeline</h3>
+          <div className="panel" style={{ padding: 12 }}>
+            <TraceTimeline events={events} />
+          </div>
 
-      {computerObservation?.observation ? (
-        <div className="panel" style={{ padding: 12, marginTop: 14 }}>
-          <ComputerObservationPanel
-            observation={computerObservation.observation}
-            runId={computerObservation.run_id}
-            eventTime={computerObservation.event_time}
-            serverUrl={SERVER_URL}
-            title="Computer Observation"
-          />
-        </div>
+          {computerObservation?.observation ? (
+            <div className="panel" style={{ padding: 12, marginTop: 14 }}>
+              <ComputerObservationPanel
+                observation={computerObservation.observation}
+                runId={computerObservation.run_id}
+                eventTime={computerObservation.event_time}
+                serverUrl={SERVER_URL}
+                title="Computer Observation"
+              />
+            </div>
+          ) : null}
+
+          <RunArtifactsSection artifacts={artifacts} />
+        </>
       ) : null}
-
-      <RunArtifactsSection artifacts={artifacts} />
-    </div>
+      <ConfirmDialog
+        open={confirmCancel}
+        title="取消这次 Run？"
+        message="正在执行的任务会被中断，当前进度不会保留为结果。"
+        confirmLabel="取消 Run"
+        busy={cancelling}
+        onConfirm={() => void doCancel()}
+        onCancel={() => setConfirmCancel(false)}
+      />
+    </PageShell>
   )
 }
 

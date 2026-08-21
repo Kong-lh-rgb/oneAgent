@@ -25,13 +25,21 @@ export interface SidebarProps {
   current: PageKey
   onNavigate: (page: PageKey) => void
   connected: boolean
+  /** 各导航项徽标（数字 >0 才显示），如 running run 数 / pending 审批数。 */
+  badges?: Partial<Record<PageKey, number>>
 }
 
 export default function Sidebar({
   current,
   onNavigate,
   connected,
+  badges,
 }: SidebarProps): ReactElement {
+  const badgeFor = (key: PageKey): number | null => {
+    const value = badges?.[key]
+    return typeof value === 'number' && value > 0 ? value : null
+  }
+
   return (
     <nav className="sidebar" aria-label="主导航">
       <div className="sidebar-brand" aria-label="Vesta">oa</div>
@@ -48,6 +56,11 @@ export default function Sidebar({
           >
             <Icon name={item.icon} />
             <span className="nav-item__label">{item.label}</span>
+            {badgeFor(item.key) !== null ? (
+              <span className="nav-badge" aria-label={`${badgeFor(item.key)}`}>
+                {badgeFor(item.key)! > 99 ? '99+' : badgeFor(item.key)}
+              </span>
+            ) : null}
           </button>
         ))}
       </div>

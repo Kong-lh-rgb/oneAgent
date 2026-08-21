@@ -31,6 +31,7 @@ export default function ChatPage(): React.JSX.Element {
   const eventsByRun = useEventsStore((state) => state.eventsByRun)
   const runStatuses = useEventsStore((state) => state.runStatuses)
   const streamTextByRun = useEventsStore((state) => state.streamTextByRun)
+  const reasoningByRun = useEventsStore((state) => state.reasoningByRun)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [lastRunId, setLastRunId] = useState<string | null>(null)
   const [mode, setMode] = useState<AgentMode>('normal')
@@ -201,17 +202,20 @@ export default function ChatPage(): React.JSX.Element {
     progressRunId && latestModelStep !== null && latestModelStep !== undefined
       ? (streamTextByRun[progressRunId]?.[latestModelStep] ?? '')
       : ''
-  // 最近一次 model_completed 携带的模型思考内容（DeepSeek/Qwen reasoning）。
-  const latestModelReasoning =
+  // 流式实时思考（model_reasoning_delta 累积）优先；回退到 model_completed 携带的 reasoning。
+  const streamedReasoning =
+    progressRunId && latestModelStep !== null && latestModelStep !== undefined
+      ? (reasoningByRun[progressRunId]?.[latestModelStep] ?? '')
+      : ''
+  const completedReasoning =
     [...activeEvents]
       .reverse()
       .find((event) => event.type === 'model_completed')?.message?.reasoning ?? ''
+  const latestModelReasoning = streamedReasoning || completedReasoning
 
-  // 流式限速：字符级平滑呈现，便于人眼观看（不快不慢）。
-  // 每 tick 只新增固定字符数，追上真实文本后自然等待下一批；
-  // 输出完毕/收起时一次性补全，交给落库消息原位切换。
-  const STREAM_TICK_MS = 24
-  const STREAM_CHARS_PER_TICK = 5
+  // 流式揭示：100ms 节流快照 —— 每次直接把最新文本交给渲染（不逐字），
+  // 渲染频率 ~10Hz；文本始终最新且不落后。追平后自然暂停不 setState。
+  const STREAM_TICK_MS = 100
   const [revealedText, setRevealedText] = useState('')
   const revealedCountRef = useRef(0)
   const targetRef = useRef('')
@@ -223,6 +227,8 @@ export default function ChatPage(): React.JSX.Element {
     if (textIdentityRef.current !== identity) {
       textIdentityRef.current = identity
       revealedCountRef.current = 0
+      // 立即清空，避免上一轮回复的残留文本冒充新回复。
+      setRevealedText('')
     }
     targetRef.current = streamedText
     if (!(liveTurnActive && !liveTurnSettling && sendMutation.isPending)) {
@@ -238,20 +244,16 @@ export default function ChatPage(): React.JSX.Element {
     latestModelStep,
   ])
 
-  // 流式期间开启揭示循环，输出完毕/收起时由上面的 effect 一次性补全。
+  // 流式期间开启节流快照循环，输出完毕/收起时由上面的 effect 一次性补全。
   useEffect(() => {
     const streaming =
       liveTurnActive && !liveTurnSettling && sendMutation.isPending
     if (!streaming) return undefined
     const interval = window.setInterval(() => {
       const target = targetRef.current
-      const next = Math.min(
-        target.length,
-        revealedCountRef.current + STREAM_CHARS_PER_TICK,
-      )
-      if (next > revealedCountRef.current) {
-        revealedCountRef.current = next
-        setRevealedText(target.slice(0, next))
+      if (revealedCountRef.current !== target.length) {
+        revealedCountRef.current = target.length
+        setRevealedText(target)
       }
     }, STREAM_TICK_MS)
     return () => window.clearInterval(interval)
@@ -423,6 +425,11 @@ export default function ChatPage(): React.JSX.Element {
             setOptimisticMessage({
               conversationId: selectedId,
               message: { role: 'user', content },
+            })
+            // 发送即定位到底部：避免先停留在上一条回复的位置，再等 live turn 出现。
+            requestAnimationFrame(() => {
+              const el = conversationScrollRef.current
+              if (el) el.scrollTop = el.scrollHeight
             })
             await sendMutation.mutateAsync({
               conversationId: selectedId,

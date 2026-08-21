@@ -4,7 +4,6 @@ import type { AgentEvent } from '../api/types'
 import { Icon } from './Icon'
 import { AssistantContent } from './AssistantContent'
 import AssistantReasoning from './AssistantReasoning'
-import { ActivityItems } from './RunActivity'
 
 export default function LiveAgentTurn({
   events,
@@ -17,6 +16,9 @@ export default function LiveAgentTurn({
   reasoning?: string
   settling?: boolean
 }): React.JSX.Element {
+  // 工具调用等英文活动列表不再内联展示；用户想看细节走右侧 Activity 抽屉。
+  void events
+
   return (
     <section
       className={`live-turn${settling ? ' live-turn--settling' : ''}`}
@@ -30,18 +32,22 @@ export default function LiveAgentTurn({
         Vesta
         <span className="live-turn__pulse" aria-hidden="true" />
       </div>
-      {events.length > 0 ? (
-        <div className="live-turn__activity">
-          <ActivityItems events={events} />
-        </div>
-      ) : (
-        <div className="live-turn__starting">Starting the run…</div>
-      )}
-      <AssistantReasoning text={reasoning ?? ''} />
+      {/* 思考仍在进行（正文还没开始）时自动展开；正文流出后自动平滑收起，
+          思考与最终答案用独立容器彻底分开。 */}
+      <AssistantReasoning
+        text={reasoning ?? ''}
+        autoExpand={!streamText}
+        busy={!streamText}
+      />
       {streamText ? (
         <div className="live-turn__response">
           <AssistantContent content={streamText} />
           <span className="stream-cursor" aria-hidden="true" />
+        </div>
+      ) : !reasoning ? (
+        <div className="live-turn__waiting">
+          <span className="live-turn__waiting-spinner" aria-hidden="true" />
+          正在执行…
         </div>
       ) : null}
     </section>

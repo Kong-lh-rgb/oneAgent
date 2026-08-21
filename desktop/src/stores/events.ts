@@ -14,6 +14,8 @@ interface EventsState {
   connected: boolean
   eventsByRun: Record<string, AgentEvent[]>
   streamTextByRun: Record<string, Record<number, string>>
+  /** 流式思考增量（model_reasoning_delta）按 run+step 累积。 */
+  reasoningByRun: Record<string, Record<number, string>>
   runStatuses: Record<string, string>
   connect: () => void
   disconnect: () => void
@@ -49,6 +51,24 @@ export const useEventsStore = create<EventsState>((set, get) => {
       })
       return
     }
+    if (
+      agentEvent.type === 'model_reasoning_delta' &&
+      agentEvent.step !== null &&
+      agentEvent.reasoning_delta
+    ) {
+      const runReasoning = get().reasoningByRun[runId] ?? {}
+      set({
+        reasoningByRun: {
+          ...get().reasoningByRun,
+          [runId]: {
+            ...runReasoning,
+            [agentEvent.step]:
+              `${runReasoning[agentEvent.step] ?? ''}${agentEvent.reasoning_delta}`,
+          },
+        },
+      })
+      return
+    }
     const next = [...existing, agentEvent].slice(-MAX_EVENTS_PER_RUN)
     set({ eventsByRun: { ...get().eventsByRun, [runId]: next } })
   }
@@ -62,6 +82,7 @@ export const useEventsStore = create<EventsState>((set, get) => {
     connected: false,
     eventsByRun: {},
     streamTextByRun: {},
+    reasoningByRun: {},
     runStatuses: {},
     connect: () => {
       if (unsubscribeStatus) return // 只订阅一次

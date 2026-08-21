@@ -598,6 +598,17 @@ class AgentRuntime:
                         delta=delta,
                     )
 
+                async def emit_reasoning_delta(delta: str) -> None:
+                    if not delta:
+                        return
+                    await emitter.emit(
+                        AgentEventType.MODEL_REASONING_DELTA,
+                        step=step,
+                        provider=resolved_provider,
+                        model=resolved_model,
+                        reasoning_delta=delta,
+                    )
+
                 response = await adapter.complete_stream(
                     ModelRequest(
                         messages=request_messages,
@@ -606,6 +617,7 @@ class AgentRuntime:
                         max_output_tokens=effective_max_output_tokens,
                     ),
                     on_text_delta=emit_text_delta,
+                    on_reasoning_delta=emit_reasoning_delta,
                 )
             except Exception as exc:
                 return await stop_with_error(

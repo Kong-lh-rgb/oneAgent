@@ -43,4 +43,22 @@ describe('ApprovalCard', () => {
     )
     expect(html).toContain('disabled=""')
   })
+
+  it('desktop 审批显示人类可读动作名与描述', () => {
+    const computerApproval: ApprovalRequest = {
+      ...approval,
+      tool_name: 'computer_type',
+      arguments: { text: 'hello' },
+    }
+    const html = renderToStaticMarkup(
+      <ApprovalCard
+        approval={computerApproval}
+        onApprove={() => {}}
+        onDeny={() => {}}
+      />,
+    )
+    expect(html).toContain('Allow Type text?')
+    expect(html).toContain('Vesta wants to type text')
+    expect(html).toContain('(computer_type)')
+  })
 })

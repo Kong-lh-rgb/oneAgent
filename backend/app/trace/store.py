@@ -283,8 +283,11 @@ class SQLiteTraceEventHandler(AgentEventHandler):
         self.store = store
 
     async def emit(self, event: AgentEvent) -> None:
-        # 文本增量只服务实时界面；持久化每个 chunk 会放大 Trace 与数据库。
-        if event.type is AgentEventType.MODEL_OUTPUT_DELTA:
+        # 文本/思考增量只服务实时界面；持久化每个 chunk 会放大 Trace 与数据库。
+        if event.type in (
+            AgentEventType.MODEL_OUTPUT_DELTA,
+            AgentEventType.MODEL_REASONING_DELTA,
+        ):
             return
         await self.store.record_event(event)
 

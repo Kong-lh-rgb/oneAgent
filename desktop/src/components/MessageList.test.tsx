@@ -63,4 +63,53 @@ describe('MessageList', () => {
     expect(html).toContain('先拆解需求，再核对仓库文件')
     expect(html).toContain('assistant-reasoning')
   })
+
+  it('连续 assistant 消息合并成一条回复，只显示一个头像', () => {
+    const html = renderToStaticMarkup(
+      <MessageList
+        messages={[
+          { role: 'user', content: '帮我做' },
+          { role: 'assistant', content: '' },
+          { role: 'assistant', content: '第一段回复' },
+          { role: 'assistant', content: '第二段回复' },
+        ]}
+      />,
+    )
+    expect(html).toContain('第一段回复')
+    expect(html).toContain('第二段回复')
+    expect(html).toContain('message-assistant--continuation')
+    // 空正文的中间 tool-call 消息被跳过，头像只出现一次
+    expect(html.match(/message-assistant__avatar/g)).toHaveLength(1)
+  })
+
+  it('带工具调用的 assistant 消息一律不渲染（去掉长串工具调用）', () => {
+    const html = renderToStaticMarkup(
+      <MessageList
+        messages={[
+          { role: 'user', content: '帮我做' },
+          {
+            role: 'assistant',
+            content: '让我先看一下',
+            tool_calls: [
+              { id: 'call-1', name: 'computer_observe', arguments: {} },
+            ],
+          },
+          {
+            role: 'assistant',
+            content: '让我操作一下',
+            tool_calls: [
+              { id: 'call-2', name: 'computer_click', arguments: {} },
+            ],
+          },
+          { role: 'assistant', content: '完成，这是结果。' },
+        ]}
+      />,
+    )
+    expect(html).not.toContain('让我先看一下')
+    expect(html).not.toContain('让我操作一下')
+    expect(html).not.toContain('computer_observe')
+    expect(html).toContain('完成，这是结果。')
+    // 只有最终一条正文，只有一个头像
+    expect(html.match(/message-assistant__avatar/g)).toHaveLength(1)
+  })
 })

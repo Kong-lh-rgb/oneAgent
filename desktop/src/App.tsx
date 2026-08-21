@@ -1,8 +1,11 @@
+import { useQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 
+import { listApprovals } from './api/approvals'
 import { useEventsStore } from './stores/events'
 import { createDesktopNotificationController } from './notifications/desktop'
 import Sidebar from './components/Sidebar'
+import { ToastViewport } from './components/ToastViewport'
 import ApprovalsPage from './pages/ApprovalsPage'
 import ArtifactsPage from './pages/ArtifactsPage'
 import AutomationsPage from './pages/AutomationsPage'
@@ -31,10 +34,12 @@ export interface AppState {
 export default function App(): React.JSX.Element {
   const [page, setPage] = useState<PageKey>('chat')
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [everConnected, setEverConnected] = useState(false)
 
   const connect = useEventsStore((state) => state.connect)
   const disconnect = useEventsStore((state) => state.disconnect)
   const connected = useEventsStore((state) => state.connected)
+  const runStatuses = useEventsStore((state) => state.runStatuses)
 
   useEffect(() => {
     connect()
@@ -42,10 +47,26 @@ export default function App(): React.JSX.Element {
   }, [connect, disconnect])
 
   useEffect(() => {
+    if (connected) setEverConnected(true)
+  }, [connected])
+
+  useEffect(() => {
     const controller = createDesktopNotificationController()
     controller?.start()
     return () => controller?.stop()
   }, [])
+
+  const pendingApprovalsQuery = useQuery({
+    queryKey: ['sidebar-approvals'],
+    queryFn: () => listApprovals('pending'),
+    refetchInterval: 4000,
+  })
+
+  // 实时 running run 数（来自 run.status 事件）+ pending 审批数 → 侧栏徽标。
+  const runningCount = Object.values(runStatuses).filter(
+    (status) => status === 'running',
+  ).length
+  const pendingApprovalCount = pendingApprovalsQuery.data?.length ?? 0
 
   const navigate = (next: PageKey): void => {
     setPage(next)
@@ -63,8 +84,18 @@ export default function App(): React.JSX.Element {
         current={page}
         onNavigate={navigate}
         connected={connected}
+        badges={{
+          runs: runningCount,
+          approvals: pendingApprovalCount,
+        }}
       />
       <div className="main">
+        {!connected && everConnected ? (
+          <div className="host-banner" role="status">
+            <span className="host-banner__dot" />
+            Host 连接已断开，正在重连…
+          </div>
+        ) : null}
         {page === 'chat' && <ChatPage />}
         {page === 'runs' &&
           (selectedRunId ? (
@@ -78,6 +109,7 @@ export default function App(): React.JSX.Element {
         {page === 'computer' && <ComputerPage />}
         {page === 'settings' && <SettingsPage />}
       </div>
+      <ToastViewport />
     </div>
   )
 }

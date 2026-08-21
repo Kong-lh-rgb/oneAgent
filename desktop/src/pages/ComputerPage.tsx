@@ -10,6 +10,7 @@ import {
 } from '../api/computer'
 import ComputerObservationPanel from '../components/ComputerObservationPanel'
 import ComputerStatusView from '../components/ComputerStatusView'
+import { PageShell } from '../components/PageShell'
 
 export default function ComputerPage(): React.JSX.Element {
   const queryClient = useQueryClient()
@@ -40,9 +41,10 @@ export default function ComputerPage(): React.JSX.Element {
   const latest = observationQuery.data
 
   return (
-    <div style={{ padding: 16, overflowY: 'auto', flex: 1, maxWidth: 960 }}>
-      <h2 style={{ margin: 0, fontSize: 16, marginBottom: 12 }}>Computer</h2>
-
+    <PageShell
+      title="Computer"
+      subtitle="本机电脑状态与最近一次屏幕观察（只读）。"
+    >
       <div className="panel" style={{ padding: 14 }}>
         <h3 style={{ fontSize: 14, marginTop: 0 }}>Status</h3>
         <ComputerStatusView
@@ -60,6 +62,6 @@ export default function ComputerPage(): React.JSX.Element {
           serverUrl={SERVER_URL}
         />
       </div>
-    </div>
+    </PageShell>
   )
 }

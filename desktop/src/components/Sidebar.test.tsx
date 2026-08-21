@@ -56,4 +56,30 @@ describe('Sidebar (App Shell)', () => {
     expect(html).toContain('aria-label="Chat"')
     expect(html).not.toContain('v0.1.0')
   })
+
+  it('提供 badges 时在对应导航项渲染徽标', () => {
+    const html = renderToStaticMarkup(
+      <Sidebar
+        current="chat"
+        onNavigate={() => {}}
+        connected
+        badges={{ runs: 2, approvals: 3 }}
+      />,
+    )
+    expect(html).toContain('nav-badge')
+    expect(html).toContain('>2</span>')
+    expect(html).toContain('>3</span>')
+  })
+
+  it('badges 为 0 或缺失时不渲染徽标', () => {
+    const html = renderToStaticMarkup(
+      <Sidebar
+        current="chat"
+        onNavigate={() => {}}
+        connected
+        badges={{ runs: 0, approvals: undefined }}
+      />,
+    )
+    expect(html).not.toContain('nav-badge')
+  })
 })

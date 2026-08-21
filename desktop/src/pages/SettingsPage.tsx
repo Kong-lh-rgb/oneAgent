@@ -3,6 +3,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getComputerStatus, requestComputerPermission } from '../api/computer'
 import { getSystemInfo } from '../api/system'
 import ComputerStatusView from '../components/ComputerStatusView'
+import { ErrorState } from '../components/PageStates'
+import { PageShell } from '../components/PageShell'
 
 export default function SettingsPage(): React.JSX.Element {
   const queryClient = useQueryClient()
@@ -35,18 +37,21 @@ export default function SettingsPage(): React.JSX.Element {
   }
 
   return (
-    <div style={{ padding: 16, overflowY: 'auto', flex: 1, maxWidth: 640 }}>
-      <h2 style={{ margin: 0, fontSize: 16, marginBottom: 12 }}>Settings</h2>
-
+    <PageShell
+      title="Settings"
+      subtitle="Vesta Host、电脑权限与桌面环境信息。"
+      maxWidth={720}
+    >
       <div className="panel" style={{ padding: 14 }}>
         <h3 style={{ fontSize: 14, marginTop: 0 }}>Vesta Host</h3>
         {infoQuery.isLoading ? (
           <div className="text-dim"><span className="spinner" /> 正在检查后端…</div>
         ) : infoQuery.isError ? (
-          <div className="error-text">
-            无法连接 Vesta Host。请先在 backend 启动：
-            <pre style={{ background: 'var(--bg)', padding: 10, borderRadius: 6 }}>{'python -m app.server'}</pre>
-          </div>
+          <ErrorState
+            message="无法连接 Vesta Host"
+            hint="请先在 backend 启动：python -m app.server，然后重试。"
+            onRetry={() => void infoQuery.refetch()}
+          />
         ) : (
           <table className="table">
             <tbody>
@@ -118,6 +123,6 @@ export default function SettingsPage(): React.JSX.Element {
           </tbody>
         </table>
       </div>
-    </div>
+    </PageShell>
   )
 }

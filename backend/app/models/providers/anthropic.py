@@ -56,6 +56,7 @@ class AnthropicAdapter(ModelAdapter):
         request: ModelRequest,
         *,
         on_text_delta: Callable[[str], Awaitable[None]],
+        on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> ModelResponse:
         kwargs = self._request_kwargs(request)
         try:

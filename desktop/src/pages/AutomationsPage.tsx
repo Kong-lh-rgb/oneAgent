@@ -10,6 +10,10 @@ import {
   type CreateAutomationInput,
 } from '../api/automations'
 import AutomationForm from '../components/AutomationForm'
+import { ConfirmDialog } from '../components/ConfirmDialog'
+import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
+import { PageShell } from '../components/PageShell'
+import { toast } from '../stores/toasts'
 
 function scheduleText(schedule: {
   kind: string
@@ -33,7 +37,7 @@ function formatTime(iso: string | null): string {
 export default function AutomationsPage(): React.JSX.Element {
   const queryClient = useQueryClient()
   const [showForm, setShowForm] = useState(false)
-  const [notice, setNotice] = useState<string | null>(null)
+  const [cancelTarget, setCancelTarget] = useState<string | null>(null)
 
   const automationsQuery = useQuery({
     queryKey: ['automations'],
@@ -51,11 +55,11 @@ export default function AutomationsPage(): React.JSX.Element {
     mutationFn: (input: CreateAutomationInput) => createAutomation(input),
     onSuccess: () => {
       setShowForm(false)
-      setNotice('已创建。')
+      toast.success('Automation 已创建')
       invalidate()
     },
     onError: (err: unknown) => {
-      setNotice(err instanceof Error ? err.message : String(err))
+      toast.error(err instanceof Error ? err.message : String(err))
     },
   })
 
@@ -65,22 +69,30 @@ export default function AutomationsPage(): React.JSX.Element {
       if (action.op === 'resume') return resumeAutomation(action.id)
       return cancelAutomation(action.id)
     },
-    onSuccess: () => {
+    onSuccess: (_data, action) => {
+      const verb =
+        action.op === 'pause' ? '已暂停' : action.op === 'resume' ? '已恢复' : '已取消'
+      toast.info(`${verb} Automation`)
       invalidate()
+    },
+    onError: (err: unknown) => {
+      toast.error(err instanceof Error ? err.message : String(err))
     },
   })
 
   return (
-    <div style={{ padding: 16, overflowY: 'auto', flex: 1 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
-        <h2 style={{ margin: 0, fontSize: 16 }}>Automations</h2>
-        <button className="btn btn-primary btn-sm" onClick={() => setShowForm((value) => !value)}>
+    <PageShell
+      title="Automations"
+      subtitle="定时 / 周期触发 Agent 运行。"
+      actions={
+        <button
+          className="btn btn-primary btn-sm"
+          onClick={() => setShowForm((value) => !value)}
+        >
           {showForm ? '收起' : '＋ 新建'}
         </button>
-      </div>
-
-      {notice && <div className="text-dim" style={{ marginBottom: 10 }}>{notice}</div>}
-
+      }
+    >
       {showForm && (
         <AutomationForm
           onSubmit={async (input) => {
@@ -90,8 +102,19 @@ export default function AutomationsPage(): React.JSX.Element {
         />
       )}
 
-      {automations.length === 0 ? (
-        <div className="empty">暂无 Automation。</div>
+      {automationsQuery.isPending ? (
+        <LoadingState label="正在加载 Automations…" />
+      ) : automationsQuery.isError ? (
+        <ErrorState
+          message={String(automationsQuery.error)}
+          onRetry={() => void automationsQuery.refetch()}
+        />
+      ) : automations.length === 0 ? (
+        <EmptyState
+          title="暂无 Automation"
+          hint="点击右上角「＋ 新建」创建第一个定时任务。"
+          icon="automations"
+        />
       ) : (
         <table className="table">
           <thead>
@@ -135,7 +158,7 @@ export default function AutomationsPage(): React.JSX.Element {
                     <button
                       className="btn btn-sm btn-danger"
                       disabled={automation.status === 'cancelled' || automation.status === 'completed'}
-                      onClick={() => controlMutation.mutate({ id: automation.id, op: 'cancel' })}
+                      onClick={() => setCancelTarget(automation.id)}
                     >
                       cancel
                     </button>
@@ -146,6 +169,20 @@ export default function AutomationsPage(): React.JSX.Element {
           </tbody>
         </table>
       )}
-    </div>
+      <ConfirmDialog
+        open={cancelTarget !== null}
+        title="取消这个 Automation？"
+        message="取消后该定时任务将不再触发，且无法恢复。"
+        confirmLabel="取消 Automation"
+        busy={controlMutation.isPending}
+        onConfirm={() => {
+          if (cancelTarget) {
+            controlMutation.mutate({ id: cancelTarget, op: 'cancel' })
+          }
+          setCancelTarget(null)
+        }}
+        onCancel={() => setCancelTarget(null)}
+      />
+    </PageShell>
   )
 }

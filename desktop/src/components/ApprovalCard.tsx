@@ -2,6 +2,11 @@
 
 import type { ReactElement } from 'react'
 import type { ApprovalRequest } from '../api/types'
+import {
+  computerActionDescription,
+  computerActionLabel,
+  isDesktopApproval,
+} from '../approval/computerApproval'
 import { Icon } from './Icon'
 import { Button } from './ui'
 
@@ -18,6 +23,8 @@ export default function ApprovalCard({
   onApprove,
   onDeny,
 }: ApprovalCardProps): ReactElement {
+  const desktop = isDesktopApproval(approval)
+  const title = desktop ? computerActionLabel(approval) : approval.tool_name
   const argsText = (() => {
     try {
       return JSON.stringify(approval.arguments, null, 2)
@@ -32,7 +39,13 @@ export default function ApprovalCard({
         <span className="approval-card__icon"><Icon name="approvals" size={17} /></span>
         <div>
           <div className="approval-card__eyebrow">Approval required</div>
-          <div className="approval-card__title">Allow {approval.tool_name}?</div>
+          <div className="approval-card__title">Allow {title}?</div>
+          {desktop ? (
+            <div className="approval-card__desc">
+              {computerActionDescription(approval)}
+              <span className="approval-card__meta-text"> ({approval.tool_name})</span>
+            </div>
+          ) : null}
         </div>
       </div>
       {approval.reason ? (

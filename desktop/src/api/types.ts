@@ -141,6 +141,8 @@ export interface AgentEvent {
   provider: string | null
   model: string | null
   delta?: string | null
+  /** 流式思考增量（DeepSeek/Qwen reasoning_content delta）。 */
+  reasoning_delta?: string | null
   message: Message | null
   tool_call: ToolCall | null
   tool_result: {

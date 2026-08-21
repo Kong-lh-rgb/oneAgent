@@ -21,6 +21,7 @@ class AgentEventType(StrEnum):
     AGENT_STARTED = "agent_started"
     MODEL_STARTED = "model_started"
     MODEL_OUTPUT_DELTA = "model_output_delta"
+    MODEL_REASONING_DELTA = "model_reasoning_delta"
     MODEL_COMPLETED = "model_completed"
     TOOL_STARTED = "tool_started"
     TOOL_COMPLETED = "tool_completed"
@@ -55,6 +56,7 @@ class AgentEvent(BaseModel):
     provider: str | None = None
     model: str | None = None
     delta: str | None = None
+    reasoning_delta: str | None = None
     message: Message | None = None
     tool_call: ToolCall | None = None
     tool_result: ToolResult | None = None

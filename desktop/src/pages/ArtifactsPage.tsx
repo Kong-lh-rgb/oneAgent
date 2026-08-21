@@ -3,6 +3,8 @@ import { useEffect } from 'react'
 
 import { listArtifacts } from '../api/artifacts'
 import ArtifactList from '../components/ArtifactList'
+import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
+import { PageShell } from '../components/PageShell'
 import { rpcClient } from '../rpc'
 
 /** 最近交付物页面；Artifact 内容不进 Renderer，只展示公开 metadata。 */
@@ -26,6 +28,7 @@ export default function ArtifactsPage(): React.JSX.Element {
       artifacts={query.data ?? []}
       pending={query.isPending}
       error={query.isError ? String(query.error) : null}
+      onRetry={() => void query.refetch()}
     />
   )
 }
@@ -34,21 +37,31 @@ export function ArtifactsView({
   artifacts,
   pending = false,
   error = null,
+  onRetry,
 }: {
   artifacts: Awaited<ReturnType<typeof listArtifacts>>
   pending?: boolean
   error?: string | null
+  onRetry?: () => void
 }): React.JSX.Element {
   return (
-    <div style={{ padding: 16, overflowY: 'auto', flex: 1 }}>
-      <h2 style={{ margin: '0 0 12px', fontSize: 16 }}>Artifacts</h2>
+    <PageShell
+      title="Artifacts"
+      subtitle="Agent 生成的交付物（文件 / 链接 / 文本）。"
+    >
       {error ? (
-        <div className="error-text">{error}</div>
+        <ErrorState message={error} onRetry={onRetry} />
       ) : pending ? (
-        <div className="empty"><span className="spinner" /> 正在加载…</div>
+        <LoadingState label="正在加载 Artifacts…" />
+      ) : artifacts.length === 0 ? (
+        <EmptyState
+          title="暂无 Artifact"
+          hint="Agent 生成文件或链接后，会以交付物形式出现在这里。"
+          icon="artifacts"
+        />
       ) : (
         <ArtifactList artifacts={artifacts} />
       )}
-    </div>
+    </PageShell>
   )
 }

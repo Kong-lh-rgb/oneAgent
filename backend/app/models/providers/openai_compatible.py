@@ -62,13 +62,16 @@ class OpenAICompatibleAdapter(ModelAdapter):
         request: ModelRequest,
         *,
         on_text_delta: Callable[[str], Awaitable[None]],
+        on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> ModelResponse:
         """使用 Provider 原生流，同时在结束时还原完整 ``ModelResponse``。"""
 
         try:
             if self.config.api_style is ApiStyle.RESPONSES:
                 return await self._stream_responses(request, on_text_delta)
-            return await self._stream_chat(request, on_text_delta)
+            return await self._stream_chat(
+                request, on_text_delta, on_reasoning_delta
+            )
         except ModelAdapterError:
             raise
         except Exception as exc:
@@ -189,6 +192,7 @@ class OpenAICompatibleAdapter(ModelAdapter):
         self,
         request: ModelRequest,
         on_text_delta: Callable[[str], Awaitable[None]],
+        on_reasoning_delta: Callable[[str], Awaitable[None]] | None = None,
     ) -> ModelResponse:
         kwargs: dict[str, Any] = {
             "model": request.model or self.default_model,
@@ -235,6 +239,8 @@ class OpenAICompatibleAdapter(ModelAdapter):
             reasoning = getattr(delta, "reasoning_content", None)
             if reasoning:
                 reasoning_parts.append(reasoning)
+                if on_reasoning_delta is not None:
+                    await on_reasoning_delta(reasoning)
             for call in getattr(delta, "tool_calls", None) or ():
                 index = int(getattr(call, "index", 0) or 0)
                 part = tool_parts.setdefault(
