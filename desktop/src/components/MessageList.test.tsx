@@ -59,7 +59,7 @@ describe('MessageList', () => {
 
   it('助手消息带 reasoning 时展示思考过程', () => {
     const html = renderToStaticMarkup(<MessageList messages={[reasoningMsg]} />)
-    expect(html).toContain('思考过程')
+    expect(html).toContain('Thinking')
     expect(html).toContain('先拆解需求，再核对仓库文件')
     expect(html).toContain('assistant-reasoning')
   })

@@ -109,7 +109,9 @@ class SQLiteTraceStore:
                     event.sequence,
                     event.type.value,
                     event_time,
-                    event.model_dump_json(),
+                    # exclude_none：只写有值字段，避免新增模型字段的 null 冗余
+                    # 写进历史 payload，减少未来字段增删的版本漂移。
+                    event.model_dump_json(exclude_none=True),
                 ),
             )
             await self._update_run(database, event)

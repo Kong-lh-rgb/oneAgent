@@ -439,11 +439,11 @@ async def test_runtime_final_answer_triggers_independent_reflection_model(
     assert request.temperature == 0.2
     assert request.tools == ()
     assert [event.type for event in events.events][-3:] == [
+        AgentEventType.AGENT_COMPLETED,
         AgentEventType.MEMORY_REFLECTION_STARTED,
         AgentEventType.MEMORY_REFLECTION_COMPLETED,
-        AgentEventType.AGENT_COMPLETED,
     ]
-    completed = events.events[-2]
+    completed = events.events[-1]
     assert completed.provider == "reflect"
     assert completed.model == "cheap-memory-model"
     assert completed.reflection_action == "none"
@@ -670,9 +670,17 @@ async def test_runtime_reflection_failure_does_not_change_success_result(
 
     assert result.ok is True
     assert result.content == "最终答案"
-    assert events.events[-2].type is AgentEventType.MEMORY_REFLECTION_FAILED
-    assert events.events[-2].reflection_error is not None
-    assert events.events[-1].type is AgentEventType.AGENT_COMPLETED
+    # reflection 失败不改变 Run 结果；agent_completed 先于 post-run 失败事件。
+    event_types = [event.type for event in events.events]
+    assert event_types.index(AgentEventType.AGENT_COMPLETED) < event_types.index(
+        AgentEventType.MEMORY_REFLECTION_FAILED
+    )
+    failed = next(
+        event
+        for event in events.events
+        if event.type is AgentEventType.MEMORY_REFLECTION_FAILED
+    )
+    assert failed.reflection_error is not None
 
 
 @pytest.mark.asyncio
@@ -703,8 +711,8 @@ async def test_runtime_model_error_skips_reflection(tmp_path: Path) -> None:
 
     assert result.stop_reason is AgentStopReason.MODEL_ERROR
     assert reflect.requests == []
-    assert events.events[-2].type is AgentEventType.MEMORY_REFLECTION_SKIPPED
-    assert events.events[-1].type is AgentEventType.AGENT_FAILED
+    assert events.events[-2].type is AgentEventType.AGENT_FAILED
+    assert events.events[-1].type is AgentEventType.MEMORY_REFLECTION_SKIPPED
 
 
 @pytest.mark.asyncio
@@ -746,5 +754,5 @@ async def test_runtime_max_steps_skips_reflection(tmp_path: Path) -> None:
 
     assert result.stop_reason is AgentStopReason.MAX_STEPS
     assert reflect.requests == []
-    assert events.events[-2].type is AgentEventType.MEMORY_REFLECTION_SKIPPED
-    assert events.events[-1].type is AgentEventType.AGENT_FAILED
+    assert events.events[-2].type is AgentEventType.AGENT_FAILED
+    assert events.events[-1].type is AgentEventType.MEMORY_REFLECTION_SKIPPED

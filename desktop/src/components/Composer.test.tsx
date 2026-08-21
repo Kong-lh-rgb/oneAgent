@@ -40,4 +40,21 @@ describe('Composer', () => {
     expect(html).toContain('aria-label="正在发送"')
     expect(html).toContain('disabled=""')
   })
+
+  it('提供 commands 时渲染 ⌘K 入口（面板默认收起）', () => {
+    const html = renderToStaticMarkup(
+      <Composer
+        disabled={false}
+        onSend={async () => {}}
+        commands={[
+          { id: 'stop', label: 'Stop Run', icon: 'close', onSelect: () => {} },
+          { id: 'runs', label: 'View current Run', icon: 'runs', onSelect: () => {} },
+        ]}
+      />,
+    )
+    expect(html).toContain('⌘K')
+    expect(html).toContain('aria-label="Commands"')
+    // 面板默认关闭，列表项不展开
+    expect(html).not.toContain('composer-commands__item')
+  })
 })

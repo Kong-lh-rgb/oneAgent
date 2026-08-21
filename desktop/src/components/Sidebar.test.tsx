@@ -82,4 +82,18 @@ describe('Sidebar (App Shell)', () => {
     )
     expect(html).not.toContain('nav-badge')
   })
+
+  it('dots 为 true 时在对应导航项渲染状态点', () => {
+    const html = renderToStaticMarkup(
+      <Sidebar current="chat" onNavigate={() => {}} connected dots={{ chat: true }} />,
+    )
+    expect(html).toContain('nav-badge--dot')
+  })
+
+  it('无 dots 时不渲染状态点', () => {
+    const html = renderToStaticMarkup(
+      <Sidebar current="chat" onNavigate={() => {}} connected />,
+    )
+    expect(html).not.toContain('nav-badge--dot')
+  })
 })

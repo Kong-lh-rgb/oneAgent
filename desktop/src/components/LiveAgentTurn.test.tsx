@@ -67,13 +67,13 @@ describe('LiveAgentTurn', () => {
         reasoning="先分析问题，再规划步骤"
       />,
     )
-    expect(html).toContain('思考过程')
+    expect(html).toContain('Thinking')
     expect(html).toContain('先分析问题，再规划步骤')
     expect(html).toContain('class="assistant-reasoning"')
     expect(html).not.toContain('assistant-reasoning--open')
   })
 
-  it('思考进行中（尚无正文）时自动展开并显示“思考中…”', () => {
+  it('思考进行中（尚无正文）时自动展开并显示 Thinking', () => {
     const html = renderToStaticMarkup(
       <LiveAgentTurn
         runId="run-1"
@@ -83,7 +83,7 @@ describe('LiveAgentTurn', () => {
         reasoning="正在分析需求…"
       />,
     )
-    expect(html).toContain('思考中…')
+    expect(html).toContain('Thinking')
     expect(html).toContain('assistant-reasoning--open')
     expect(html).toContain('assistant-reasoning__spinner')
   })

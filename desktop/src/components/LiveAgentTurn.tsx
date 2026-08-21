@@ -92,6 +92,24 @@ export default function LiveAgentTurn({
   const view = buildTurnView(events, { now: Date.now() })
   const isStreaming = !settling
 
+  // 最近一次思考的耗时（最近 model_started → 其后 model_completed）。
+  let thinkingDuration: number | null = null
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    if (events[i].type === 'model_started') {
+      const start = Date.parse(events[i].event_time)
+      for (let j = i; j < events.length; j += 1) {
+        if (events[j].type === 'model_completed') {
+          const end = Date.parse(events[j].event_time)
+          if (!Number.isNaN(start) && !Number.isNaN(end)) {
+            thinkingDuration = Math.max(0, end - start)
+          }
+          break
+        }
+      }
+      break
+    }
+  }
+
   return (
     <section
       className={`live-turn${settling ? ' live-turn--settling' : ''}`}
@@ -111,6 +129,7 @@ export default function LiveAgentTurn({
         text={reasoningText}
         autoExpand={!text}
         busy={!text && Boolean(reasoningText)}
+        durationMs={text ? thinkingDuration : null}
       />
 
       {/* Tool / Approval / Verification timeline（compact, terminal-like）。 */}

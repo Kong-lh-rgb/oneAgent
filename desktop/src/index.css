@@ -2524,6 +2524,271 @@ body.approval-app #root {
   letter-spacing: 0.02em;
 }
 
+/* ============ Agent Command Workspace：Run Status Bar ============ */
+
+.run-status-bar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.run-status-bar__identity {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.run-status-bar__brand {
+  color: var(--text-primary);
+  font-size: 11.5px;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+}
+
+.run-status-bar__title {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 620;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.run-status-bar__action {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.run-status-bar__stats {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-tertiary);
+  font-size: 11.5px;
+}
+
+.run-status-bar__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 650;
+}
+
+.run-status-bar__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.run-status-bar__status--working {
+  color: var(--accent);
+}
+
+.run-status-bar__status--working .run-status-bar__dot {
+  animation: turn-pulse 1.4s ease-in-out infinite;
+}
+
+.run-status-bar__status--completed {
+  color: var(--success);
+}
+
+.run-status-bar__status--failed {
+  color: var(--danger);
+}
+
+.run-status-bar__status--waiting {
+  color: var(--warning);
+}
+
+.run-status-bar__status--cancelled {
+  color: var(--text-tertiary);
+}
+
+.run-status-bar__actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.run-status-bar__failed {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0 0;
+  color: var(--danger);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.run-status-bar__failed-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger);
+}
+
+.run-status-bar__failed-stats {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+/* ============ Conversation Sidebar：压缩 + Agent 状态 ============ */
+
+.conversation-sidebar {
+  width: 216px;
+  flex-basis: 216px;
+}
+
+.conversation-sidebar__content {
+  width: 216px;
+}
+
+.conversation-sidebar__top {
+  padding: 12px 10px 8px;
+}
+
+.conversation-item {
+  padding: 7px 9px;
+  gap: 3px;
+}
+
+.conversation-item__title {
+  font-size: 12px;
+}
+
+.conversation-item__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+}
+
+.conversation-item__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+}
+
+.conversation-item__status::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.conversation-item__status--running {
+  color: var(--accent);
+}
+
+.conversation-item__status--running::before {
+  animation: turn-pulse 1.4s ease-in-out infinite;
+}
+
+.conversation-item__status--completed {
+  color: var(--success);
+}
+
+.conversation-item__status--failed {
+  color: var(--danger);
+}
+
+.conversation-item__status--waiting {
+  color: var(--warning);
+}
+
+.conversation-item__status--cancelled {
+  color: var(--text-tertiary);
+}
+
+/* ============ 侧栏状态点（克制） ============ */
+
+.nav-badge--dot {
+  width: 8px;
+  height: 8px;
+  min-width: 8px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: turn-pulse 1.6s ease-in-out infinite;
+}
+
+/* ============ Composer Command Palette（⌘K） ============ */
+
+.composer-dock {
+  position: relative;
+}
+
+.composer__cmd {
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--bg-surface-raised);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.composer__cmd:hover,
+.composer__cmd.active {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.composer-commands {
+  position: absolute;
+  right: 14px;
+  bottom: calc(100% + 8px);
+  min-width: 232px;
+  padding: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  border-radius: var(--radius-surface);
+  background: var(--bg-surface-raised);
+  box-shadow: 0 18px 48px rgba(63, 79, 104, 0.18);
+  -webkit-backdrop-filter: blur(16px) saturate(145%);
+  backdrop-filter: blur(16px) saturate(145%);
+  z-index: 120;
+  animation: dialog-in var(--transition-layout) both;
+}
+
+.composer-commands__item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.composer-commands__item:hover {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
 /* 侧栏导航徽标 */
 .nav-badge {
   position: absolute;

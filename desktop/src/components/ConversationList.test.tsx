@@ -15,19 +15,22 @@ const conversation: Conversation = {
 }
 
 describe('ConversationList', () => {
-  it('渲染新建入口、会话标题、消息数与选中态', () => {
+  it('渲染新建入口、标题、状态与选中态', () => {
     const html = renderToStaticMarkup(
       <ConversationList
         conversations={[conversation]}
         selectedId="conv-1"
+        statusByConversation={{ 'conv-1': 'running' }}
         onSelect={() => {}}
         onNew={() => {}}
       />,
     )
-    expect(html).toContain('New conversation')
+    expect(html).toContain('New')
     expect(html).toContain('Desktop redesign')
-    expect(html).toContain('12 messages')
+    expect(html).toContain('Working')
+    expect(html).toContain('conversation-item__status--running')
     expect(html).toContain('conversation-item active')
+    expect(html).not.toContain('12 messages')
   })
 
   it('空列表提供轻量空状态', () => {

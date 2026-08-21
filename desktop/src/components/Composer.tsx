@@ -2,6 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 
 import type { AgentMode } from '../api/types'
 import { Icon } from './Icon'
+import type { IconName } from './Icon'
+
+export interface ComposerCommand {
+  id: string
+  label: string
+  icon?: IconName
+  onSelect: () => void
+}
 
 export interface ComposerProps {
   disabled: boolean
@@ -11,6 +19,8 @@ export interface ComposerProps {
   onSend: (content: string) => Promise<void>
   value?: string
   onValueChange?: (value: string) => void
+  /** 轻量 Command palette 项（⌘K）。 */
+  commands?: ComposerCommand[]
 }
 
 export default function Composer({
@@ -21,12 +31,25 @@ export default function Composer({
   onSend,
   value,
   onValueChange,
+  commands,
 }: ComposerProps): React.JSX.Element {
   const [internalValue, setInternalValue] = useState('')
+  const [commandOpen, setCommandOpen] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const draft = value ?? internalValue
   const busy = disabled || sending
   const canSend = draft.trim() !== '' && !busy
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setCommandOpen((open) => !open)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   const setDraft = (next: string): void => {
     if (value === undefined) setInternalValue(next)
@@ -92,6 +115,18 @@ export default function Composer({
             ))}
           </div>
           <span className="composer__hint">Enter 发送 · Shift+Enter 换行</span>
+          {commands && commands.length > 0 ? (
+            <button
+              type="button"
+              className={`composer__cmd ${commandOpen ? 'active' : ''}`}
+              onClick={() => setCommandOpen((open) => !open)}
+              aria-expanded={commandOpen}
+              title="Commands (⌘K)"
+              aria-label="Commands"
+            >
+              ⌘K
+            </button>
+          ) : null}
           <button
             type="button"
             className="composer__send"
@@ -104,6 +139,25 @@ export default function Composer({
           </button>
         </div>
       </div>
+      {commands && commandOpen ? (
+        <div className="composer-commands" role="menu" aria-label="Commands">
+          {commands.map((command) => (
+            <button
+              key={command.id}
+              type="button"
+              role="menuitem"
+              className="composer-commands__item"
+              onClick={() => {
+                setCommandOpen(false)
+                command.onSelect()
+              }}
+            >
+              {command.icon ? <Icon name={command.icon} size={14} /> : null}
+              {command.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }

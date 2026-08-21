@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 
 import { listApprovals } from './api/approvals'
+import { listArtifacts } from './api/artifacts'
 import { useEventsStore } from './stores/events'
 import { createDesktopNotificationController } from './notifications/desktop'
 import Sidebar from './components/Sidebar'
@@ -62,6 +63,14 @@ export default function App(): React.JSX.Element {
     refetchInterval: 4000,
   })
 
+  // 侧栏背景状态：最近有新交付物（very light，不刷 dashboard 数字墙）。
+  const artifactsIndicatorQuery = useQuery({
+    queryKey: ['rail-artifacts'],
+    queryFn: () => listArtifacts({ limit: 1 }),
+    refetchInterval: 6000,
+  })
+  const hasArtifacts = (artifactsIndicatorQuery.data?.length ?? 0) > 0
+
   // 实时 running run 数（来自 run.status 事件）+ pending 审批数 → 侧栏徽标。
   const runningCount = Object.values(runStatuses).filter(
     (status) => status === 'running',
@@ -88,6 +97,10 @@ export default function App(): React.JSX.Element {
           runs: runningCount,
           approvals: pendingApprovalCount,
         }}
+        dots={{
+          chat: runningCount > 0,
+          artifacts: hasArtifacts,
+        }}
       />
       <div className="main">
         {!connected && everConnected ? (
@@ -96,7 +109,7 @@ export default function App(): React.JSX.Element {
             Host 连接已断开，正在重连…
           </div>
         ) : null}
-        {page === 'chat' && <ChatPage />}
+        {page === 'chat' && <ChatPage onNavigate={navigate} />}
         {page === 'runs' &&
           (selectedRunId ? (
             <RunDetailPage runId={selectedRunId} onBack={() => setSelectedRunId(null)} />

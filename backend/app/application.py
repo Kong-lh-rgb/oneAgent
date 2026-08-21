@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from app.agent.events import AgentEventHandler
+from app.agent.post_run_processor import PostRunProcessor
 from app.agent.runtime import AgentRuntime
 from app.approval import (
     DesktopApprovalGate,
@@ -263,6 +264,9 @@ class Application:
         # 全局共享事件观察者（Server 在 start() 前注入 Desktop 广播 handler）。
         self.shared_event_handler = shared_event_handler
 
+        # Post-Run 后台任务（Memory Reflection 等）由 Application 统一管理生命周期。
+        self.post_run_processor = PostRunProcessor()
+
         # 在 start() 中构建的依赖。
         self.conversation_store: SQLiteConversationStore | None = None
         self.summary_store: SQLiteConversationSummaryStore | None = None
@@ -472,6 +476,7 @@ class Application:
             skill_store=skill_store,
             skill_context_provider=skill_context_provider,
             tool_hooks=computer_hooks,
+            post_run_submit=self.post_run_processor.submit,
         )
 
         run_store = SQLiteRunStore(database)
@@ -553,10 +558,13 @@ class Application:
         self._started = True
 
     async def close(self) -> None:
-        """优雅关闭 Scheduler / MCP / Computer Runtime / 模型适配器（幂等）。"""
+        """优雅关闭 Post-Run / Scheduler / MCP / Computer / 模型适配器（幂等）。"""
 
         if not self._started:
             return
+        # 先 drain post-run 后台任务（可能仍在用模型 registry / memory store），
+        # 避免 event loop 关闭时遗留 pending task；有界等待，超时后 cancel。
+        await self.post_run_processor.close()
         if self.automation_scheduler is not None:
             await self.automation_scheduler.shutdown()
         if self.mcp_manager is not None and self.tool_registry is not None:

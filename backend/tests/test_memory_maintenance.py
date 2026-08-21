@@ -237,16 +237,24 @@ async def test_full_capacity_archives_then_creates_without_exceeding_limit(
     assert maintain.requests[0].temperature == 0.1
     assert "完整正文 1" in (maintain.requests[0].messages[-1].content or "")
     event_types = [event.type for event in events.events]
-    assert event_types[-4:] == [
-        AgentEventType.MEMORY_MAINTENANCE_STARTED,
-        AgentEventType.MEMORY_MAINTENANCE_COMPLETED,
-        AgentEventType.MEMORY_REFLECTION_COMPLETED,
-        AgentEventType.AGENT_COMPLETED,
-    ]
-    maintenance_event = events.events[-3]
+    # agent_completed 先于 memory reflection（post-run housekeeping 不阻塞 Run）。
+    assert event_types.index(AgentEventType.AGENT_COMPLETED) < event_types.index(
+        AgentEventType.MEMORY_REFLECTION_STARTED
+    )
+    assert AgentEventType.MEMORY_REFLECTION_COMPLETED in event_types
+    assert AgentEventType.MEMORY_MAINTENANCE_COMPLETED in event_types
+    maintenance_event = next(
+        event
+        for event in events.events
+        if event.type is AgentEventType.MEMORY_MAINTENANCE_COMPLETED
+    )
     assert maintenance_event.maintenance_memory_id == "M001"
     assert maintenance_event.maintenance_remaining_overflow == 0
-    reflection_event = events.events[-2]
+    reflection_event = next(
+        event
+        for event in events.events
+        if event.type is AgentEventType.MEMORY_REFLECTION_COMPLETED
+    )
     assert reflection_event.reflection_memory_id == "M026"
     assert reflection_event.reflection_mutation_applied is True
 
@@ -324,7 +332,10 @@ async def test_maintenance_failure_never_archives_or_fails_agent(
     )
     assert failed.maintenance_error is not None
     assert error_text in failed.maintenance_error
-    assert events.events[-1].type is AgentEventType.AGENT_COMPLETED
+    event_types = [event.type for event in events.events]
+    assert event_types.index(AgentEventType.AGENT_COMPLETED) < event_types.index(
+        AgentEventType.MEMORY_MAINTENANCE_FAILED
+    )
 
 
 @pytest.mark.asyncio
@@ -438,7 +449,10 @@ async def test_preexisting_overflow_converges_with_bounded_actions(
     assert len(maintain.requests) == 2
     assert (manager.memory_dir / "archive" / "M001.md").is_file()
     assert (manager.memory_dir / "archive" / "M002.md").is_file()
-    assert events.events[-1].type is AgentEventType.AGENT_COMPLETED
+    event_types = [event.type for event in events.events]
+    assert event_types.index(AgentEventType.AGENT_COMPLETED) < event_types.index(
+        AgentEventType.MEMORY_MAINTENANCE_STARTED
+    )
 
 
 @pytest.mark.asyncio
@@ -473,7 +487,10 @@ async def test_maintenance_can_recover_overflow_without_reflection(
     assert result.ok is True
     assert await manager.active_count() == 25
     assert len(maintain.requests) == 1
-    assert events.events[-1].type is AgentEventType.AGENT_COMPLETED
+    event_types = [event.type for event in events.events]
+    assert event_types.index(AgentEventType.AGENT_COMPLETED) < event_types.index(
+        AgentEventType.MEMORY_MAINTENANCE_STARTED
+    )
 
 
 @pytest.mark.asyncio

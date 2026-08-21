@@ -27,6 +27,8 @@ export interface SidebarProps {
   connected: boolean
   /** 各导航项徽标（数字 >0 才显示），如 running run 数 / pending 审批数。 */
   badges?: Partial<Record<PageKey, number>>
+  /** 背景状态点（非常克制）：Chat running、Artifacts 有新结果等。 */
+  dots?: Partial<Record<PageKey, boolean>>
 }
 
 export default function Sidebar({
@@ -34,6 +36,7 @@ export default function Sidebar({
   onNavigate,
   connected,
   badges,
+  dots,
 }: SidebarProps): ReactElement {
   const badgeFor = (key: PageKey): number | null => {
     const value = badges?.[key]
@@ -60,6 +63,8 @@ export default function Sidebar({
               <span className="nav-badge" aria-label={`${badgeFor(item.key)}`}>
                 {badgeFor(item.key)! > 99 ? '99+' : badgeFor(item.key)}
               </span>
+            ) : dots?.[item.key] ? (
+              <span className="nav-badge nav-badge--dot" aria-hidden="true" />
             ) : null}
           </button>
         ))}

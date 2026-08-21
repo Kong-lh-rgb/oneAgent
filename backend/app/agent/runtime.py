@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import suppress
 from typing import Any
 from uuid import uuid4
@@ -125,6 +125,7 @@ class AgentRuntime:
         memory_maintenance_reflector: MemoryMaintenanceReflector | None = None,
         skill_store: SkillStore | None = None,
         skill_context_provider: SkillContextProvider | None = None,
+        post_run_submit: Callable[[Callable[[], Any]], bool] | None = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -154,6 +155,7 @@ class AgentRuntime:
         self._memory_maintenance_reflector = memory_maintenance_reflector
         self._skill_store = skill_store
         self._skill_context_provider = skill_context_provider
+        self._post_run_submit = post_run_submit
         self._tool_executor = tool_executor or ToolExecutor(
             tool_registry,
             approval_gate=approval_gate,
@@ -261,12 +263,9 @@ class AgentRuntime:
                             else None
                         ),
                     )
-            await self._run_post_run_memory_reflection(
-                result,
-                user_input=user_input,
-                conversation_id=conversation_id,
-                emitter=emitter,
-            )
+            # Critical path 在 checkpoint + AGENT_COMPLETED/FAILED 处结束；
+            # Memory Reflection 属于 post-run housekeeping，移交给后台（见
+            # _schedule_post_run），不再阻塞 Run completed / conversation.send。
             await emitter.emit(
                 (
                     AgentEventType.AGENT_COMPLETED
@@ -279,6 +278,12 @@ class AgentRuntime:
                 stop_reason=result.stop_reason,
                 error=result.error,
                 result=result,
+            )
+            await self._schedule_post_run(
+                result,
+                user_input=user_input,
+                conversation_id=conversation_id,
+                emitter=emitter,
             )
             return result
         finally:
@@ -907,7 +912,7 @@ class AgentRuntime:
             ),
         )
 
-    async def _run_post_run_memory_reflection(
+    async def _schedule_post_run(
         self,
         result: AgentResult,
         *,
@@ -915,9 +920,17 @@ class AgentRuntime:
         conversation_id: str | None,
         emitter: _EventEmitter,
     ) -> None:
-        """正常完成后同步反思并维护普通 Memory；失败不改变主结果。"""
+        """Post-run housekeeping 调度（critical path 结束点调用）。
+
+        在 Run 完成（AGENT_COMPLETED/FAILED 已发）后判定是否需要 Memory
+        Reflection，构造稳定 snapshot 输入，并交给后台执行；没有后台
+        processor（如直接构造 Runtime 的测试）时同步 fallback 保持旧行为。
+        失败不改变主结果。
+        """
 
         reflector = self._memory_reflector
+        manager = self._memory_manager
+
         if reflector is None:
             if (
                 self._memory_maintenance_reflector is not None
@@ -950,14 +963,9 @@ class AgentRuntime:
                 reflection_skip_reason=f"stop_reason={result.stop_reason.value}",
             )
             return
-        await emitter.emit(
-            AgentEventType.MEMORY_REFLECTION_STARTED,
-            reflection_triggered=True,
-            provider=reflector.provider_hint,
-            model=reflector.model_hint,
-        )
-        manager = self._memory_manager
-        proposal = None
+
+        # 构造稳定 snapshot：在 Run 完成时捕获输入，后台任务不再读取当前
+        # conversation / memory，避免下一轮输入污染上一 Run 的 reflection。
         try:
             if manager is None:
                 raise RuntimeError("memory manager unavailable")
@@ -986,6 +994,64 @@ class AgentRuntime:
                 memory_index=memory_index,
                 task_context=task_context,
             )
+        except Exception as exc:
+            # snapshot 构造失败：不能把已完成的 Run 改成 failed；只记录 post-run 失败。
+            await emitter.emit(
+                AgentEventType.MEMORY_REFLECTION_FAILED,
+                reflection_triggered=True,
+                reflection_error=f"{type(exc).__name__}: {exc}",
+                reflection_mutation_applied=False,
+                provider=reflector.provider_hint,
+                model=reflector.model_hint,
+                usage=ModelUsage(),
+            )
+            if manager is not None:
+                await self._ensure_memory_capacity(
+                    required_slots=0,
+                    emitter=emitter,
+                )
+            return
+
+        async def _job() -> None:
+            await self._run_post_run_reflection(
+                reflector=reflector,
+                manager=manager,
+                reflection_input=reflection_input,
+                recalled_memory_revisions=recalled_memory_revisions,
+                emitter=emitter,
+            )
+
+        if self._post_run_submit is not None:
+            self._post_run_submit(_job)
+        else:
+            # 无后台 processor（直接构造 Runtime）：同步 fallback，保持旧语义。
+            await _job()
+
+    async def _run_post_run_reflection(
+        self,
+        *,
+        reflector: PostRunMemoryReflector,
+        manager: MemoryManager,
+        reflection_input: MemoryReflectionInput,
+        recalled_memory_revisions: dict[str, int],
+        emitter: _EventEmitter,
+    ) -> None:
+        """后台执行 Memory Reflection：决策 → 应用 → 维护。失败只进事件/日志。
+
+        CREATE / UPDATE 的 revision 与 capacity 语义由 MemoryManager 保证，
+        与下一 Run 并发也安全（本方法只做决策与应用，不读 conversation）。
+        """
+
+        await emitter.emit(
+            AgentEventType.MEMORY_REFLECTION_STARTED,
+            reflection_triggered=True,
+            provider=reflector.provider_hint,
+            model=reflector.model_hint,
+        )
+        proposal = None
+        memory_id: str | None = None
+        mutation_applied = False
+        try:
             proposal = await reflector.decide(reflection_input)
             if proposal.error is not None:
                 raise RuntimeError(proposal.error)
@@ -993,8 +1059,6 @@ class AgentRuntime:
                 raise RuntimeError("reflection model returned no decision")
 
             decision = proposal.decision
-            memory_id: str | None = None
-            mutation_applied = False
             if decision.action is ReflectionAction.UPDATE:
                 memory_id = decision.memory_id
                 expected_revision = recalled_memory_revisions.get(memory_id or "")
@@ -1073,18 +1137,16 @@ class AgentRuntime:
                 usage=usage,
             )
             if (
-                manager is not None
-                and (
-                    proposal is None
-                    or proposal.decision is None
-                    or proposal.decision.action is not ReflectionAction.CREATE
-                )
+                proposal is None
+                or proposal.decision is None
+                or proposal.decision.action is not ReflectionAction.CREATE
             ):
                 await self._ensure_memory_capacity(
                     required_slots=0,
                     emitter=emitter,
                 )
             return
+
         maintenance_required = await manager.maintenance_required()
         candidate_ids: tuple[str, ...] = ()
         if maintenance_required:
@@ -1093,7 +1155,7 @@ class AgentRuntime:
         await emitter.emit(
             AgentEventType.MEMORY_REFLECTION_COMPLETED,
             reflection_triggered=True,
-            reflection_action=decision.action.value,
+            reflection_action=proposal.decision.action.value,
             reflection_duration_ms=proposal.duration_ms,
             reflection_memory_id=memory_id,
             reflection_mutation_applied=mutation_applied,
