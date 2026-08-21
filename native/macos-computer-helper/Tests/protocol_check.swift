@@ -377,8 +377,9 @@ do {
         "params": ["session_id": "sess-3"],
     ])
     check(
-        "已有 active session 时 begin 其它 → 拒绝",
-        (begin3["result"] as? [String: Any])?["accepted"] as? Bool == false
+        "已有 active session 时 begin 其它 → session_mismatch",
+        (begin3["error"] as? [String: Any])?["code"] as? String
+            == "session_mismatch"
     )
     // 旧 session 的请求必须 fail closed（session_mismatch）。
     let oldSession = try request([
@@ -412,6 +413,23 @@ do {
     check(
         "action AXShowMenu → show_menu",
         axActions?.contains(["AXShowMenu", "show_menu"]) == true
+    )
+    check(
+        "action AXRaise → raise",
+        axActions?.contains(["AXRaise", "raise"]) == true
+    )
+    // custom action 只保留干净 display name，绝不含 _target/_selector/指针。
+    check(
+        "custom action 共享 → 只保留名称",
+        axActions?.contains(["custom_share", "共享"]) == true
+    )
+    check(
+        "custom action 删除 → 只保留名称",
+        axActions?.contains(["custom_delete", "删除"]) == true
+    )
+    check(
+        "custom action 置顶 → 只保留名称",
+        axActions?.contains(["custom_pin", "置顶"]) == true
     )
     let truncation = logic?["value_truncation"] as? [String: Any]
     check("value 短文本保留", truncation?["plain"] as? String == "hello")

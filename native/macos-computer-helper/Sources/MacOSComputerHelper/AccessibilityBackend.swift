@@ -34,9 +34,44 @@ func truncateText(_ text: String, limit: Int) -> String {
 }
 
 /// "AXPress" → "press"，"AXShowMenu" → "show_menu"。
+/// 非 AX 前缀（custom action display）：只保留干净名称，去掉 Native 实现细节
+/// （_target/_selector/指针/对象 description）。
 func normalizeActionName(_ raw: String) -> String {
-    let stripped = raw.hasPrefix("AX") ? String(raw.dropFirst(2)) : raw
-    return snakeCase(stripped)
+    if raw.hasPrefix("AX") {
+        return snakeCase(String(raw.dropFirst(2)))
+    }
+    return cleanCustomActionName(raw)
+}
+
+/// 从 AX custom action 的 description 里提取干净 display name。
+/// 例："name:共享\n_target:0x0\n_selector:(null)" → "共享"
+private func cleanCustomActionName(_ raw: String) -> String {
+    let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    if text.isEmpty { return raw }
+
+    // AX 对 custom action 常用 "name:显示名\n..." 前缀，优先提取。
+    if let marker = text.range(of: "name:") {
+        let after = text[marker.upperBound...]
+        if let name = after.split(whereSeparator: { $0 == "\n" }).first,
+           !name.isEmpty {
+            return String(name).trimmingCharacters(in: .whitespaces)
+        }
+    }
+
+    // 去掉 Native implementation detail 行（指针 / 选择器 / 对象地址 / description）。
+    let lines = text.split(separator: "\n").filter { line -> Bool in
+        let l = line.trimmingCharacters(in: .whitespaces)
+        if l.hasPrefix("_target:") || l.hasPrefix("_selector:")
+            || l.hasPrefix("_returnValue:") {
+            return false
+        }
+        if l.hasPrefix("0x") || l.hasPrefix("<") || l.hasPrefix("NS") {
+            return false
+        }
+        return true
+    }
+    let cleaned = lines.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+    return cleaned.isEmpty ? raw : cleaned
 }
 
 /// "AXButton" → "button"；未知 role 做简单 normalize（去 AX 前缀 + snake_case）。

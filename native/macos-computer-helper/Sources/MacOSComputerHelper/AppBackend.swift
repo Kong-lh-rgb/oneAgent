@@ -144,8 +144,15 @@ func handleBeginSession(params: Any?, id: Any?) {
         writeResponse(makeError(id: id, code: "invalid_params",
                                 message: "missing 'session_id'")); return
     }
-    let accepted = beginSession(sessionID)
-    writeResponse(["id": id ?? NSNull(), "result": ["accepted": accepted]])
+    guard beginSession(sessionID) else {
+        writeResponse(makeError(
+            id: id,
+            code: "session_mismatch",
+            message: "another computer session is already active"
+        ))
+        return
+    }
+    writeResponse(["id": id ?? NSNull(), "result": ["accepted": true]])
 }
 
 /// 处理 end_session 请求：结束 Run 的 Session，清除 Native Target / Snapshot。

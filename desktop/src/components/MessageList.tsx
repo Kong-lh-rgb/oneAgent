@@ -23,36 +23,48 @@ function buildThread(messages: Message[]): RenderedTurn[] {
   let assistantOpen = false
 
   messages.forEach((message, index) => {
-    if (message.role === 'system') return
-    if (message.role === 'user') {
-      assistantOpen = false
-      out.push({
-        key: index,
-        role: 'user',
-        author: true,
-        content: message.content ?? '',
-      })
-      return
-    }
-    // assistant
-    // 1) 带工具调用的中间消息（tool_calls）：协议噪音，无论正文是否为空一律
-    //    不渲染 —— 模型一轮回复里可能有很多步，避免回复区出现长串工具调用。
-    if (message.tool_calls && message.tool_calls.length > 0) {
-      return
-    }
-    // 2) 无正文且无思考的空消息：同样跳过，让一次回复到最后只有一个头像。
-    const content = message.content ?? ''
-    const reasoning = message.reasoning ?? ''
-    if (!content && !reasoning) return
+    switch (message.role) {
+      case 'system':
+        // 系统消息：协议内部，不渲染。
+        return
+      case 'tool':
+        // ToolResult：属于 Agent 上下文 / Trace，不进入主聊天正文。
+        return
+      case 'user': {
+        assistantOpen = false
+        out.push({
+          key: index,
+          role: 'user',
+          author: true,
+          content: message.content ?? '',
+        })
+        return
+      }
+      case 'assistant': {
+        // 1) 带工具调用的中间消息（tool_calls）：协议噪音，无论正文是否为空一律
+        //    不渲染 —— 模型一轮回复里可能有很多步，避免回复区出现长串工具调用。
+        if (message.tool_calls && message.tool_calls.length > 0) {
+          return
+        }
+        // 2) 无正文且无思考的空消息：同样跳过，让一次回复到最后只有一个头像。
+        const content = message.content ?? ''
+        const reasoning = message.reasoning ?? ''
+        if (!content && !reasoning) return
 
-    out.push({
-      key: index,
-      role: 'assistant',
-      author: !assistantOpen,
-      content,
-      reasoning,
-    })
-    assistantOpen = true
+        out.push({
+          key: index,
+          role: 'assistant',
+          author: !assistantOpen,
+          content,
+          reasoning,
+        })
+        assistantOpen = true
+        return
+      }
+      default:
+        // 未知 role：fail closed，不渲染（绝不当 assistant）。
+        return
+    }
   })
 
   return out

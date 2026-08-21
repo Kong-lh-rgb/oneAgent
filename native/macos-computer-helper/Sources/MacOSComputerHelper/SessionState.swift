@@ -197,15 +197,14 @@ func desktopStateIsFresh(
 func restoreRecordedTarget(requireStableBounds: Bool = false) -> Bool {
     guard let pid = currentTargetPID,
           computerTargetPID == pid,
-          runningComputerTarget() != nil,
+          let application = runningComputerTarget(),
           let window = currentFocusedWindow,
           let observationID = currentObservationID else {
         return false
     }
-    // 1) 把记录的 App 激活到前台（激活过程异步生效）。
-    NSRunningApplication(processIdentifier: pid)?.activate(options: [])
-    // 2) 把记录的 focused window 抬到最前（幂等；窗口已关闭时失败无害）。
-    _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+    // 只恢复 Session 已记录的精确 App/window，同时设置 AXFrontmost、Main、
+    // Focused 与 Raise；绝不读取当前 user frontmost 作为替代目标。
+    requestApplicationFrontmost(application, window: window)
     // 3) 短轮询等待前台切换，并确认仍是记录的目标 App/Window。
     for _ in 0..<10 {
         if desktopStateIsFresh(expectedObservationID: observationID,

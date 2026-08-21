@@ -70,6 +70,7 @@ class ComputerSession:
         """记录最近一次 Observation（作为 Snapshot 生命周期依据）。"""
 
         self.current_snapshot = observation
+        self.target_window = observation.active_window
 
     def invalidate_snapshot(self) -> None:
         """任何产生 UI side effect 的 Action 后使 Snapshot 失效。"""

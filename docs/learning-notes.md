@@ -1833,10 +1833,9 @@ Multi-Agent / Task Graph / Planner DAG。Pattern Mining V1 完全用一次结构
 ### 41.3 成功分成投递成功与效果成功
 
 - `delivery_status=delivered`：CGEvent 已发给目标进程，只说明命令送达。
-- `verification_status=verified`：输入前后完整 AXValue 确实发生变化。
-- `verification_status=unverified`：目标不暴露可读 AXValue；需要重新 Observe，不能宣称完成。
-- `verification_status=mismatch`：AXValue 可读但轮询后未变化，工具按失败处理。
-- 验证只保存字符数和是否变化，不把输入前后的正文写入 Trace，避免泄露敏感内容。
+- `computer_type` 完成时固定是 `verification_status=unverified`：mutation 前的 AX 对象不能证明 mutation 后的真实 UI。
+- Action 后必须立即 invalidate Snapshot；只有下一次 fresh Observe 得到的新 Snapshot 才能作为效果证据。
+- 因此“事件已投递”和“界面已出现文字”属于两个时刻、两份 Snapshot，不能在 Native 返回里合并成一个成功结论。
 
 ### 41.4 Agent Loop 的最后一步也必须能消费证据
 
@@ -1888,3 +1887,26 @@ Multi-Agent / Task Graph / Planner DAG。Pattern Mining V1 完全用一次结构
 - `AXValue` 可写不等于能够输入文本：splitter、scroll bar 也可能 editable。文本输入必须进一步限制为 text_area/text_field/combo_box。
 - AX window identity 与 window bounds 是不同概念。同一窗口被系统移动后，语义 element ref 仍可安全使用；只有基于截图的坐标点击必须要求 bounds 保持不变。
 - 停滞指纹同样应忽略 bounds 和统计数量的小幅抖动，只把目标变化、语义控件变化或已验证副作用视为真正进展。
+
+## 44. Computer Runtime V2：Session 是输入安全边界（2026-08-21）
+
+### 44.1 握手必须双向确认
+
+- Python 创建 session 只是本地意图；Native 返回 `accepted=true` 才代表控制权真的建立。
+- 同一个 session 重复 begin 是幂等恢复，不应制造新状态。
+- Native 已有其它 active session 时必须返回结构化 `session_mismatch`，不能把冲突藏在普通 result 的布尔值里。
+- 返回缺少 `accepted=true` 时，Python 回滚本地 session。宁可本轮停止，也不能让两端各自相信不同的 active owner。
+
+### 44.2 Background-first 不等于向任意后台应用发事件
+
+- 输入目标来自当前 Session Snapshot 的 PID、AX window 和 element ref，三者共同构成精确目标。
+- 首先在后台尝试 AX focus，再用 `CGEventPostToPid` 定向投递；这条路径不依赖用户此刻的 frontmost App。
+- 只有后台 AX focus 失败时才允许 foreground fallback，而且只能恢复同一 Session 已记录的 App/window。
+- restore 后必须重新检查 session、observation id、PID、window 和真实 `AXFocusedUIElement`；任何一项变化都 fail closed。
+
+### 44.3 Type 是插入动作，不是字段赋值
+
+- `AXSetValue` 的语义是替换整个字段，不能拿来实现“在当前光标处输入”。
+- `computer_type` 始终用 Unicode CGEvent 插入，因此已有 `hello` 时输入 ` Vesta` 会得到 `hello Vesta`。
+- Native 只能确认事件已定向投递；真实效果由 mutation 后的新 Observe 确认。
+- 真机 E2E 应验证 UI 内容，而不是只断言返回的 `characters` 或 `success=true`。

@@ -17,7 +17,7 @@ from app.computer.errors import (
     STALE_SNAPSHOT,
     canonicalize,
 )
-from app.computer.models import ActiveApp, Observation
+from app.computer.models import ActiveApp, Bounds, Observation, Window
 from app.computer.session import (
     ComputerSessionError,
     ComputerSessionManager,
@@ -142,6 +142,21 @@ def test_action_invalidates_snapshot() -> None:
 
     session.invalidate_snapshot()
     assert session.snapshot_id() is None
+
+
+def test_attach_snapshot_records_exact_target_window() -> None:
+    manager = ComputerSessionManager()
+    session = manager.begin("run-a")
+    window = Window(
+        ref="w7",
+        title="Document",
+        bounds=Bounds(x=0, y=0, width=800, height=600),
+    )
+    observation = Observation(id="obs-1", active_window=window)
+
+    session.attach_snapshot(observation)
+
+    assert session.target_window is window
 
 
 # ---------------------------------------------------------------------------

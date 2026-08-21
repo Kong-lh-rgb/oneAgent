@@ -53,6 +53,7 @@ from app.computer import (
     ActionResult,
     ComputerHelperError,
     ComputerHelperProcessError,
+    ComputerHelperProtocolError,
     CoordinateTarget,
     Element,
     ElementTarget,
@@ -120,6 +121,33 @@ def _snapshot(runtime: MacOSComputerRuntime) -> Observation | None:
 
 def _attach(runtime: MacOSComputerRuntime, observation: Observation) -> None:
     runtime._session_manager.require_active().attach_snapshot(observation)
+
+
+async def test_begin_session_rpc_requires_explicit_native_acceptance() -> None:
+    stub = StubHelperClient(per_method={"begin_session": {"accepted": True}})
+    runtime = MacOSComputerRuntime(stub)  # type: ignore[arg-type]
+
+    session = await runtime.begin_session_rpc("run-a")
+    repeated = await runtime.begin_session_rpc("run-a")
+
+    assert runtime._session_manager.get("run-a") is session
+    assert repeated is session
+    assert stub.calls == [("begin_session", {}), ("begin_session", {})]
+    assert stub.session_ids == [session.session_id, session.session_id]
+
+
+@pytest.mark.parametrize("result", [{}, {"accepted": False}])
+async def test_begin_session_rpc_fails_closed_without_native_acceptance(
+    result: dict,
+) -> None:
+    runtime = MacOSComputerRuntime(  # type: ignore[arg-type]
+        StubHelperClient(per_method={"begin_session": result})
+    )
+
+    with pytest.raises(ComputerHelperProtocolError):
+        await runtime.begin_session_rpc("run-a")
+
+    assert runtime._session_manager.get_active() is None
 
 
 # ---------------------------------------------------------------------------

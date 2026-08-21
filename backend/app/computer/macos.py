@@ -162,10 +162,14 @@ class MacOSComputerRuntime:
         session = self._session_manager.begin(run_id)
         try:
             await self.helper_client.ensure_started()
-            await self.helper_client.call(
+            result = await self.helper_client.call(
                 "begin_session",
                 {"session_id": session.session_id},
             )
+            if result.get("accepted") is not True:
+                raise ComputerHelperProtocolError(
+                    "computer helper did not explicitly accept begin_session"
+                )
         except Exception:  # noqa: BLE001 - 会话建立失败必须 fail closed
             self._session_manager.end(run_id)
             raise

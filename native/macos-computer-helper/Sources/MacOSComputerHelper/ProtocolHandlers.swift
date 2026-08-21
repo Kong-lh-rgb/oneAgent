@@ -24,6 +24,19 @@ func handleTestAXLogic(params: Any?, id: Any?) {
             "actions": [
                 ["AXPress", normalizeActionName("AXPress")],
                 ["AXShowMenu", normalizeActionName("AXShowMenu")],
+                ["AXRaise", normalizeActionName("AXRaise")],
+                [
+                    "custom_share",
+                    normalizeActionName("name:共享\n_target:0x0\n_selector:(null)"),
+                ],
+                [
+                    "custom_delete",
+                    normalizeActionName("name:删除\n_target:0x0\n_selector:(null)"),
+                ],
+                [
+                    "custom_pin",
+                    normalizeActionName("name:置顶\n_target:0x0\n_selector:(null)"),
+                ],
             ],
             "value_truncation": [
                 "plain": truncateText("hello", limit: kMaxValueLength),
@@ -431,6 +444,8 @@ func successfulTypePayload(_ text: String) -> [String: Any] {
 
 /// focusElement 的失败分类与协议错误码。
 private enum FocusError: Error {
+    case sessionNotActive
+    case sessionMismatch
     case staleObservation
     case elementNotFound
     case focusFailed
@@ -438,6 +453,8 @@ private enum FocusError: Error {
 
     var code: String {
         switch self {
+        case .sessionNotActive: return "session_not_active"
+        case .sessionMismatch: return "session_mismatch"
         case .staleObservation: return "stale_observation"
         case .elementNotFound: return "element_not_found"
         case .focusFailed: return "focus_failed"
@@ -470,6 +487,121 @@ fileprivate func focusElement(
         return .failure(.focusFailed)
     }
     return .success(element)
+}
+
+/// 确认目标进程报告的真实 AXFocusedUIElement 正是指定元素。
+private func exactElementIsFocused(_ element: AXUIElement, pid: pid_t) -> Bool {
+    let application = AXUIElementCreateApplication(pid)
+    var focusedValue: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(
+        application,
+        kAXFocusedUIElementAttribute as CFString,
+        &focusedValue
+    ) == .success,
+    let focusedValue,
+    CFGetTypeID(focusedValue) == AXUIElementGetTypeID() else {
+        return false
+    }
+    return CFEqual(focusedValue, element)
+}
+
+/// type / key 共用的精确输入目标。PID、窗口和元素全部来自当前 Session 的
+/// Snapshot，绝不读取或接管用户此刻的 frontmost App。
+private struct PreparedInputTarget {
+    let pid: pid_t
+    let elementRef: String?
+    let executionMode: String
+}
+
+/// 先尝试后台聚焦 Snapshot 中的精确元素；只有 AX 聚焦失败时，才允许恢复
+/// 当前 Session 已记录的精确 App/Window 并重试。恢复后再次验证 session、PID、
+/// window 与 observation freshness，任何不确定状态都 fail closed。
+private func prepareExactInputTarget(
+    observationID: String,
+    sessionID: String,
+    requestedElementRef: String?,
+    requireEditable: Bool
+) -> Result<PreparedInputTarget, FocusError> {
+    switch checkSession(sessionID) {
+    case .notActive:
+        return .failure(.sessionNotActive)
+    case .mismatch:
+        return .failure(.sessionMismatch)
+    case .ok:
+        break
+    }
+    guard targetSnapshotIsFresh(
+              expectedObservationID: observationID,
+              sessionID: sessionID
+          ),
+          let expectedPID = currentTargetPID,
+          let expectedWindow = currentFocusedWindow else {
+        return .failure(.staleObservation)
+    }
+
+    // key 未显式指定元素时，优先沿用本 Snapshot 的真实 focused element；
+    // 若 Snapshot 没有元素焦点，仍只向精确 PID/window 定向投递按键。
+    let elementRef = requestedElementRef ?? currentFocusedElementRef
+
+    func snapshotStillExact() -> Bool {
+        guard currentTargetPID == expectedPID,
+              let window = currentFocusedWindow,
+              CFEqual(window, expectedWindow) else { return false }
+        return targetSnapshotIsFresh(
+            expectedObservationID: observationID,
+            sessionID: sessionID
+        )
+    }
+
+    func focusExactElement() -> Result<Void, FocusError> {
+        guard let elementRef else { return .success(()) }
+        switch focusElement(
+            observationID: observationID,
+            elementRef: elementRef,
+            requireEditable: requireEditable
+        ) {
+        case .success(let element):
+            guard snapshotStillExact() else {
+                return .failure(.staleObservation)
+            }
+            return exactElementIsFocused(element, pid: expectedPID)
+                ? .success(()) : .failure(.focusFailed)
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    switch focusExactElement() {
+    case .success:
+        return .success(PreparedInputTarget(
+            pid: expectedPID,
+            elementRef: elementRef,
+            executionMode: "background"
+        ))
+    case .failure(.focusFailed):
+        break
+    case .failure(let error):
+        return .failure(error)
+    }
+
+    // 只有后台 AX focus 失败才能进入 foreground fallback。恢复函数只使用
+    // 当前 Session 的 currentTargetPID/currentFocusedWindow，不看 user frontmost。
+    guard restoreRecordedTarget(), snapshotStillExact() else {
+        return .failure(.focusFailed)
+    }
+    switch focusExactElement() {
+    case .failure(let error):
+        return .failure(error)
+    case .success:
+        guard snapshotStillExact() else {
+            return .failure(.staleObservation)
+        }
+        return .success(PreparedInputTarget(
+            pid: expectedPID,
+            elementRef: elementRef,
+            executionMode: "foreground_fallback"
+        ))
+    }
 }
 
 /// 解析可选的 element_ref 参数。
@@ -529,46 +661,6 @@ func handleTypeText(params: Any?, id: Any?) {
         // 非法 element_ref 已由解析函数写响应。
         return
     }
-    switch checkSession(sessionID) {
-    case .ok:
-        break
-    case .notActive:
-        writeResponse(makeError(id: id, code: "session_not_active",
-                                message: "no active computer session; begin_session required")); return
-    case .mismatch:
-        writeResponse(makeError(id: id, code: "session_mismatch",
-                                message: "session mismatch; does not match the active run")); return
-    }
-
-    // Background-first：只要求 Target Snapshot 一致，不强制 Target 在最前台。
-    guard requireBackgroundFresh(
-        expectedObservationID,
-        sessionID: sessionID,
-        id: id,
-        allowForegroundRestore: true
-    ) else { return }
-
-    // 可选：先把目标元素聚焦（避免输入到错误位置）。
-    if parsedElementRef.provided {
-        if case .failure(let error) = focusElement(
-            observationID: expectedObservationID,
-            elementRef: parsedElementRef.value,
-            requireEditable: true
-        ) {
-            writeResponse(makeError(id: id, code: error.code, message: error.code))
-            return
-        }
-    }
-
-    // 空字符串：直接成功，不发送任何事件。
-    if text.isEmpty {
-        writeResponse([
-            "id": id ?? NSNull(),
-            "result": ["characters": 0, "method": "none", "execution_mode": "background"],
-        ])
-        return
-    }
-
     guard AXIsProcessTrusted() else {
         writeResponse(
             makeError(
@@ -579,9 +671,37 @@ func handleTypeText(params: Any?, id: Any?) {
         )
         return
     }
+    let requestedElementRef = parsedElementRef.provided
+        ? parsedElementRef.value : nil
+    let prepared: PreparedInputTarget
+    switch prepareExactInputTarget(
+        observationID: expectedObservationID,
+        sessionID: sessionID,
+        requestedElementRef: requestedElementRef,
+        requireEditable: true
+    ) {
+    case .failure(let error):
+        writeResponse(makeError(id: id, code: error.code, message: error.code))
+        return
+    case .success(let target):
+        prepared = target
+    }
 
-    guard let targetPID = currentTargetPID,
-          let targetElement = currentElements[parsedElementRef.value] else {
+    // 空字符串：直接成功，不发送任何事件。
+    if text.isEmpty {
+        writeResponse([
+            "id": id ?? NSNull(),
+            "result": [
+                "characters": 0,
+                "method": "none",
+                "execution_mode": prepared.executionMode,
+            ],
+        ])
+        return
+    }
+
+    guard let targetRef = prepared.elementRef,
+          currentElements[targetRef] != nil else {
         writeResponse(makeError(
             id: id,
             code: "editable_target_required",
@@ -594,12 +714,9 @@ func handleTypeText(params: Any?, id: Any?) {
     // 的 “在当前光标位置 insert/type 文本” 语义不一致（P0）。保持
     // CGEventPostToPid 插入语义；如需 “替换整个字段” 应作为独立 semantic
     // capability，而不是悄悄改变 computer_type。
-    let beforeValue = readAXFullString(
-        targetElement, kAXValueAttribute as CFString
-    )
     let chunks = chunkUTF16(text, chunkSize: 100)
     for chunk in chunks {
-        guard postUnicodeChunk(chunk, pid: targetPID) else {
+        guard postUnicodeChunk(chunk, pid: prepared.pid) else {
             writeResponse(
                 makeError(
                     id: id,
@@ -611,18 +728,10 @@ func handleTypeText(params: Any?, id: Any?) {
         }
     }
 
-    // Immediate evidence（仅调试参考）：不以此作为 verified 的 ground truth。
-    // 最终验证必须来自 fresh observe 之后的 Snapshot 对比（Snapshot A → action
-    // → invalidate A → fresh observe B → verify A→B）。
-    let afterValue = readAXFullString(
-        targetElement, kAXValueAttribute as CFString
-    )
+    // delivery 只说明 CGEvent 已定向投递；UI 效果只能由 mutation 后的新一轮
+    // observe 证明，不能复用即将失效的 AX 对象冒充 verified。
     let evidence: [String: Any] = [
-        "value_readable": beforeValue != nil && afterValue != nil,
-        "value_changed": beforeValue != nil && afterValue != beforeValue,
-        "before_characters": beforeValue.map { $0.count } ?? NSNull(),
-        "after_characters": afterValue.map { $0.count } ?? NSNull(),
-        "note": "immediate_evidence_only; final verification requires fresh observe",
+        "note": "delivery_only; final verification requires fresh observe",
     ]
     clearObservationCache()
 
@@ -630,12 +739,12 @@ func handleTypeText(params: Any?, id: Any?) {
         "id": id ?? NSNull(),
         "result": [
             "characters": characterCount(text),
-            "element_ref": parsedElementRef.value,
+            "element_ref": targetRef,
             "delivery_status": "delivered",
             "verification_status": "unverified",
             "evidence": evidence,
             "method": "cg_event_pid",
-            "execution_mode": "background",
+            "execution_mode": prepared.executionMode,
         ],
     ])
 }
@@ -709,36 +818,6 @@ func handleKeyPress(params: Any?, id: Any?) {
         // 非法 element_ref 已由解析函数写响应。
         return
     }
-    switch checkSession(sessionID) {
-    case .ok:
-        break
-    case .notActive:
-        writeResponse(makeError(id: id, code: "session_not_active",
-                                message: "no active computer session; begin_session required")); return
-    case .mismatch:
-        writeResponse(makeError(id: id, code: "session_mismatch",
-                                message: "session mismatch; does not match the active run")); return
-    }
-
-    // Background-first：CGEventPostToPid 只要求 Target Snapshot 一致，不强制前台。
-    guard requireBackgroundFresh(
-        expectedObservationID,
-        sessionID: sessionID,
-        id: id,
-        allowForegroundRestore: true
-    ) else { return }
-
-    // 可选：先把目标元素聚焦，再发送按键。
-    if parsedElementRef.provided {
-        if case .failure(let error) = focusElement(
-            observationID: expectedObservationID,
-            elementRef: parsedElementRef.value
-        ) {
-            writeResponse(makeError(id: id, code: error.code, message: error.code))
-            return
-        }
-    }
-
     guard let code = keyCode(for: key) else {
         writeResponse(
             makeError(
@@ -788,6 +867,22 @@ func handleKeyPress(params: Any?, id: Any?) {
         return
     }
 
+    let requestedElementRef = parsedElementRef.provided
+        ? parsedElementRef.value : nil
+    let prepared: PreparedInputTarget
+    switch prepareExactInputTarget(
+        observationID: expectedObservationID,
+        sessionID: sessionID,
+        requestedElementRef: requestedElementRef,
+        requireEditable: false
+    ) {
+    case .failure(let error):
+        writeResponse(makeError(id: id, code: error.code, message: error.code))
+        return
+    case .success(let target):
+        prepared = target
+    }
+
     guard let source = CGEventSource(stateID: .combinedSessionState) else {
         writeResponse(
             makeError(
@@ -818,14 +913,8 @@ func handleKeyPress(params: Any?, id: Any?) {
     }
     down.flags = mods.flags
     up.flags = mods.flags
-    guard let targetPID = currentTargetPID else {
-        writeResponse(makeError(
-            id: id, code: "stale_observation", message: "missing target pid"
-        ))
-        return
-    }
-    down.postToPid(targetPID)
-    up.postToPid(targetPID)
+    down.postToPid(prepared.pid)
+    up.postToPid(prepared.pid)
 
     writeResponse([
         "id": id ?? NSNull(),
@@ -833,7 +922,7 @@ func handleKeyPress(params: Any?, id: Any?) {
             normalizedKey: normalizeKey(key),
             modifiers: mods.normalized,
             method: "cg_event_pid",
-            executionMode: "background"
+            executionMode: prepared.executionMode
         ),
     ])
 }

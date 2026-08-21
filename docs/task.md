@@ -2177,3 +2177,24 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 - [x] 激活恢复增加 AXFrontmost、AXMain、AXFocused 与 AXRaise，仍只作用于已批准 target PID/window
 - [x] 停滞指纹忽略纯 bounds/statistics 抖动，窗口移动不再被误认为任务取得有效进展
 - [x] 修复后 Notes 真机 observe：真实焦点后立即返回 7 个 editable，`text_area e1929`、`text_field e1950` 均位于输出前列
+
+### 完成：Computer Runtime V2 真机可靠性收尾
+
+#### Bad Case
+
+- [x] Native 已有其它 active session 时只返回 `accepted=false`，调用方容易漏判并继续执行
+- [x] Python `begin_session_rpc` 忽略 Native 是否明确接受，Python/Native session 可能分叉
+- [x] `computer_type` / `computer_key` 后台 AX focus 失败后缺少统一、严格的精确目标恢复路径
+- [x] 同一份 mutation 前 AX 对象被用于即时验证，容易混淆事件投递与 fresh UI 证据
+
+#### 修复结果
+
+- [x] `begin_session` 同 session 幂等成功；不同 active session 返回结构化 `session_mismatch`
+- [x] Python 只接受 `accepted is True`，缺失或 false 都回滚本地 session 并 fail closed
+- [x] `ComputerSession.attach_snapshot` 显式记录当前 exact target window
+- [x] type/key 共用 `prepareExactInputTarget`：后台精确元素聚焦优先，失败时只恢复本 Session 的 PID/window
+- [x] foreground fallback 后重新验证 session、observation、PID、window 和真实 focused element，再定向投递
+- [x] 不读取当前 user frontmost 作为输入 fallback；文本继续使用 CGEvent 插入，绝不调用 AXSetValue
+- [x] type 只返回 `delivery_status=delivered` 与 `verification_status=unverified`；mutation 后立即失效 Snapshot
+- [x] 新增 `scripts/e2e_computer_runtime_v2.py`：TextEdit fresh observe 验证 `hello`，追加后严格得到 `hello Vesta`
+- [x] 真机 E2E 通过；Backend 全量 `pytest` 905 通过；ruff 通过；Swift build 与协议检查通过
