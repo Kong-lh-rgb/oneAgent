@@ -103,20 +103,31 @@ class FakeComputerRuntime:
             metadata=metadata,
         )
 
-    async def type(self, text: str) -> ActionResult:
+    async def type(
+        self,
+        text: str,
+        element_ref: str | None = None,
+    ) -> ActionResult:
+        metadata: dict[str, Any] = {"text": text}
+        if element_ref is not None:
+            metadata["element_ref"] = element_ref
         return self._record(
             ActionName.TYPE,
-            metadata={"text": text},
+            metadata=metadata,
         )
 
     async def key(
         self,
         key: str,
         modifiers: tuple[str, ...] = (),
+        element_ref: str | None = None,
     ) -> ActionResult:
+        metadata: dict[str, Any] = {"key": key, "modifiers": modifiers}
+        if element_ref is not None:
+            metadata["element_ref"] = element_ref
         return self._record(
             ActionName.KEY,
-            metadata={"key": key, "modifiers": modifiers},
+            metadata=metadata,
         )
 
     async def scroll(

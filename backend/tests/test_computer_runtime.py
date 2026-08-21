@@ -199,6 +199,9 @@ async def test_fake_type() -> None:
     assert result.success is True
     assert result.metadata["text"] == "hello"
 
+    with_ref = await fake.type("hi", element_ref="e2")
+    assert with_ref.metadata["element_ref"] == "e2"
+
 
 async def test_fake_key() -> None:
     fake = FakeComputerRuntime()
@@ -209,6 +212,9 @@ async def test_fake_key() -> None:
 
     with_mods = await fake.key("a", modifiers=("command", "shift"))
     assert with_mods.metadata["modifiers"] == ("command", "shift")
+
+    with_ref = await fake.key("enter", element_ref="e2")
+    assert with_ref.metadata["element_ref"] == "e2"
 
 
 async def test_fake_scroll() -> None:

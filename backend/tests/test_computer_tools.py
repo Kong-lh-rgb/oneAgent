@@ -220,6 +220,25 @@ async def test_computer_type_calls_runtime() -> None:
     assert fake.action_history[0].metadata["text"] == "hello"
 
 
+async def test_computer_type_with_element_ref() -> None:
+    _, fake = _build()
+    tool = ComputerTypeTool(fake)
+    result = await tool.execute({"text": "hello", "element_ref": "e2"})
+    assert result["action"] == "type"
+    assert fake.action_history[0].metadata["text"] == "hello"
+    assert fake.action_history[0].metadata["element_ref"] == "e2"
+
+
+async def test_computer_type_element_ref_validation() -> None:
+    _, fake = _build()
+    tool = ComputerTypeTool(fake)
+    with pytest.raises(ValueError, match="element_ref"):
+        await tool.execute({"text": "hi", "element_ref": ""})
+    with pytest.raises(ValueError, match="element_ref"):
+        await tool.execute({"text": "hi", "element_ref": 123})
+    assert fake.action_history == []
+
+
 async def test_computer_key_with_modifiers() -> None:
     _, fake = _build()
     tool = ComputerKeyTool(fake)
@@ -233,6 +252,26 @@ async def test_computer_key_with_modifiers() -> None:
     # 缺省 modifiers → 空。
     await tool.execute({"key": "enter"})
     assert fake.action_history[1].metadata["modifiers"] == ()
+
+
+async def test_computer_key_with_element_ref() -> None:
+    _, fake = _build()
+    tool = ComputerKeyTool(fake)
+    result = await tool.execute(
+        {"key": "enter", "modifiers": ["command"], "element_ref": "e2"}
+    )
+    assert result["action"] == "key"
+    assert fake.action_history[0].metadata["key"] == "enter"
+    assert fake.action_history[0].metadata["modifiers"] == ("command",)
+    assert fake.action_history[0].metadata["element_ref"] == "e2"
+
+
+async def test_computer_key_element_ref_validation() -> None:
+    _, fake = _build()
+    tool = ComputerKeyTool(fake)
+    with pytest.raises(ValueError, match="element_ref"):
+        await tool.execute({"key": "a", "element_ref": " "})
+    assert fake.action_history == []
 
 
 async def test_computer_scroll_calls_runtime() -> None:

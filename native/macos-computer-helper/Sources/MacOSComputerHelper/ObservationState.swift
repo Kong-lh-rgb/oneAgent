@@ -44,13 +44,49 @@ func desktopStateIsFresh(expectedObservationID: String) -> Bool {
         && nearlyEqual(CGFloat(info["height"] ?? 0), expectedBounds.height)
 }
 
-/// freshness 失败说明缓存已经过期，立即清除后统一返回 stale_observation。
-func requireFreshObservation(_ observationID: String, id: Any?) -> Bool {
-    guard desktopStateIsFresh(expectedObservationID: observationID) else {
-        clearObservationCache()
-        writeResponse(makeError(id: id, code: "stale_observation",
-                                message: "desktop state changed since observation"))
+/// 把本次 Observation 记录的“已批准目标”App/Window 恢复到前台，并确认仍是该目标。
+///
+/// 场景：computer_type / click / key 需要人工审批，Vesta 审批 UI 会抢走 macOS
+/// 焦点；批准后执行前先把之前观察到的 App/Window 恢复到前台，再重新验证仍是
+/// 同一个目标。确认不了（App 已退出 / 窗口已关闭 / 无法恢复）返回 false，
+/// 调用方按 stale 安全失败，绝不盲目操作。
+func restoreRecordedTarget() -> Bool {
+    guard let pid = currentFrontmostPID,
+          let window = currentFocusedWindow,
+          let observationID = currentObservationID else {
         return false
     }
-    return true
+    // 1) 把记录的 App 激活到前台（激活过程异步生效）。
+    NSRunningApplication(processIdentifier: pid)?.activate(options: [])
+    // 2) 把记录的 focused window 抬到最前（幂等；窗口已关闭时失败无害）。
+    _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+    // 3) 短轮询等待前台切换，并确认仍是记录的目标 App/Window。
+    for _ in 0..<10 {
+        if desktopStateIsFresh(expectedObservationID: observationID) {
+            return true
+        }
+        Thread.sleep(forTimeInterval: 0.05)
+    }
+    return false
+}
+
+/// freshness 失败说明缓存可能已过期。
+/// 若这是需要人工审批的副作用（type/key/click），先尝试把“已批准目标”恢复到
+/// 前台并确认一致；确认不了再统一返回 stale_observation（绝不盲目操作）。
+/// 低风险自动操作（scroll/focus_window）保持严格失败（restoreOnDrift=false）。
+func requireFreshObservation(
+    _ observationID: String,
+    id: Any?,
+    restoreOnDrift: Bool = false
+) -> Bool {
+    if desktopStateIsFresh(expectedObservationID: observationID) {
+        return true
+    }
+    if restoreOnDrift && restoreRecordedTarget() {
+        return true
+    }
+    clearObservationCache()
+    writeResponse(makeError(id: id, code: "stale_observation",
+                            message: "desktop state changed since observation"))
+    return false
 }

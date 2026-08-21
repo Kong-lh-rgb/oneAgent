@@ -144,13 +144,21 @@ class ComputerTypeTool(BaseTool):
     def definition(self) -> ToolDefinition:
         return ToolDefinition(
             name="computer_type",
-            description="在当前焦点处输入文本。不要操作剪贴板。",
+            description=(
+                "在当前焦点处输入文本。不要操作剪贴板。"
+                "可选 element_ref：指定本次 Observation 中的元素 ref 时，"
+                "先聚焦该元素（如编辑器 text_area）再输入，避免打错位置。"
+            ),
             parameters={
                 "type": "object",
                 "properties": {
                     "text": {
                         "type": "string",
                         "description": "要输入的文本。",
+                    },
+                    "element_ref": {
+                        "type": "string",
+                        "description": "可选：先聚焦该元素再输入（来自本次 Observation）。",
                     },
                 },
                 "required": ["text"],
@@ -174,7 +182,8 @@ class ComputerTypeTool(BaseTool):
         text = arguments.get("text")
         if not isinstance(text, str):
             raise ValueError("'text' must be a string")
-        result = await self._runtime.type(text)
+        element_ref = _optional_element_ref(arguments.get("element_ref"))
+        result = await self._runtime.type(text, element_ref=element_ref)
         return result.model_dump(mode="json")
 
 
@@ -191,6 +200,7 @@ class ComputerKeyTool(BaseTool):
             description=(
                 "发送一个按键，可带修饰键（如 command/shift/option/control）。"
                 "keycode 转换由 macOS runtime/helper 负责。"
+                "可选 element_ref：先聚焦该元素（如编辑器）再发送按键。"
             ),
             parameters={
                 "type": "object",
@@ -203,6 +213,10 @@ class ComputerKeyTool(BaseTool):
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "修饰键列表，默认空。",
+                    },
+                    "element_ref": {
+                        "type": "string",
+                        "description": "可选：先聚焦该元素再发送按键（来自本次 Observation）。",
                     },
                 },
                 "required": ["key"],
@@ -231,9 +245,11 @@ class ComputerKeyTool(BaseTool):
             isinstance(modifier, str) for modifier in raw_modifiers
         ):
             raise ValueError("'modifiers' must be a list of strings")
+        element_ref = _optional_element_ref(arguments.get("element_ref"))
         result = await self._runtime.key(
             key,
             modifiers=tuple(raw_modifiers),
+            element_ref=element_ref,
         )
         return result.model_dump(mode="json")
 
@@ -376,6 +392,16 @@ class ComputerFocusWindowTool(BaseTool):
             raise ValueError("'window_ref' must be a non-empty string")
         result = await self._runtime.focus_window(window_ref)
         return result.model_dump(mode="json")
+
+
+def _optional_element_ref(raw: Any) -> str | None:
+    """校验可选的 element_ref；None / 未提供 → None，非法 → ValueError。"""
+
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("'element_ref' must be a non-empty string")
+    return raw.strip()
 
 
 def _parse_click_target(

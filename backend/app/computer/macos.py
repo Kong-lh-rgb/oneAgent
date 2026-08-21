@@ -220,14 +220,23 @@ class MacOSComputerRuntime:
             metadata=metadata,
         )
 
-    async def type(self, text: str) -> ActionResult:
+    async def type(
+        self,
+        text: str,
+        element_ref: str | None = None,
+    ) -> ActionResult:
         if not isinstance(text, str):
             raise ValueError("'text' must be a string")
         observation_id = self._require_fresh()
-        result = await self._mutation_call(
-            "type_text",
-            {"text": text, "expected_observation_id": observation_id},
-        )
+        params: dict[str, object] = {
+            "text": text,
+            "expected_observation_id": observation_id,
+        }
+        if element_ref is not None:
+            if not isinstance(element_ref, str) or not element_ref.strip():
+                raise ValueError("'element_ref' must be a non-empty string")
+            params["element_ref"] = element_ref.strip()
+        result = await self._mutation_call("type_text", params)
         if text:
             self._invalidate()
         return ActionResult(
@@ -236,7 +245,12 @@ class MacOSComputerRuntime:
             metadata={"characters": result.get("characters", 0)},
         )
 
-    async def key(self, key: str, modifiers: tuple[str, ...] = ()) -> ActionResult:
+    async def key(
+        self,
+        key: str,
+        modifiers: tuple[str, ...] = (),
+        element_ref: str | None = None,
+    ) -> ActionResult:
         if not isinstance(key, str) or not key.strip():
             raise ValueError("'key' must be a non-empty string")
         if not isinstance(modifiers, tuple) or not all(
@@ -244,14 +258,16 @@ class MacOSComputerRuntime:
         ):
             raise ValueError("'modifiers' must be a tuple of strings")
         observation_id = self._require_fresh()
-        result = await self._mutation_call(
-            "key_press",
-            {
-                "key": key,
-                "modifiers": list(modifiers),
-                "expected_observation_id": observation_id,
-            },
-        )
+        params: dict[str, object] = {
+            "key": key,
+            "modifiers": list(modifiers),
+            "expected_observation_id": observation_id,
+        }
+        if element_ref is not None:
+            if not isinstance(element_ref, str) or not element_ref.strip():
+                raise ValueError("'element_ref' must be a non-empty string")
+            params["element_ref"] = element_ref.strip()
+        result = await self._mutation_call("key_press", params)
         self._invalidate()
         return ActionResult(
             success=True,

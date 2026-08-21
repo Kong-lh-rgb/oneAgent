@@ -802,7 +802,8 @@ func handleClickElement(params: Any?, id: Any?) {
         return
     }
 
-    guard requireFreshObservation(observationID, id: id) else { return }
+    // click_element 需要人工审批，审批 UI 会抢焦点：漂移时先恢复已批准目标再执行。
+    guard requireFreshObservation(observationID, id: id, restoreOnDrift: true) else { return }
 
     switch resolveClickTarget(
         observationID: observationID,
@@ -954,12 +955,75 @@ func successfulTypePayload(_ text: String) -> [String: Any] {
     return ["characters": characterCount(text)]
 }
 
+/// focusElement 的失败分类与协议错误码。
+private enum FocusError: Error {
+    case staleObservation
+    case elementNotFound
+    case focusFailed
+
+    var code: String {
+        switch self {
+        case .staleObservation: return "stale_observation"
+        case .elementNotFound: return "element_not_found"
+        case .focusFailed: return "focus_failed"
+        }
+    }
+}
+
+/// 把本次 Observation 中的 element_ref 聚焦（用于 type/key 先聚焦目标再输入）。
+/// 失败返回错误码：stale_observation / element_not_found / focus_failed。
+fileprivate func focusElement(
+    observationID: String,
+    elementRef: String
+) -> Result<AXUIElement, FocusError> {
+    guard observationID == currentObservationID else {
+        return .failure(.staleObservation)
+    }
+    guard let element = currentElements[elementRef] else {
+        return .failure(.elementNotFound)
+    }
+    guard AXUIElementSetAttributeValue(
+        element,
+        kAXFocusedAttribute as CFString,
+        kCFBooleanTrue
+    ) == .success else {
+        return .failure(.focusFailed)
+    }
+    return .success(element)
+}
+
+/// 解析可选的 element_ref 参数。
+/// 返回 nil 表示参数非法（错误响应已写出，调用方应立即 return）；
+/// 返回 (provided=false) 表示未提供；返回 (provided=true, value) 表示有效值。
+func parseOptionalElementRef(
+    _ params: [String: Any],
+    id: Any?
+) -> (provided: Bool, value: String)? {
+    guard let raw = params["element_ref"] else {
+        return (provided: false, value: "")
+    }
+    guard let value = raw as? String,
+          !value.trimmingCharacters(in: .whitespaces).isEmpty else {
+        writeResponse(
+            makeError(
+                id: id,
+                code: "invalid_params",
+                message: "'element_ref' must be a non-empty string"
+            )
+        )
+        return nil
+    }
+    return (provided: true, value: value.trimmingCharacters(in: .whitespaces))
+}
+
 /// 处理 type_text 请求（V5）。
 ///
-/// params: {"text": "..."}。向当前 macOS keyboard focus 输入文本
+/// params: {"text": "...", "element_ref": "e123"（可选）}。向当前 macOS
+/// keyboard focus 输入文本；若指定 element_ref，先把该元素聚焦再输入
 /// （CGEvent Unicode，非 clipboard / pbcopy / Cmd+V / osascript）。
 ///
 /// - 缺/非字符串 text → invalid_params；
+/// - element_ref 非法 → invalid_params；聚焦失败 → focus_failed；
 /// - 空字符串 → {"characters": 0}（不制造系统事件，不清缓存）；
 /// - 未授权 Accessibility → accessibility_permission_required；
 /// - CGEvent 创建失败 → input_event_failed。
@@ -979,8 +1043,26 @@ func handleTypeText(params: Any?, id: Any?) {
         )
         return
     }
+    guard let parsedElementRef = parseOptionalElementRef(params, id: id) else {
+        // 非法 element_ref 已由解析函数写响应。
+        return
+    }
 
-    guard requireFreshObservation(expectedObservationID, id: id) else { return }
+    // type_text 需要人工审批，审批 UI 会抢焦点：漂移时先恢复已批准目标再执行。
+    guard requireFreshObservation(
+        expectedObservationID, id: id, restoreOnDrift: true
+    ) else { return }
+
+    // 可选：先把目标元素聚焦，再输入（避免打到错误位置）。
+    if parsedElementRef.provided {
+        if case .failure(let error) = focusElement(
+            observationID: expectedObservationID,
+            elementRef: parsedElementRef.value
+        ) {
+            writeResponse(makeError(id: id, code: error.code, message: error.code))
+            return
+        }
+    }
 
     // 空字符串：直接成功，不发送任何事件。
     if text.isEmpty {
@@ -1059,7 +1141,8 @@ func successfulKeyPayload(
 
 /// 处理 key_press 请求（V6）。
 ///
-/// params: {"key": "...", "modifiers": [...]}。发送 CGEvent keyDown/keyUp。
+/// params: {"key": "...", "modifiers": [...], "element_ref": "e123"（可选）}。
+/// 发送 CGEvent keyDown/keyUp；若指定 element_ref，先把该元素聚焦再发送。
 func handleKeyPress(params: Any?, id: Any?) {
     guard
         let params = params as? [String: Any],
@@ -1077,8 +1160,26 @@ func handleKeyPress(params: Any?, id: Any?) {
         )
         return
     }
+    guard let parsedElementRef = parseOptionalElementRef(params, id: id) else {
+        // 非法 element_ref 已由解析函数写响应。
+        return
+    }
 
-    guard requireFreshObservation(expectedObservationID, id: id) else { return }
+    // key_press 需要人工审批，审批 UI 会抢焦点：漂移时先恢复已批准目标再执行。
+    guard requireFreshObservation(
+        expectedObservationID, id: id, restoreOnDrift: true
+    ) else { return }
+
+    // 可选：先把目标元素聚焦，再发送按键。
+    if parsedElementRef.provided {
+        if case .failure(let error) = focusElement(
+            observationID: expectedObservationID,
+            elementRef: parsedElementRef.value
+        ) {
+            writeResponse(makeError(id: id, code: error.code, message: error.code))
+            return
+        }
+    }
 
     guard let code = keyCode(for: key) else {
         writeResponse(
@@ -1311,6 +1412,45 @@ func handleTestFreshGuard(params: Any?, id: Any?) {
     ]])
 }
 
+/// 测试辅助：验证“恢复已批准目标”的安全失败路径（不真正抢焦点）。
+/// 用不存在的 PID + fake window 模拟无法恢复的目标：restoreRecordedTarget()
+/// 必须返回 false 且不崩溃、不清空缓存（是否 stale 由调用方决定）。
+func handleTestRestoreTarget(params: Any?, id: Any?) {
+    seedFakeMapping(observationID: "obs-restore", refs: ["e1"])
+    currentFrontmostPID = 999_999  // 不存在的 PID → activate 无效果
+    currentFocusedWindow = AXUIElementCreateApplication(1)  // fake window
+    currentFocusedWindowBounds = CGRect(x: 0, y: 0, width: 100, height: 100)
+    let restored = restoreRecordedTarget()
+    writeResponse(["id": id ?? NSNull(), "result": [
+        "restored": restored,
+        "cache_kept": currentObservationID == "obs-restore",
+    ]])
+}
+
+/// 测试辅助：验证 focusElement 的判定逻辑（不依赖真实 AX 可聚焦控件）。
+/// seed_id 用于种缓存（缺省等于 observation_id，便于测 stale 用不同 id）。
+/// - observation_id 与种子不匹配 → stale_observation；
+/// - element_ref 不存在 → element_not_found；
+/// - 元素存在但 fake 元素不可聚焦 → focus_failed（真实控件无法自动测）。
+func handleTestFocusElement(params: Any?, id: Any?) {
+    guard let params = params as? [String: Any],
+          let observationID = params["observation_id"] as? String,
+          let elementRef = params["element_ref"] as? String else {
+        writeResponse(makeError(id: id, code: "invalid_params",
+                                message: "missing observation_id/element_ref")); return
+    }
+    let seedID = (params["seed_id"] as? String) ?? observationID
+    seedFakeMapping(observationID: seedID,
+                    refs: (params["refs"] as? [String]) ?? [])
+    switch focusElement(observationID: observationID, elementRef: elementRef) {
+    case .success:
+        writeResponse(["id": id ?? NSNull(), "result": ["focused": true]])
+    case .failure(let error):
+        writeResponse(["id": id ?? NSNull(),
+                       "result": ["focused": false, "error": error.code]])
+    }
+}
+
 // ---------------------------------------------------------------------------
 // V7：窗口、滚动、截图坐标点击
 // ---------------------------------------------------------------------------
@@ -1394,7 +1534,8 @@ func handleClickCoordinate(params: Any?, id: Any?) {
         writeResponse(makeError(id: id, code: "stale_observation",
                                 message: "stale observation")); return
     }
-    guard requireFreshObservation(observationID, id: id) else { return }
+    // click_coordinate 需要人工审批，审批 UI 会抢焦点：漂移时先恢复已批准目标再执行。
+    guard requireFreshObservation(observationID, id: id, restoreOnDrift: true) else { return }
     guard let mapping = currentScreenshotMapping else {
         writeResponse(makeError(id: id, code: "screenshot_unavailable",
                                 message: "current observation has no screenshot mapping")); return
@@ -1530,6 +1671,12 @@ func handleRequest(_ payload: [String: Any]) {
 
     case "__test_fresh_guard":
         handleTestFreshGuard(params: payload["params"], id: id)
+
+    case "__test_restore_target":
+        handleTestRestoreTarget(params: payload["params"], id: id)
+
+    case "__test_focus_element":
+        handleTestFocusElement(params: payload["params"], id: id)
 
     default:
         writeResponse(

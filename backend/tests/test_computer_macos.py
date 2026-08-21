@@ -565,6 +565,36 @@ async def test_type_non_string_rejected() -> None:
     assert stub.calls == []
 
 
+async def test_type_with_element_ref() -> None:
+    stub = StubHelperClient(result=_type_result())
+    runtime = _runtime(stub)
+
+    result = await runtime.type("Hello", element_ref="e2")
+
+    assert stub.calls == [
+        (
+            "type_text",
+            {
+                "text": "Hello",
+                "expected_observation_id": "obs-current",
+                "element_ref": "e2",
+            },
+        )
+    ]
+    assert result.success is True
+
+
+async def test_type_element_ref_validation() -> None:
+    stub = StubHelperClient(result=_type_result())
+    runtime = _runtime(stub)
+
+    with pytest.raises(ValueError, match="element_ref"):
+        await runtime.type("hi", element_ref="")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="element_ref"):
+        await runtime.type("hi", element_ref="  ")
+    assert stub.calls == []
+
+
 async def test_type_permission_error_propagates() -> None:
     stub = StubHelperClient(
         error=ComputerHelperError(
@@ -659,6 +689,35 @@ async def test_key_passes_modifiers_and_converts_action_result() -> None:
         "key": "a",
         "modifiers": ["command", "shift"],
     }
+
+
+async def test_key_with_element_ref() -> None:
+    stub = StubHelperClient(result=_key_result("enter", []))
+    runtime = _runtime(stub)
+
+    result = await runtime.key("enter", element_ref="e2")
+
+    assert stub.calls == [
+        (
+            "key_press",
+            {
+                "key": "enter",
+                "modifiers": [],
+                "expected_observation_id": "obs-current",
+                "element_ref": "e2",
+            },
+        )
+    ]
+    assert result.success is True
+
+
+async def test_key_element_ref_validation() -> None:
+    stub = StubHelperClient(result=_key_result())
+    runtime = _runtime(stub)
+
+    with pytest.raises(ValueError, match="element_ref"):
+        await runtime.key("enter", element_ref=" ")  # type: ignore[arg-type]
+    assert stub.calls == []
 
 
 @pytest.mark.parametrize(

@@ -1065,7 +1065,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-tool-rounds",
         type=int,
-        default=3,
+        default=15,
         help="Maximum tool-calling rounds before forcing a final answer.",
     )
     parser.add_argument(

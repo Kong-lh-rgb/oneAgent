@@ -40,16 +40,25 @@ class ComputerRuntime(Protocol):
         """对元素或截图坐标执行点击。"""
         ...
 
-    async def type(self, text: str) -> ActionResult:
-        """在当前焦点输入文本。"""
+    async def type(
+        self,
+        text: str,
+        element_ref: str | None = None,
+    ) -> ActionResult:
+        """在当前焦点输入文本。
+
+        ``element_ref`` 可选：指定本次 Observation 中的元素 ref 时，
+        先聚焦该元素（如编辑器 text_area）再输入，避免打进错误位置。
+        """
         ...
 
     async def key(
         self,
         key: str,
         modifiers: tuple[str, ...] = (),
+        element_ref: str | None = None,
     ) -> ActionResult:
-        """发送按键，可带修饰键。"""
+        """发送按键，可带修饰键；可选先聚焦指定元素再发送。"""
         ...
 
     async def scroll(

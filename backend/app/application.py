@@ -199,7 +199,7 @@ class Application:
         skills_user_dir: str | Path | None = None,
         skills_project_dir: str | Path | None = None,
         max_steps: int = 10,
-        max_tool_rounds: int = 3,
+        max_tool_rounds: int = 15,
         max_output_tokens: int | None = None,
         settings: ModelSettings | None = None,
         registry: ModelAdapterRegistry | None = None,

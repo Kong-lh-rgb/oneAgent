@@ -669,6 +669,45 @@ do {
     check("desktop state changed 后拒绝", changedResult?["accepted"] as? Bool == false)
     check("desktop state changed 后清 cache",
           changedResult?["cache_cleared"] as? Bool == true)
+
+    // 25b. 恢复已批准目标的安全失败路径：目标无法恢复（不存在的 PID / fake
+    //      window）→ restoreRecordedTarget() 返回 false，且不崩溃、不清空缓存。
+    let restoreTarget = try request([
+        "id": 85, "method": "__test_restore_target", "params": [:]
+    ])
+    let restoreResult = restoreTarget["result"] as? [String: Any]
+    check("无法恢复已批准目标 → restore=false",
+          restoreResult?["restored"] as? Bool == false)
+    check("restore 失败不清空 Observation cache",
+          restoreResult?["cache_kept"] as? Bool == true)
+
+    // 25c. focusElement 判定逻辑：stale / not_found / fake 元素不可聚焦
+    let focusStale = try request([
+        "id": 86, "method": "__test_focus_element",
+        "params": ["observation_id": "obs-other", "seed_id": "obs-seed",
+                   "refs": ["e1"], "element_ref": "e1"],
+    ])
+    check("focus observation 不匹配 → stale_observation",
+          ((focusStale["result"] as? [String: Any])?["error"] as? String)
+              == "stale_observation")
+
+    let focusNotFound = try request([
+        "id": 87, "method": "__test_focus_element",
+        "params": ["observation_id": "obs-seed", "seed_id": "obs-seed",
+                   "refs": ["e1"], "element_ref": "e99"],
+    ])
+    check("focus element_ref 不存在 → element_not_found",
+          ((focusNotFound["result"] as? [String: Any])?["error"] as? String)
+              == "element_not_found")
+
+    let focusExisting = try request([
+        "id": 88, "method": "__test_focus_element",
+        "params": ["observation_id": "obs-seed", "seed_id": "obs-seed",
+                   "refs": ["e1"], "element_ref": "e1"],
+    ])
+    let focusExistingResult = focusExisting["result"] as? [String: Any]
+    check("focus 已有元素 → 返回 defined 结果（不崩溃）",
+          focusExistingResult?["focused"] is Bool)
 } catch {
     check("协议用例执行无异常", false, "\(error)")
 }
