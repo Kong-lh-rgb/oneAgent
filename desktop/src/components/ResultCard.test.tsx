@@ -23,18 +23,18 @@ const base: Artifact = {
 }
 
 describe('ResultCard', () => {
-  it('file artifact：Download 链接用 id 构造，不含 storage_path', () => {
+  it('file artifact：下载链接用 id 构造，不含 storage_path', () => {
     const html = renderToStaticMarkup(<ResultCard artifact={base} />)
     expect(html).toContain('Market Report')
     expect(html).toContain('report.md')
     expect(html).toContain('text/markdown')
-    expect(html).toContain('Download')
+    expect(html).toContain('下载')
     expect(html).toContain(`/artifacts/${base.id}/content`)
     expect(html).not.toContain('storage_path')
-    expect(html).not.toContain('Open link')
+    expect(html).not.toContain('打开链接')
   })
 
-  it('url artifact：Open link 使用受控点击，不把 URL 复制成原生锚点', () => {
+  it('url artifact：打开链接使用受控点击，不把 URL 复制成原生锚点', () => {
     const artifact: Artifact = {
       ...base,
       kind: 'url',
@@ -44,9 +44,9 @@ describe('ResultCard', () => {
       size_bytes: 0,
     }
     const html = renderToStaticMarkup(<ResultCard artifact={artifact} />)
-    expect(html).toContain('Open link')
+    expect(html).toContain('打开链接')
     expect(html).toContain('https://example.com/result')
     expect(html).not.toContain('target="_blank"')
-    expect(html).not.toContain('Download')
+    expect(html).not.toContain('下载')
   })
 })

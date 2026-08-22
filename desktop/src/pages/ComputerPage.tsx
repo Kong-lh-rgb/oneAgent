@@ -110,7 +110,7 @@ export default function ComputerPage(): React.JSX.Element {
     <PageShell
       title="电脑"
       subtitle="查看桌面控制状态、目标证据与运行时权限。"
-      maxWidth={1120}
+      maxWidth={1400}
       actions={
         <span className={`page-live-status ${active ? 'active' : ''}`}>
           <span />{active ? '控制中' : statusQuery.data?.available ? '已就绪' : '不可用'}

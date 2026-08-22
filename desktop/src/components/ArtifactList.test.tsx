@@ -25,7 +25,7 @@ const base: Artifact = {
 describe('Artifact UI', () => {
   it('Artifacts empty state', () => {
     const html = renderToStaticMarkup(<ArtifactsView artifacts={[]} />)
-    expect(html).toContain('No delivered results yet')
+    expect(html).toContain('暂无交付结果')
   })
 
   it('file artifact 展示并用 id 构造下载地址', () => {
@@ -33,11 +33,11 @@ describe('Artifact UI', () => {
     expect(html).toContain('Market Report')
     expect(html).toContain('report.md')
     expect(html).toContain(`/artifacts/${base.id}/content`)
-    expect(html).toContain('Open')
-    expect(html).toContain('Download')
+    expect(html).toContain('打开')
+    expect(html).toContain('下载')
   })
 
-  it('URL artifact 展示 Open Link', () => {
+  it('URL artifact 展示打开链接', () => {
     const artifact: Artifact = {
       ...base,
       id: 'b'.repeat(32),
@@ -48,12 +48,12 @@ describe('Artifact UI', () => {
     }
     const html = renderToStaticMarkup(<ArtifactList artifacts={[artifact]} />)
     expect(html).toContain('https://example.com/result')
-    expect(html).toContain('Open link')
+    expect(html).toContain('打开链接')
   })
 
   it('Run Detail 有 Artifact 时展示交付区', () => {
     const html = renderToStaticMarkup(<RunArtifactsSection artifacts={[base]} />)
-    expect(html).toContain('Artifacts')
+    expect(html).toContain('交付物')
     expect(html).toContain('Market Report')
     expect(renderToStaticMarkup(<RunArtifactsSection artifacts={[]} />)).toBe('')
   })

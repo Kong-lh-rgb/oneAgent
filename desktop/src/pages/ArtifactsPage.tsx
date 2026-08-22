@@ -46,22 +46,25 @@ export function ArtifactsView({
 }): React.JSX.Element {
   return (
     <PageShell
-      title="Artifacts"
-      subtitle="Files and links Vesta has delivered across your work."
+      title="交付物"
+      subtitle="查看 Vesta 在各项工作中交付的文件与链接。"
+      maxWidth={1360}
     >
-      {error ? (
-        <ErrorState message={error} onRetry={onRetry} />
-      ) : pending ? (
-        <LoadingState label="正在加载 Artifacts…" />
-      ) : artifacts.length === 0 ? (
-        <EmptyState
-          title="No delivered results yet"
-          hint="Files and links created by Vesta will appear here."
-          icon="artifacts"
-        />
-      ) : (
-        <ArtifactList artifacts={artifacts} />
-      )}
+      <div className="artifacts-page">
+        {error ? (
+          <ErrorState message={error} onRetry={onRetry} />
+        ) : pending ? (
+          <LoadingState label="正在加载交付物…" />
+        ) : artifacts.length === 0 ? (
+          <EmptyState
+            title="暂无交付结果"
+            hint="Vesta 创建的文件和链接会显示在这里。"
+            icon="artifacts"
+          />
+        ) : (
+          <ArtifactList artifacts={artifacts} />
+        )}
+      </div>
     </PageShell>
   )
 }

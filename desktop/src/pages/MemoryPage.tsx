@@ -58,7 +58,7 @@ export default function MemoryPage(): React.JSX.Element {
     <PageShell
       title="长期记忆"
       subtitle="查看 Vesta 跨会话保留的稳定信息与历史经验。"
-      maxWidth={1080}
+      maxWidth={1360}
       actions={
         <div className="segmented-control" aria-label="记忆筛选">
           <button className={view === 'active' ? 'active' : ''} onClick={() => setView('active')}>
@@ -76,7 +76,7 @@ export default function MemoryPage(): React.JSX.Element {
             <div className="memory-page">
               <section className="memory-overview" aria-label="长期记忆概览">
                 <div className="memory-overview__intro">
-                  <span className="memory-overview__eyebrow">Memory system</span>
+                  <span className="memory-overview__eyebrow">记忆系统</span>
                   <strong>少量常驻，按需回忆</strong>
                   <p>核心记忆随每次运行进入上下文；普通记忆只提供索引，由模型在需要时读取。</p>
                 </div>

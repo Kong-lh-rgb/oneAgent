@@ -189,6 +189,7 @@ export default function ApprovalsPage(): React.JSX.Element {
     <PageShell
       title="审批"
       subtitle="审查敏感操作；电脑操作仍会在独立浮窗中请求授权。"
+      maxWidth={1360}
     >
       <section className="approvals-section">
         <h2 className="approvals-section__title">

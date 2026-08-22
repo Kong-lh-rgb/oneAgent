@@ -167,7 +167,7 @@ export function RunArtifactsSection({
   if (artifacts.length === 0) return null
   return (
     <section className="run-detail-section">
-      <div className="section-heading"><div><h2>Artifacts</h2><p>Delivered results from this Run</p></div></div>
+      <div className="section-heading"><div><h2>交付物</h2><p>本次执行产生的文件与链接</p></div></div>
       <ArtifactList artifacts={artifacts} compact />
     </section>
   )

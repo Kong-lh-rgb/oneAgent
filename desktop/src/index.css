@@ -4306,3 +4306,205 @@ kbd { padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; bac
   .chat-right__body:has(.chat-panels > *) .conversation-main { padding-right: 0; }
   .chat-panels { width: min(430px, calc(100vw - 58px)); box-shadow: var(--shadow-floating); }
 }
+
+/* 信息页收口：参考“设置 · 通用”，用分区和细分隔线替代层叠卡片。 */
+/* 执行历史 */
+.run-history {
+  overflow: visible;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+}
+.run-card {
+  border-bottom-color: var(--border);
+}
+.run-card:hover {
+  background: rgba(242, 242, 239, .68);
+}
+.run-card--running,
+.run-card--interrupted,
+.run-card--failed {
+  box-shadow: none;
+}
+
+/* 审批 */
+.approvals-section {
+  margin-bottom: 34px;
+}
+.approvals-section__title {
+  margin-bottom: 12px;
+  color: #171716;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+.approvals-list {
+  gap: 0;
+  border-top: 1px solid var(--border);
+}
+.approvals-list .approval-card {
+  margin: 0;
+  padding: 16px 0;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+}
+.approvals-list .approval-card:hover {
+  background: rgba(245, 245, 242, .52);
+}
+.approvals-list .approval-card__icon {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  background: transparent;
+}
+
+/* 长期记忆 */
+.memory-page {
+  gap: 30px;
+}
+.memory-overview {
+  align-items: center;
+  padding: 2px 0 26px;
+  border: 0;
+  border-bottom: 1px solid #deded9;
+  border-radius: 0;
+  background: transparent;
+}
+.memory-overview__eyebrow {
+  color: #777773;
+}
+.memory-overview__stats {
+  gap: 0;
+}
+.memory-overview__stats > div {
+  padding: 5px 18px;
+  border: 0;
+  border-left: 1px solid #deded9;
+  border-radius: 0;
+  background: transparent;
+}
+.memory-overview__stats > div:first-child {
+  border-left: 0;
+}
+.memory-core__content,
+.memory-empty-hint {
+  padding: 16px 0;
+  border: 0;
+  border-top: 1px solid #deded9;
+  border-bottom: 1px solid #deded9;
+  border-radius: 0;
+  background: transparent;
+}
+.memory-grid {
+  gap: 0;
+  border-top: 1px solid #deded9;
+}
+.memory-card,
+.memory-card--archived {
+  padding: 17px 0;
+  border: 0;
+  border-bottom: 1px solid #deded9;
+  border-radius: 0;
+  background: transparent;
+}
+.memory-card:hover {
+  border-color: #deded9;
+  background: rgba(245, 245, 242, .5);
+}
+.memory-card__content {
+  border-radius: 6px;
+  background: #f3f3f0;
+}
+
+/* 电脑 */
+.computer-session,
+.computer-ready,
+.computer-observation,
+.computer-actions,
+.computer-permissions {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.computer-session,
+.computer-ready {
+  margin-bottom: 0;
+  padding: 2px 0 22px;
+  border-bottom: 1px solid #deded9;
+}
+.computer-workspace-grid {
+  gap: 28px;
+  border-bottom: 1px solid #deded9;
+}
+.computer-observation {
+  padding: 24px 0;
+}
+.computer-actions {
+  align-self: stretch;
+  padding: 24px 0 24px 28px;
+  border-left: 1px solid #deded9;
+}
+.computer-permissions {
+  margin-top: 0;
+  padding: 24px 0 0;
+}
+
+/* 交付物 */
+.artifacts-page .result-group > h2 {
+  margin-bottom: 10px;
+  color: #171716;
+  font-size: 12px;
+}
+.artifacts-page .results-list {
+  gap: 0;
+  border-top: 1px solid #deded9;
+}
+.artifacts-page .result-card {
+  padding: 15px 0;
+  border: 0;
+  border-bottom: 1px solid #deded9;
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+}
+.artifacts-page .results-list > div {
+  border-bottom: 1px solid #deded9;
+}
+.artifacts-page .results-list > div .result-card {
+  border-bottom: 0;
+}
+.artifacts-page .result-card:hover {
+  border-color: #deded9;
+  background: rgba(245, 245, 242, .5);
+}
+.artifacts-page .result-origin {
+  padding: 0 0 10px;
+}
+
+@media (max-width: 1180px) {
+  .computer-actions {
+    padding: 0 0 24px;
+    border-left: 0;
+  }
+}
+
+@media (max-width: 900px) {
+  .memory-overview {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+  .memory-overview__stats > div:first-child {
+    padding-left: 0;
+  }
+  .memory-card {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .memory-card__meta {
+    padding-left: 19px;
+    border-left: 0;
+  }
+}

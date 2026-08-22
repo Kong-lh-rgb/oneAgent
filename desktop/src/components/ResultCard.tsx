@@ -38,7 +38,7 @@ export default function ResultCard({ artifact }: ResultCardProps): ReactElement 
         <span className="result-card__icon"><Icon name="file" size={18} /></span>
         <div>
           <div className="result-card__title">
-            {artifact.title || artifact.filename || 'Artifact'}
+            {artifact.title || artifact.filename || '交付物'}
           </div>
           <div className="result-card__filename mono">
             {artifact.filename || artifact.source_url || artifact.kind}
@@ -58,15 +58,15 @@ export default function ResultCard({ artifact }: ResultCardProps): ReactElement 
         {isFile ? (
           <>
             <a className="btn btn-ghost btn-sm" href={href} target="_blank" rel="noreferrer">
-              <Icon name="external" size={13} /> Open
+              <Icon name="external" size={13} /> 打开
             </a>
             <a className="btn btn-ghost btn-sm" href={href} download={artifact.filename ?? undefined}>
-              <Icon name="download" size={13} /> Download
+              <Icon name="download" size={13} /> 下载
             </a>
           </>
         ) : (
           <button type="button" className="btn btn-ghost btn-sm" onClick={openUrl}>
-            <Icon name="external" size={13} /> Open link
+            <Icon name="external" size={13} /> 打开链接
           </button>
         )}
       </div>

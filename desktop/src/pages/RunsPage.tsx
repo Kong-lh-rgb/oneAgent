@@ -46,7 +46,7 @@ export default function RunsPage({
     <PageShell
       title="执行历史"
       subtitle="查看每次执行的状态、证据、用量与恢复点。"
-      maxWidth={1120}
+      maxWidth={1360}
       actions={
         <div className="segmented-control" aria-label="Run filter">
           {(['all', 'running', 'attention'] as const).map((item) => (

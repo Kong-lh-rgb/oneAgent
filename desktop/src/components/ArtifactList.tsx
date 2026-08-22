@@ -1,14 +1,14 @@
-/** Delivered Results：按日期组织 Artifact，不呈现数据库表。 */
+/** 交付结果：按日期组织 Artifact，不呈现数据库表。 */
 
 import type { Artifact } from '../api/artifacts'
 import ResultCard from './ResultCard'
 
 function dayLabel(iso: string): string {
   const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) return 'Earlier'
+  if (Number.isNaN(date.getTime())) return '更早'
   const today = new Date()
-  if (date.toDateString() === today.toDateString()) return 'Today'
-  return date.toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' })
+  if (date.toDateString() === today.toDateString()) return '今天'
+  return date.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', year: 'numeric' })
 }
 
 export default function ArtifactList({
@@ -18,7 +18,7 @@ export default function ArtifactList({
   artifacts: Artifact[]
   compact?: boolean
 }): React.JSX.Element {
-  if (artifacts.length === 0) return <div className="empty-inline">No results yet.</div>
+  if (artifacts.length === 0) return <div className="empty-inline">暂无交付结果。</div>
   if (compact) {
     return <div className="results-list">{artifacts.map((item) => <ResultCard key={item.id} artifact={item} />)}</div>
   }
@@ -38,8 +38,8 @@ export default function ArtifactList({
               <div key={item.id}>
                 <ResultCard artifact={item} />
                 <div className="result-origin mono">
-                  {item.run_id ? `Run ${item.run_id.slice(0, 8)}` : 'Run unavailable'}
-                  {item.conversation_id ? ` · Conversation ${item.conversation_id.slice(0, 8)}` : ''}
+                  {item.run_id ? `执行 ${item.run_id.slice(0, 8)}` : '执行记录不可用'}
+                  {item.conversation_id ? ` · 会话 ${item.conversation_id.slice(0, 8)}` : ''}
                 </div>
               </div>
             ))}
