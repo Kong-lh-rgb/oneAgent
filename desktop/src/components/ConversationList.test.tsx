@@ -25,9 +25,9 @@ describe('ConversationList', () => {
         onNew={() => {}}
       />,
     )
-    expect(html).toContain('New')
+    expect(html).toContain('工作')
     expect(html).toContain('Desktop redesign')
-    expect(html).toContain('Working')
+    expect(html).toContain('工作中')
     expect(html).toContain('conversation-item__status--running')
     expect(html).toContain('conversation-item active')
     expect(html).not.toContain('12 messages')
@@ -37,7 +37,7 @@ describe('ConversationList', () => {
     const html = renderToStaticMarkup(
       <ConversationList conversations={[]} selectedId={null} onSelect={() => {}} onNew={() => {}} />,
     )
-    expect(html).toContain('No conversations yet')
+    expect(html).toContain('暂无对话')
   })
 
   it('突出 working / approval / failed，弱化 completed，并展示当前动作', () => {
@@ -58,10 +58,10 @@ describe('ConversationList', () => {
     )
     expect(html).toContain('Typing in Notes')
     expect(html).toContain('Waiting for approval')
-    expect(html).toContain('Working')
-    expect(html).toContain('Waiting')
-    expect(html).toContain('Failed')
+    expect(html).toContain('工作中')
+    expect(html).toContain('等待中')
+    expect(html).toContain('失败')
     expect(html).toContain('conversation-item__status--completed">✓')
-    expect(html).not.toContain('>Completed</span>')
+    expect(html).not.toContain('>已完成</span>')
   })
 })

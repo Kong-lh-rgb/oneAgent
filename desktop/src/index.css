@@ -3037,12 +3037,23 @@ body::before { display: none; }
   backdrop-filter: none;
 }
 .conversation-sidebar.collapsed { width: 0; flex-basis: 0; }
-.conversation-sidebar__content { padding: 14px 10px; }
-.conversation-sidebar__top { padding: 2px 4px 13px; align-items: flex-start; }
+.conversation-sidebar__content {
+  width: 100%;
+  padding: 14px 0;
+}
+.conversation-sidebar__top {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 2px 0 13px;
+}
 .conversation-sidebar__label {
+  padding-left: 14px;
+  margin-right: 0;
+  margin-left: 0;
   color: var(--text);
-  font-size: 13px;
-  font-weight: 680;
+  font-size: 16px;
+  font-weight: 750;
   letter-spacing: 0;
   text-transform: none;
 }
@@ -3051,23 +3062,116 @@ body::before { display: none; }
   color: var(--text-tertiary);
   font-size: 10.5px;
 }
-.new-conversation { color: var(--accent); border-radius: var(--radius-sm); }
-.conversation-list { gap: 2px; }
+.new-conversation {
+  color: var(--accent);
+  border-radius: 10px;
+  box-shadow: 0 4px 12px rgba(61, 78, 102, 0.1);
+}
+.conversation-list {
+  width: 100%;
+  gap: 2px;
+  padding: 2px 0 14px;
+  scrollbar-gutter: auto;
+}
+.conversation-list::-webkit-scrollbar { width: 8px; }
 .conversation-item {
   position: relative;
   min-height: 55px;
-  padding: 9px 10px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
+  margin: 0;
+  padding: 9px 34px 9px 14px;
+  border: 0;
+  border-radius: 10px;
   background: transparent;
+  display: flex;
+  flex-direction: column;
+  transition: background 150ms ease, color 150ms ease;
 }
-.conversation-item:hover { background: #eeeeeb; }
-.conversation-item.active {
-  background: var(--surface-raised);
-  border-color: var(--border);
-  box-shadow: none;
+.conversation-item__main {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
 }
-.conversation-item__title { font-size: 12.5px; font-weight: 570; }
+.conversation-item:hover { background: rgba(0, 0, 0, 0.06); }
+.conversation-item:hover .conversation-item__main { color: var(--text-primary); }
+.conversation-item.active { background: rgba(0, 0, 0, 0.08); }
+
+/* 置顶区与未置顶区之间的横线分界 */
+.conversation-list__row {
+  display: flex;
+  flex-direction: column;
+}
+.conversation-list__divider {
+  height: 1px;
+  margin: 6px 14px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.conversation-item__more {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 150ms ease, background 150ms ease, color 150ms ease;
+}
+.conversation-item:hover .conversation-item__more,
+.conversation-item__more:focus-visible {
+  opacity: 1;
+}
+.conversation-item__more:hover { background: rgba(0, 0, 0, 0.07); color: var(--text-primary); }
+
+/* 三点菜单：圆角列表 */
+.conversation-menu {
+  position: absolute;
+  z-index: 12;
+  top: calc(100% - 6px);
+  right: 8px;
+  min-width: 130px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.92);
+  -webkit-backdrop-filter: blur(16px) saturate(145%);
+  backdrop-filter: blur(16px) saturate(145%);
+  box-shadow: 0 10px 28px rgba(61, 78, 102, 0.16);
+}
+.conversation-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.conversation-menu button:hover { background: rgba(0, 0, 0, 0.06); color: var(--text-primary); }
+.conversation-menu__danger { color: var(--danger) !important; }
+.conversation-menu__danger:hover { background: rgba(169, 68, 66, 0.1) !important; }
+.conversation-item__title { font-size: 12.5px; font-weight: 450; }
 .conversation-item__meta { margin-top: 5px; font-size: 10.5px; }
 .conversation-item__activity {
   display: block;

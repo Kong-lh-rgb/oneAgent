@@ -14,13 +14,17 @@ import {
   ListChecks,
   MessageSquare,
   Monitor,
+  MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   Pause,
+  Pencil,
+  Pin,
   Plus,
   Send,
   Settings,
   ShieldCheck,
+  Trash2,
   Workflow,
   X,
   type LucideIcon,
@@ -50,6 +54,10 @@ export type IconName =
   | 'close'
   | 'pause'
   | 'agent'
+  | 'more'
+  | 'pin'
+  | 'pencil'
+  | 'trash'
 
 const ICONS: Record<IconName, LucideIcon> = {
   chat: MessageSquare,
@@ -73,6 +81,10 @@ const ICONS: Record<IconName, LucideIcon> = {
   close: X,
   pause: Pause,
   agent: Bot,
+  more: MoreHorizontal,
+  pin: Pin,
+  pencil: Pencil,
+  trash: Trash2,
 }
 
 export interface IconProps extends Omit<LucideProps, 'name'> {

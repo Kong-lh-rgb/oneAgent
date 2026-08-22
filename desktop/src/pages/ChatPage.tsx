@@ -5,8 +5,10 @@ import { approveApproval, denyApproval, listApprovals } from '../api/approvals'
 import { listArtifacts } from '../api/artifacts'
 import {
   createConversation,
+  deleteConversation,
   getConversation,
   listConversations,
+  renameConversation,
   sendMessage,
 } from '../api/conversations'
 import { cancelRun, interruptRun, listRuns, recoverRun } from '../api/runs'
@@ -197,6 +199,37 @@ export default function ChatPage({
       void queryClient.invalidateQueries({ queryKey: ['conversations'] })
     },
   })
+
+  /** 重命名会话（接入后端）。 */
+  const renameConversationAction = async (id: string, title: string): Promise<void> => {
+    try {
+      await renameConversation(id, title)
+      void queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      void queryClient.invalidateQueries({ queryKey: ['conversation', id] })
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  /** 删除会话（接入后端）；删除当前会话时切到下一个。 */
+  const deleteConversationAction = async (id: string): Promise<void> => {
+    try {
+      await deleteConversation(id)
+      if (id === selectedId) {
+        const next = conversations.find((c) => c.id !== id)?.id ?? null
+        setSelectedId(next)
+        setLastRunId(null)
+        setPlanTask(null)
+        setPlanResolved(null)
+        setLiveTurnActive(false)
+        setPanelOrder((prev) => prev.filter((p) => p !== 'activity'))
+      }
+      void queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      void queryClient.invalidateQueries({ queryKey: ['conversation', id] })
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : String(error))
+    }
+  }
 
   const sendMutation = useMutation({
     mutationFn: ({
@@ -452,6 +485,8 @@ export default function ChatPage({
             setLiveTurnActive(false)
           }}
           onNew={() => newConversationMutation.mutate()}
+          onRename={(id, title) => void renameConversationAction(id, title)}
+          onDelete={(id) => void deleteConversationAction(id)}
         />
       </aside>
 

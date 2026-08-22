@@ -33,6 +33,25 @@ export async function createConversation(): Promise<Conversation> {
   return data.conversation
 }
 
+export async function renameConversation(
+  conversationId: string,
+  title: string,
+): Promise<Conversation> {
+  const data = await rpcClient.call<{ conversation: Conversation }>(
+    RpcMethods.conversationRename,
+    { conversation_id: conversationId, title },
+  )
+  return data.conversation
+}
+
+export async function deleteConversation(conversationId: string): Promise<boolean> {
+  const data = await rpcClient.call<{ deleted: boolean }>(
+    RpcMethods.conversationDelete,
+    { conversation_id: conversationId },
+  )
+  return data.deleted
+}
+
 export async function sendMessage(
   conversationId: string,
   content: string,

@@ -100,6 +100,32 @@ async def conversation_send(
     }
 
 
+async def conversation_rename(
+    params: dict[str, Any],
+    ctx: RpcContext,
+) -> dict[str, Any]:
+    conversation_id = _require_str(params, "conversation_id")
+    title = _require_str(params, "title")
+    try:
+        conversation = await ctx.application.conversation_store.rename(
+            conversation_id, title
+        )
+    except KeyError as exc:
+        raise JsonRpcError(RESOURCE_NOT_FOUND, str(exc)) from exc
+    return {"conversation": conversation}
+
+
+async def conversation_delete(
+    params: dict[str, Any],
+    ctx: RpcContext,
+) -> dict[str, Any]:
+    conversation_id = _require_str(params, "conversation_id")
+    deleted = await ctx.application.conversation_store.delete(conversation_id)
+    if not deleted:
+        raise JsonRpcError(RESOURCE_NOT_FOUND, "conversation not found")
+    return {"deleted": True}
+
+
 def _require_str(params: dict[str, Any], key: str) -> str:
     value = params.get(key)
     if not isinstance(value, str) or not value:
@@ -122,3 +148,5 @@ def register(dispatcher: RpcDispatcher) -> None:
     dispatcher.register("conversation.get", conversation_get)
     dispatcher.register("conversation.create", conversation_create)
     dispatcher.register("conversation.send", conversation_send)
+    dispatcher.register("conversation.rename", conversation_rename)
+    dispatcher.register("conversation.delete", conversation_delete)

@@ -6,6 +6,8 @@ export const RpcMethods = {
   conversationGet: 'conversation.get',
   conversationCreate: 'conversation.create',
   conversationSend: 'conversation.send',
+  conversationRename: 'conversation.rename',
+  conversationDelete: 'conversation.delete',
   runList: 'run.list',
   runGet: 'run.get',
   runCancel: 'run.cancel',
