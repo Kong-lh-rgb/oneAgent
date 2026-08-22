@@ -2530,3 +2530,23 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 - [x] type 只返回 `delivery_status=delivered` 与 `verification_status=unverified`；mutation 后立即失效 Snapshot
 - [x] 新增 `scripts/e2e_computer_runtime_v2.py`：TextEdit fresh observe 验证 `hello`，追加后严格得到 `hello Vesta`
 - [x] 真机 E2E 通过；Backend 全量 `pytest` 905 通过；ruff 通过；Swift build 与协议检查通过
+
+### 完成：设置中心 V2 · 模型配置闭环
+
+#### 目标
+
+- [x] 设置页增加独立“模型”分类，不再要求用户手工编辑 `.env`
+- [x] 支持 OpenAI、Qwen、DeepSeek、Claude 的模型名称、端点与 API 格式配置
+- [x] 支持选择主 Agent Provider，并分别配置记忆反思、容量维护模型
+- [x] API Key 只保存到 macOS Keychain，非敏感配置原子写入 `.vesta/settings/models.json`
+- [x] Host 启动时合并 `.env`、JSON 与 Keychain，保持原环境变量配置兼容
+- [x] 增加连接测试；只允许向内置 Provider 官方 HTTPS 端点发送密钥
+- [x] 保存后明确提示重启 Host 生效，不热切换正在执行的 Run
+
+#### 验证
+
+- [x] Backend 全量 `pytest`：949 passed
+- [x] Backend `ruff`、`compileall`：通过
+- [x] Desktop `npm test`：239 passed
+- [x] Desktop `typecheck`、生产构建：通过
+- [x] `git diff --check`：通过

@@ -3899,6 +3899,60 @@ kbd { padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; bac
 .settings-general .btn { border-color: #cfcfca; background: white; color: #171716; }
 .settings-general .btn:hover { background: #f2f2ef; }
 
+/* 设置 · 模型：保持与通用页相同的轻量信息层级 */
+.settings-models { max-width: 760px; }
+.settings-active-model { color: #777773; font-size: 9.5px; white-space: nowrap; }
+.model-field { display: grid; gap: 7px; color: #555552; font-size: 9.5px; }
+.model-field--inline { grid-template-columns: 135px minmax(0, 1fr); align-items: center; }
+.model-field input,
+.model-field select,
+.model-role-custom input,
+.model-role-custom select {
+  width: 100%;
+  min-height: 37px;
+  border: 1px solid #d8d8d3;
+  border-radius: 8px;
+  outline: none;
+  background: #fff;
+  color: #171716;
+  font: inherit;
+  font-size: 10.5px;
+}
+.model-field input { padding: 0 11px; }
+.model-field select,
+.model-role-custom select { padding: 0 28px 0 10px; }
+.model-field input:focus,
+.model-field select:focus,
+.model-role-custom input:focus,
+.model-role-custom select:focus { border-color: #858581; box-shadow: 0 0 0 2px rgb(20 20 19 / 7%); }
+.model-field input::placeholder { color: #aaa9a4; }
+.model-field small { color: #969691; font-size: 8.5px; }
+.model-provider-tabs { display: flex; gap: 4px; margin-bottom: 17px; border-bottom: 1px solid #e2e2dd; }
+.model-provider-tabs button { display: flex; align-items: center; gap: 7px; padding: 9px 11px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #777773; font-size: 10px; }
+.model-provider-tabs button:hover { color: #222; }
+.model-provider-tabs button.active { border-bottom-color: #222; color: #111; }
+.model-provider-tabs i { width: 5px; height: 5px; border-radius: 50%; background: #d2d2ce; }
+.model-provider-tabs i.configured { background: #45806f; }
+.model-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 18px; }
+.model-role-row { display: grid; grid-template-columns: 120px 120px minmax(0, 1fr); align-items: center; gap: 16px; min-height: 53px; border-top: 1px solid #e5e5e1; }
+.model-role-row:last-child { border-bottom: 1px solid #e5e5e1; }
+.model-role-row__title { display: flex; align-items: center; gap: 9px; }
+.model-role-row__title strong { color: #222; font-size: 10.5px; }
+.model-role-row__title label,
+.model-role-inherit { display: inline-flex; align-items: center; gap: 6px; color: #777773; font-size: 9px; }
+.model-role-row input[type='checkbox'] { accent-color: #222; }
+.model-role-custom { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 8px; }
+.model-role-custom input { padding: 0 10px; }
+.model-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding-top: 18px; }
+.model-actions--secondary { justify-content: flex-start; padding-top: 15px; }
+.model-actions span { color: #8b8b86; font-size: 8.5px; }
+.settings-models .btn { min-height: 34px; border-color: #cfcfca; border-radius: 8px; background: #fff; color: #171716; }
+.settings-models .btn:hover { background: #f2f2ef; }
+.settings-models .btn--primary { border-color: #181817; background: #181817; color: #fff; }
+.settings-models .btn--primary:hover { background: #333331; }
+.model-notice { margin-top: 18px; padding: 10px 12px; border-left: 2px solid #45806f; background: #f3f6f4; color: #345f53; font-size: 9.5px; }
+.model-notice--error { border-left-color: #9c5149; background: #faf3f2; color: #8a443d; }
+
 /* 设置 · 扩展能力 */
 .extensions-settings { display: grid; gap: 18px; }
 .extensions-header {
@@ -4077,6 +4131,10 @@ kbd { padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; bac
   .settings-nav { padding-right: 12px; }
   .settings-nav button { padding-inline: 8px; }
   .settings-info-list > div { grid-template-columns: 105px minmax(0, 1fr); }
+  .model-form { grid-template-columns: 1fr; }
+  .model-role-row { grid-template-columns: 105px minmax(0, 1fr); padding: 10px 0; }
+  .model-role-custom { grid-column: 1 / -1; }
+  .model-field--inline { grid-template-columns: 105px minmax(0, 1fr); }
 }
 
 @media (prefers-reduced-motion: reduce) {

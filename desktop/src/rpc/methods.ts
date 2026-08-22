@@ -2,6 +2,9 @@
 
 export const RpcMethods = {
   systemInfo: 'system.info',
+  modelSettingsGet: 'model_settings.get',
+  modelSettingsUpdate: 'model_settings.update',
+  modelSettingsTest: 'model_settings.test',
   conversationList: 'conversation.list',
   conversationGet: 'conversation.get',
   conversationCreate: 'conversation.create',

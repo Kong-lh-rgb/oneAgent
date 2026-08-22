@@ -5,12 +5,13 @@ import { getComputerStatus, requestComputerPermission } from '../api/computer'
 import { getSystemInfo } from '../api/system'
 import ComputerStatusView from '../components/ComputerStatusView'
 import ExtensionsSettings from '../components/ExtensionsSettings'
+import ModelSettingsPanel from '../components/ModelSettingsPanel'
 import { ErrorState } from '../components/PageStates'
 import { PageShell } from '../components/PageShell'
 
 export default function SettingsPage(): React.JSX.Element {
   const queryClient = useQueryClient()
-  const [section, setSection] = useState<'general' | 'extensions'>('general')
+  const [section, setSection] = useState<'general' | 'models' | 'extensions'>('general')
 
   const infoQuery = useQuery({
     queryKey: ['system-info'],
@@ -50,13 +51,16 @@ export default function SettingsPage(): React.JSX.Element {
           <button className={section === 'general' ? 'active' : ''} onClick={() => setSection('general')}>
             <strong>通用</strong><span>运行环境与权限</span>
           </button>
+          <button className={section === 'models' ? 'active' : ''} onClick={() => setSection('models')}>
+            <strong>模型</strong><span>Provider 与后台模型</span>
+          </button>
           <button className={section === 'extensions' ? 'active' : ''} onClick={() => setSection('extensions')}>
             <strong>扩展能力</strong><span>Skills 与 MCP</span>
           </button>
         </aside>
 
         <main className="settings-content">
-          {section === 'extensions' ? <ExtensionsSettings /> : (
+          {section === 'extensions' ? <ExtensionsSettings /> : section === 'models' ? <ModelSettingsPanel /> : (
             <div className="settings-general">
               <header className="settings-content__header">
                 <h2>通用</h2>

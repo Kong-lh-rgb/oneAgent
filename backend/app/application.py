@@ -77,6 +77,10 @@ from app.memory import (
     PostRunMemoryReflector,
     register_memory_tools,
 )
+from app.model_settings import (
+    ModelSettingsService,
+    load_effective_model_configuration,
+)
 from app.models.config import ModelSettings
 from app.models.registry import ModelAdapterRegistry
 from app.models.types import ModelProvider
@@ -240,8 +244,21 @@ class Application:
         self.max_tool_rounds = max_tool_rounds
         self.max_output_tokens = max_output_tokens
         self._run_budget_config = run_budget_config
-        self._memory_reflection_config = memory_reflection_config
-        self._memory_maintenance_config = memory_maintenance_config
+        effective_model_configuration = (
+            load_effective_model_configuration()
+            if settings is None and registry is None
+            else None
+        )
+        self._memory_reflection_config = memory_reflection_config or (
+            effective_model_configuration.reflection
+            if effective_model_configuration is not None
+            else None
+        )
+        self._memory_maintenance_config = memory_maintenance_config or (
+            effective_model_configuration.maintenance
+            if effective_model_configuration is not None
+            else None
+        )
         self._skill_learning_settings = skill_learning_settings
         # True = DesktopApprovalGate（Host）；False = ConsoleApprovalGate（CLI）。
         self.desktop_approval = desktop_approval
@@ -249,7 +266,12 @@ class Application:
         self._computer_runtime = computer_runtime
         # Computer Host 状态（bootstrap 产物；None = 未配置 Computer）。
         self.computer_host_status = computer_host_status
-        self.settings = settings or ModelSettings()
+        self.settings = settings or (
+            effective_model_configuration.settings
+            if effective_model_configuration is not None
+            else ModelSettings()
+        )
+        self.model_settings_service = ModelSettingsService()
         if registry is not None:
             # 测试注入的离线 registry：provider 直接取传入值（不校验 .env）。
             self.registry = registry
