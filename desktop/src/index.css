@@ -379,6 +379,20 @@ summary:focus-visible {
   line-height: 1.25;
 }
 
+/* 内联编辑标题输入框 */
+.conversation-item__edit {
+  width: 100%;
+  padding: 3px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+}
+.conversation-item__edit:focus { border-color: var(--accent); }
+
 .conversation-item__meta {
   color: var(--text-tertiary);
   font-size: 10.5px;
@@ -2999,23 +3013,26 @@ body::before { display: none; }
 
 .app-shell { background: var(--bg); }
 .sidebar {
-  width: 58px;
-  flex-basis: 58px;
-  padding: 10px 7px;
+  width: 68px;
+  flex-basis: 68px;
+  padding: 10px 4px;
   background: #ebebe8;
   border-color: var(--border);
   backdrop-filter: none;
 }
 .sidebar-brand {
-  width: 30px;
-  height: 30px;
+  width: auto;
+  height: auto;
   margin-bottom: 16px;
-  border: 1px solid #bdbdb6;
-  border-radius: 8px;
-  background: #f8f8f6;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
   color: var(--accent);
-  font-size: 13px;
-  font-weight: 720;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
 }
 .nav-item { width: 38px; height: 36px; border-radius: 7px; }
 .nav-item.active { color: var(--accent); background: #dce6e2; }

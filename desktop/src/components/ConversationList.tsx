@@ -100,17 +100,25 @@ export default function ConversationList({
   // 第一个未置顶会话的索引（用于置顶/未置顶分界线）。
   const firstUnpinnedIndex = ordered.findIndex((c) => !pinned.includes(c.id))
 
-  const runRename = (id: string, current: string): void => {
-    const title = window.prompt('重命名对话', current)
-    if (title === null) return
-    const trimmed = title.trim()
-    if (!trimmed || trimmed === current) return
-    void onRename?.(id, trimmed)
+  // 内联重命名状态（Electron 不实现 window.prompt，改用输入框）。
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editingValue, setEditingValue] = useState('')
+
+  const startRename = (id: string, current: string): void => {
+    setEditingValue(current)
+    setEditingId(id)
     setMenuFor(null)
   }
 
+  const commitRename = (id: string, original: string): void => {
+    setEditingId(null)
+    const trimmed = editingValue.trim()
+    if (!trimmed || trimmed === original) return
+    void onRename?.(id, trimmed)
+  }
+
   const runDelete = (id: string): void => {
-    if (!window.confirm('删除这个对话？此操作不可撤销。')) return
+    // Electron 不实现 window.confirm，直接执行删除（可恢复为新建）。
     void onDelete?.(id)
     setMenuFor(null)
   }
@@ -148,10 +156,34 @@ export default function ConversationList({
                 onClick={() => onSelect(conversation.id)}
                 aria-current={selectedId === conversation.id ? 'true' : undefined}
               >
-                <span className="conversation-item__title">
-                  {isPinned ? <Icon name="pin" size={11} /> : null}
-                  {conversation.title || '未命名对话'}
-                </span>
+                {editingId === conversation.id ? (
+                  <input
+                    className="conversation-item__edit"
+                    value={editingValue}
+                    autoFocus
+                    aria-label="编辑会话标题"
+                    onClick={(event) => event.stopPropagation()}
+                    onChange={(event) => setEditingValue(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault()
+                        commitRename(conversation.id, conversation.title || '')
+                      } else if (event.key === 'Escape') {
+                        setEditingId(null)
+                      }
+                    }}
+                    onBlur={() => {
+                      if (editingId === conversation.id) {
+                        commitRename(conversation.id, conversation.title || '')
+                      }
+                    }}
+                  />
+                ) : (
+                  <span className="conversation-item__title">
+                    {isPinned ? <Icon name="pin" size={11} /> : null}
+                    {conversation.title || '未命名对话'}
+                  </span>
+                )}
                 <span className="conversation-item__meta">
                   {meta ? (
                     <span
@@ -191,7 +223,7 @@ export default function ConversationList({
                   <button
                     type="button"
                     role="menuitem"
-                    onClick={() => runRename(conversation.id, conversation.title || '')}
+                    onClick={() => startRename(conversation.id, conversation.title || '')}
                   >
                     <Icon name="pencil" size={13} />
                     编辑
