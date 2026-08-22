@@ -3,13 +3,10 @@ import { useState } from 'react'
 
 import {
   cancelAutomation,
-  createAutomation,
   listAutomations,
   pauseAutomation,
   resumeAutomation,
-  type CreateAutomationInput,
 } from '../api/automations'
-import AutomationForm from '../components/AutomationForm'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
 import { Icon } from '../components/Icon'
@@ -55,7 +52,6 @@ function automationStatusLabel(status: string): string {
 
 export default function AutomationsPage(): React.JSX.Element {
   const queryClient = useQueryClient()
-  const [showForm, setShowForm] = useState(false)
   const [cancelTarget, setCancelTarget] = useState<string | null>(null)
 
   const automationsQuery = useQuery({
@@ -69,18 +65,6 @@ export default function AutomationsPage(): React.JSX.Element {
     void queryClient.invalidateQueries({ queryKey: ['automations'] })
     void queryClient.invalidateQueries({ queryKey: ['runs'] })
   }
-
-  const createMutation = useMutation({
-    mutationFn: (input: CreateAutomationInput) => createAutomation(input),
-    onSuccess: () => {
-      setShowForm(false)
-      toast.success('自动化已创建')
-      invalidate()
-    },
-    onError: (err: unknown) => {
-      toast.error(err instanceof Error ? err.message : String(err))
-    },
-  })
 
   const controlMutation = useMutation({
     mutationFn: (action: { id: string; op: 'pause' | 'resume' | 'cancel' }) => {
@@ -102,25 +86,8 @@ export default function AutomationsPage(): React.JSX.Element {
   return (
     <PageShell
       title="自动化"
-      subtitle="让 Vesta 在指定时间或周期内自动执行工作。"
-      actions={
-        <button
-          className="btn btn-primary btn-sm"
-          onClick={() => setShowForm((value) => !value)}
-        >
-          {showForm ? '收起' : '新建自动化'}
-        </button>
-      }
+      subtitle="查看并管理 Vesta 根据你的要求创建的定时工作。"
     >
-      {showForm && (
-        <AutomationForm
-          onSubmit={async (input) => {
-            await createMutation.mutateAsync(input)
-          }}
-          onCancel={() => setShowForm(false)}
-        />
-      )}
-
       {automationsQuery.isPending ? (
         <LoadingState label="正在加载自动化…" />
       ) : automationsQuery.isError ? (
@@ -131,7 +98,7 @@ export default function AutomationsPage(): React.JSX.Element {
       ) : automations.length === 0 ? (
         <EmptyState
           title="暂无自动化"
-          hint="可以创建稍后执行或周期重复的工作。"
+          hint="在对话中告诉 Vesta 需要何时执行什么工作，创建后会显示在这里。"
           icon="automations"
         />
       ) : (
@@ -149,7 +116,10 @@ export default function AutomationsPage(): React.JSX.Element {
                 <span className={`automation-state automation-state--${automation.status}`}>{automationStatusLabel(automation.status)}</span>
               </header>
 
-              <p className="automation-card__prompt">{automation.prompt}</p>
+              <details className="automation-card__description">
+                <summary><span>查看任务描述</span><Icon name="chevronDown" size={14} /></summary>
+                <p>{automation.prompt}</p>
+              </details>
 
               <div className="automation-card__schedule">
                 <span>调度计划</span>

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 import type { LongTermMemory } from '../api/types'
-import { MemoryCard } from './MemoryPage'
+import { CoreMemoryView, MemoryCard, parseCoreMemory } from './MemoryPage'
 
 const memory: LongTermMemory = {
   id: 'M001',
@@ -29,5 +29,30 @@ describe('MemoryCard', () => {
     expect(html).toContain('r2')
     expect(html).toContain('查看完整内容')
     expect(html).toContain('设计与解释均使用中文')
+  })
+
+  it('核心记忆隐藏Markdown结构与内部key', () => {
+    const core = [
+      '# Core Memory',
+      '',
+      '## Managed Core Entries',
+      '',
+      '### user.preference.language',
+      '',
+      '用户希望始终使用中文。',
+      '',
+      '### user.constraint.comments',
+      '',
+      '代码注释使用中文。',
+    ].join('\n')
+    expect(parseCoreMemory(core)).toEqual([
+      { label: '偏好', content: '用户希望始终使用中文。' },
+      { label: '长期约束', content: '代码注释使用中文。' },
+    ])
+    const html = renderToStaticMarkup(<CoreMemoryView content={core} />)
+    expect(html).toContain('始终随身携带')
+    expect(html).toContain('用户希望始终使用中文')
+    expect(html).not.toContain('Managed Core Entries')
+    expect(html).not.toContain('user.preference.language')
   })
 })
