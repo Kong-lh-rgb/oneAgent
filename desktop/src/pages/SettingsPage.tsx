@@ -39,17 +39,17 @@ export default function SettingsPage(): React.JSX.Element {
   return (
     <PageShell
       title="Settings"
-      subtitle="Vesta Host、电脑权限与桌面环境信息。"
+      subtitle="Host connection, Computer permissions, and Desktop environment."
       maxWidth={720}
     >
-      <div className="panel" style={{ padding: 14 }}>
-        <h3 style={{ fontSize: 14, marginTop: 0 }}>Vesta Host</h3>
+      <section className="settings-section">
+        <h2>Vesta Host</h2>
         {infoQuery.isLoading ? (
-          <div className="text-dim"><span className="spinner" /> 正在检查后端…</div>
+          <div className="text-dim"><span className="spinner" /> Checking Host…</div>
         ) : infoQuery.isError ? (
           <ErrorState
-            message="无法连接 Vesta Host"
-            hint="请先在 backend 启动：python -m app.server，然后重试。"
+            message="Could not connect to Vesta Host"
+            hint="Start python -m app.server from backend, then retry."
             onRetry={() => void infoQuery.refetch()}
           />
         ) : (
@@ -78,10 +78,10 @@ export default function SettingsPage(): React.JSX.Element {
             </tbody>
           </table>
         )}
-      </div>
+      </section>
 
-      <div className="panel" style={{ padding: 14, marginTop: 12 }}>
-        <h3 style={{ fontSize: 14, marginTop: 0 }}>Computer</h3>
+      <section className="settings-section">
+        <h2>Computer</h2>
         <ComputerStatusView
           status={computerQuery.data ?? null}
           loading={computerQuery.isLoading}
@@ -89,15 +89,15 @@ export default function SettingsPage(): React.JSX.Element {
         />
         {(computerQuery.data?.permissions.accessibility === 'required' ||
           computerQuery.data?.permissions.screen_recording === 'required') && (
-          <div className="text-dim" style={{ marginTop: 8 }}>
-            点击 Request 会打开系统权限提示；如果未立即生效，请到
-            System Settings → Privacy &amp; Security 手动开启。
+          <div className="settings-section__hint">
+            Request opens the macOS permission prompt. If the change is not immediate,
+            enable it in System Settings → Privacy &amp; Security.
           </div>
         )}
-      </div>
+      </section>
 
-      <div className="panel" style={{ padding: 14, marginTop: 12 }}>
-        <h3 style={{ fontSize: 14, marginTop: 0 }}>Desktop</h3>
+      <section className="settings-section">
+        <h2>Desktop</h2>
         <table className="table">
           <tbody>
             <tr>
@@ -122,7 +122,7 @@ export default function SettingsPage(): React.JSX.Element {
             </tr>
           </tbody>
         </table>
-      </div>
+      </section>
     </PageShell>
   )
 }

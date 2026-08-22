@@ -51,9 +51,8 @@ export default function ChatPage({
     message: Message
   } | null>(null)
   const [sendError, setSendError] = useState<string | null>(null)
-  // LiveAgentTurn 生命周期：流式中 → 收起动画（settling）→ 原位切换为落库消息。
+  // Persistent AgentTurn：完成后仍保留为本轮 Work Record。
   const [liveTurnActive, setLiveTurnActive] = useState(false)
-  const [liveTurnSettling, setLiveTurnSettling] = useState(false)
 
 
   const conversationsQuery = useQuery({
@@ -91,6 +90,12 @@ export default function ChatPage({
   const activeRunId = liveRunId ?? lastRunId
   const activeRunStatus = activeRunId ? runStatuses[activeRunId] : undefined
 
+  // 实时 Run 一旦出现就记住 id；终态通知可能早于 conversation.send 返回，
+  // 不能因 running → completed 让 Persistent AgentTurn 短暂丢失事件。
+  useEffect(() => {
+    if (liveRunId) setLastRunId(liveRunId)
+  }, [liveRunId])
+
   // 后端 SQLite 是权威：会话切换/挂载时同步该会话 runs 的真实状态，避免历史
   // run 因错过实时事件而长期停留在 running（例如取消广播丢失）。
   useEffect(() => {
@@ -112,15 +117,23 @@ export default function ChatPage({
   }, [selectedId])
 
   // conversation → 最近 run 状态（让会话列表呈现 Agent workspace 状态）。
-  const conversationStatus = useMemo(() => {
+  const { conversationStatus, conversationActivity } = useMemo(() => {
     const map: Record<string, string> = {}
+    const activity: Record<string, string> = {}
+    const latestTimes: Record<string, string> = {}
     for (const [runId, events] of Object.entries(eventsByRun)) {
-      const conv = events.at(-1)?.conversation_id
+      const latest = events.at(-1)
+      const conv = latest?.conversation_id
       if (!conv) continue
+      if (latestTimes[conv] && latestTimes[conv] > latest.event_time) continue
+      latestTimes[conv] = latest.event_time
       const status = runStatuses[runId]
       if (status) map[conv] = status
+      const turn = buildTurnView(events, { now: Date.now() })
+      if (turn.currentAction) activity[conv] = turn.currentAction
+      else if (turn.targetApp) activity[conv] = turn.targetApp
     }
-    return map
+    return { conversationStatus: map, conversationActivity: activity }
   }, [eventsByRun, runStatuses])
 
   const approvalsQuery = useQuery({
@@ -163,7 +176,6 @@ export default function ChatPage({
       setPlanTask(null)
       setPlanResolved(null)
       setLiveTurnActive(false)
-      setLiveTurnSettling(false)
       void queryClient.invalidateQueries({ queryKey: ['conversations'] })
     },
   })
@@ -273,15 +285,15 @@ export default function ChatPage({
     optimisticMessage?.conversationId === selectedId
       ? [...storedMessages, optimisticMessage.message]
       : storedMessages
-  // 流式/收起动画期间，最后一条尚未“正式落库”的 assistant 回复由 LiveAgentTurn
-  // 原位展示，避免落库瞬间与流式回复重复、以及回复重排造成的“跳一下”。
+  const showAgentTurn = liveTurnActive || liveRunId !== null
+  // Persistent AgentTurn 已承载最新 assistant reply，避免与落库消息重复。
   const displayMessages =
-    liveTurnActive && messages.at(-1)?.role === 'assistant'
+    showAgentTurn && messages.at(-1)?.role === 'assistant'
       ? messages.slice(0, -1)
       : messages
   const selectedConversation = conversations.find((item) => item.id === selectedId)
   const showNewConversationHome = selectedId !== null && messages.length === 0
-  const progressRunId = sendMutation.isPending ? liveRunId : activeRunId
+  const progressRunId = activeRunId
   const activeEvents = progressRunId ? (eventsByRun[progressRunId] ?? []) : []
   const latestModelStep = [...activeEvents]
     .reverse()
@@ -290,10 +302,7 @@ export default function ChatPage({
 
   // Run Status Bar 数据：当前最重要的执行状态 + 统计。
   const turnView = buildTurnView(activeEvents, { now: Date.now() })
-  const activeTool = turnView.tools.find(
-    (tool) => tool.state === 'active' || tool.state === 'waiting',
-  )
-  const currentAction = activeTool?.label ?? null
+  const currentAction = turnView.currentAction
   const startedEvent = activeEvents.find((event) => event.type === 'agent_started')
   const startedAt = startedEvent ? Date.parse(startedEvent.event_time) : null
   const failedEvent = [...activeEvents]
@@ -346,7 +355,7 @@ export default function ChatPage({
     planTask?.id ?? null,
     sendError,
     selectedId,
-    liveTurnActive,
+    showAgentTurn,
   ].join('|')
   useEffect(() => {
     scheduleScroll()
@@ -358,25 +367,6 @@ export default function ChatPage({
     }
   }, [autoScrollKey])
 
-  // 输出完毕（isPending 变 false 且会话数据已刷新）后：先让活动块平滑收起，
-  // 再原位切换为正式消息，避免瞬间卸载导致的“跳一下”。
-  useEffect(() => {
-    if (!liveTurnActive) return
-    if (sendMutation.isPending) return
-    if (conversationQuery.isLoading || conversationQuery.isFetching) return
-    setLiveTurnSettling(true)
-    const timer = window.setTimeout(() => {
-      setLiveTurnActive(false)
-      setLiveTurnSettling(false)
-    }, 340)
-    return () => window.clearTimeout(timer)
-  }, [
-    liveTurnActive,
-    sendMutation.isPending,
-    conversationQuery.isLoading,
-    conversationQuery.isFetching,
-  ])
-
   return (
     <div className="chat-workspace">
       <aside
@@ -387,6 +377,7 @@ export default function ChatPage({
           conversations={conversations}
           selectedId={selectedId}
           statusByConversation={conversationStatus}
+          activityByConversation={conversationActivity}
           onSelect={(id) => {
             setSelectedId(id)
             setLastRunId(null)
@@ -394,7 +385,6 @@ export default function ChatPage({
             setPlanResolved(null)
             setActivityOpen(false)
             setLiveTurnActive(false)
-            setLiveTurnSettling(false)
           }}
           onNew={() => newConversationMutation.mutate()}
         />
@@ -414,6 +404,7 @@ export default function ChatPage({
           currentAction={currentAction}
           stopReason={stopReason}
           mode={mode}
+          turnState={activeEvents.length > 0 ? turnView.status : undefined}
           activityOpen={activityOpen}
           onToggleActivity={() => setActivityOpen((open) => !open)}
           onStop={() => void stopRun()}
@@ -428,8 +419,8 @@ export default function ChatPage({
           <div className="message-thread">
             {selectedId === null ? (
               <section className="no-conversation">
-                <div className="chat-empty__mark">oa</div>
-                <h1>Start a conversation</h1>
+                <div className="chat-empty__mark">V</div>
+                <h1>Start new work</h1>
                 <p>Create a conversation, then give Vesta something to work on.</p>
                 <button
                   type="button"
@@ -446,12 +437,13 @@ export default function ChatPage({
               <MessageList messages={displayMessages} />
             )}
 
-            {liveTurnActive ? (
+            {showAgentTurn ? (
               <LiveAgentTurn
                 runId={progressRunId}
                 step={latestModelStep ?? null}
                 events={activeEvents}
-                settling={liveTurnSettling}
+                onRecover={() => void recoverRunAction()}
+                onInspect={() => setActivityOpen(true)}
               />
             ) : null}
 
@@ -503,11 +495,20 @@ export default function ChatPage({
           value={draft}
           onValueChange={setDraft}
           commands={composerCommands}
+          contextHint={
+            pendingApproval
+              ? 'Approval required'
+              : turnView.capability
+                ? `${turnView.capability}${turnView.targetApp ? ` · ${turnView.targetApp}` : ''}`
+                : mode === 'plan'
+                  ? 'Plan · Read-only investigation'
+                  : null
+          }
           onSend={async (content) => {
             if (!selectedId) return
             setSendError(null)
+            setLastRunId(null)
             setLiveTurnActive(true)
-            setLiveTurnSettling(false)
             setOptimisticMessage({
               conversationId: selectedId,
               message: { role: 'user', content },

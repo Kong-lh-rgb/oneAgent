@@ -11,7 +11,12 @@ import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
 
 import type { AgentMode } from '../api/types'
-import { formatDuration, formatTokens } from '../agent/turnPresentation'
+import {
+  formatDuration,
+  formatTokens,
+  humanizeRunError,
+  type TurnView,
+} from '../agent/turnPresentation'
 import { Icon } from './Icon'
 
 const STATUS_LABEL: Record<string, { label: string; tone: string }> = {
@@ -47,6 +52,7 @@ export default function RunStatusBar({
   currentAction,
   stopReason,
   mode,
+  turnState,
   activityOpen,
   onToggleActivity,
   onStop,
@@ -64,18 +70,25 @@ export default function RunStatusBar({
   currentAction?: string | null
   stopReason?: string | null
   mode?: AgentMode
+  turnState?: TurnView['status']
   activityOpen: boolean
   onToggleActivity: () => void
   onStop?: () => void
   onRecover?: () => void
 }): ReactElement {
-  const status = runStatus ? STATUS_LABEL[runStatus] : undefined
+  const turnLabel = turnState === 'waiting_approval'
+    ? { label: 'Approval required', tone: 'waiting' }
+    : turnState === 'verifying'
+      ? { label: 'Verifying', tone: 'waiting' }
+      : turnState === 'thinking'
+        ? { label: 'Thinking', tone: 'working' }
+        : undefined
+  const status = turnLabel ?? (runStatus ? STATUS_LABEL[runStatus] : undefined)
   const running = runStatus === 'running'
   const stopped = runStatus === 'failed' || runStatus === 'interrupted'
-  const reasonLabel =
-    stopReason && STOP_REASON_LABEL[stopReason]
-      ? STOP_REASON_LABEL[stopReason]
-      : stopReason ?? 'Run stopped'
+  const reasonLabel = stopReason && STOP_REASON_LABEL[stopReason]
+    ? STOP_REASON_LABEL[stopReason]
+    : humanizeRunError(stopReason ?? null).message
 
   // 运行中 duration 每秒跳一次（起始时间来自 agent_started 事件）。
   const [elapsed, setElapsed] = useState<number | null>(
@@ -121,7 +134,7 @@ export default function RunStatusBar({
           className={`run-status-bar__status run-status-bar__status--${status?.tone ?? ''}`}
         >
           <span className="run-status-bar__dot" aria-hidden="true" />
-          {status?.label ?? 'Idle'}
+          {status?.label ?? 'Ready'}
         </span>
         {mode === 'plan' ? <span>Plan</span> : null}
         {step !== null && step !== undefined && step > 0 ? (

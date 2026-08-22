@@ -5,6 +5,35 @@
 > 对架构调整和缺陷修复，应同时记录 Bad Case、影响、根因和修复结果，避免只记录最终功能。
 
 ---
+## 2026-08-21
+
+### 完成：Vesta Agent Workspace V2
+
+#### Bad Case
+- [x] 主界面仍以“用户消息 + 助手消息”为中心，Run 完成后实时执行过程会消失，无法形成可回看的 Work Record
+- [x] Tool、Computer、Verification 与错误信息直接暴露运行时术语，普通用户难以判断 Vesta 做了什么、是否真正完成
+- [x] Conversation、Runs、Computer、Artifacts、Automations 各自像孤立管理页，缺少“长期工作空间”的统一产品结构
+- [x] Activity 与 Computer 页面混入大量调试信息，技术证据没有按用户信息、分析信息、原始协议分层
+- [x] Composer 的 `⌘K` 只是提示，不是可搜索、可键盘操作的命令入口
+- [x] 旧视觉依赖玻璃拟态、渐变和过大表面，不符合安静、精确、桌面原生的生产力工具方向
+
+#### 实现结果
+- [x] 建立统一浅色语义 token、紧凑 Rail、Work Sidebar 和按需 Activity Drawer，用户可见品牌统一为 Vesta
+- [x] `LiveAgentTurn` 升级为 Persistent AgentTurn，统一承载 thinking / working / approval / verification / completed / failed / interrupted，并在完成后折叠保留执行过程
+- [x] 消除 `run.status=completed` 早于 `conversation.send` 返回时的短暂 Run ID 丢失，终态 AgentTurn 不闪回等待态
+- [x] 扩展 `turnPresentation`，集中完成工具人类化、错误翻译、真实 Usage、Computer target、验证状态与 capability ViewModel
+- [x] RunStatusBar 保留当前/最近 Work Turn 的步骤、动作、tokens、耗时、停止与恢复，不再在完成后退回无意义 Idle
+- [x] Activity 重构为 Overview / Execution / 默认折叠的 Technical details；原始事件仍完整可分析，但不污染主 AgentTurn
+- [x] Computer 重构为 Live Runtime Workspace，展示 Session、Target、Window、Run、最近动作、Verification、Preview 和权限；AX 结构默认折叠
+- [x] Artifacts 改为按日期组织的 Delivered Results；Runs 改为 Execution History；Automations 改为 Scheduled Work 卡片
+- [x] Composer 接入真正的 Command Palette，支持搜索、上下键跳过不可用命令、Enter 执行、Esc 关闭
+- [x] 保留事件 delta batching、细粒度 Zustand selector、共享 RPC、stick-to-bottom 与 Markdown 流式优化
+- [x] Desktop 32 个测试文件 / 206 tests、typecheck、production build、git diff check 全部通过
+
+#### 暂存 Follow-up
+- [ ] 当前 Message read-model 没有稳定的 message_id → run_id 关联；本轮只完整产品化当前/最新 AgentTurn，旧 Conversation 继续安全显示普通消息，不能猜测历史 Run 分组
+- [ ] 当前会话没有可用的浏览器控制执行入口，未完成真实截图式视觉巡检；已完成静态渲染测试、类型检查与生产构建
+
 ## 2026-08-20
 
 ### 完成：Desktop Light Glass + 原生流式 Agent Turn

@@ -1,15 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 
 import type { AgentMode } from '../api/types'
+import CommandPalette, { type ComposerCommand } from './CommandPalette'
 import { Icon } from './Icon'
-import type { IconName } from './Icon'
 
-export interface ComposerCommand {
-  id: string
-  label: string
-  icon?: IconName
-  onSelect: () => void
-}
+export type { ComposerCommand }
 
 export interface ComposerProps {
   disabled: boolean
@@ -21,6 +16,7 @@ export interface ComposerProps {
   onValueChange?: (value: string) => void
   /** 轻量 Command palette 项（⌘K）。 */
   commands?: ComposerCommand[]
+  contextHint?: string | null
 }
 
 export default function Composer({
@@ -32,6 +28,7 @@ export default function Composer({
   value,
   onValueChange,
   commands,
+  contextHint,
 }: ComposerProps): React.JSX.Element {
   const [internalValue, setInternalValue] = useState('')
   const [commandOpen, setCommandOpen] = useState(false)
@@ -114,6 +111,9 @@ export default function Composer({
               </button>
             ))}
           </div>
+          <span className="composer__context">
+            {contextHint ?? (mode === 'plan' ? 'Plan · Read-only investigation' : 'Ready')}
+          </span>
           <span className="composer__hint">Enter 发送 · Shift+Enter 换行</span>
           {commands && commands.length > 0 ? (
             <button
@@ -139,25 +139,11 @@ export default function Composer({
           </button>
         </div>
       </div>
-      {commands && commandOpen ? (
-        <div className="composer-commands" role="menu" aria-label="Commands">
-          {commands.map((command) => (
-            <button
-              key={command.id}
-              type="button"
-              role="menuitem"
-              className="composer-commands__item"
-              onClick={() => {
-                setCommandOpen(false)
-                command.onSelect()
-              }}
-            >
-              {command.icon ? <Icon name={command.icon} size={14} /> : null}
-              {command.label}
-            </button>
-          ))}
-        </div>
-      ) : null}
+      <CommandPalette
+        open={Boolean(commands?.length) && commandOpen}
+        commands={commands ?? []}
+        onClose={() => setCommandOpen(false)}
+      />
     </div>
   )
 }

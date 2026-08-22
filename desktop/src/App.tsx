@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 
 import { listApprovals } from './api/approvals'
 import { listArtifacts } from './api/artifacts'
+import { getComputerStatus } from './api/computer'
 import { useEventsStore } from './stores/events'
 import { createDesktopNotificationController } from './notifications/desktop'
 import Sidebar from './components/Sidebar'
@@ -70,6 +71,13 @@ export default function App(): React.JSX.Element {
     refetchInterval: 6000,
   })
   const hasArtifacts = (artifactsIndicatorQuery.data?.length ?? 0) > 0
+  const computerIndicatorQuery = useQuery({
+    queryKey: ['computer-status'],
+    queryFn: getComputerStatus,
+    refetchInterval: 3000,
+    retry: false,
+  })
+  const computerActive = Boolean(computerIndicatorQuery.data?.lease?.busy)
 
   // 实时 running run 数（来自 run.status 事件）+ pending 审批数 → 侧栏徽标。
   const runningCount = Object.values(runStatuses).filter(
@@ -100,6 +108,7 @@ export default function App(): React.JSX.Element {
         dots={{
           chat: runningCount > 0,
           artifacts: hasArtifacts,
+          computer: computerActive,
         }}
       />
       <div className="main">

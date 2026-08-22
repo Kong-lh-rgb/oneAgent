@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { AgentEvent } from '../api/types'
 import {
+  buildComputerContext,
   buildTurnView,
   formatDuration,
   formatTokens,
@@ -58,7 +59,7 @@ describe('buildTurnView: tool timeline', () => {
     ])
     expect(view.tools).toHaveLength(1)
     expect(view.tools[0].state).toBe('done')
-    expect(view.tools[0].label).toBe('Typed text')
+    expect(view.tools[0].label).toBe('Typed “测试”')
     expect(view.toolCount).toBe(1)
     expect(view.durationMs).toBe(10_000)
   })
@@ -246,7 +247,7 @@ describe('label helpers', () => {
   })
 
   it('toolDoneLabel 完成/失败', () => {
-    expect(toolDoneLabel('computer_type', { text: 'x' }, true)).toBe('Typed text')
+    expect(toolDoneLabel('computer_type', { text: 'x' }, true)).toBe('Typed “x”')
     expect(toolDoneLabel('computer_type', { text: 'x' }, false)).toBe('Typing failed')
   })
 })
@@ -258,6 +259,56 @@ describe('parseVerificationStatus', () => {
     expect(parseVerificationStatus('{"frontmost_verified":true}')).toBe('verified')
     expect(parseVerificationStatus('hello')).toBeNull()
     expect(parseVerificationStatus(null)).toBeNull()
+  })
+})
+
+describe('buildComputerContext', () => {
+  it('组合 Observation target、窗口、最近动作和验证状态', () => {
+    const events = [
+      event({
+        type: 'tool_started',
+        tool_call: toolCall('t1', 'computer_type', { text: ' Vesta' }),
+      }),
+      event({
+        type: 'tool_completed',
+        tool_call: toolCall('t1', 'computer_type', {}),
+        tool_result: {
+          tool_call_id: 't1',
+          tool_name: 'computer_type',
+          success: true,
+          output: '{"verification_status":"verified","execution_mode":"background_ax"}',
+          error: null,
+          duration_ms: 20,
+        },
+      }),
+    ]
+    const context = buildComputerContext(events, {
+      id: 'snapshot-1',
+      created_at: null,
+      active_app: { name: 'Vesta', bundle_id: null, pid: 1 },
+      target: { name: 'TextEdit', bundle_id: 'com.apple.TextEdit', pid: 2 },
+      active_window: {
+        ref: 'w1', title: 'Untitled', bounds: { x: 0, y: 0, width: 1, height: 1 },
+      },
+      windows: [],
+      elements: [],
+      screenshot_ref: null,
+    })
+    expect(context.target).toBe('TextEdit')
+    expect(context.window).toBe('Untitled')
+    expect(context.lastAction).toBe('Typed “ Vesta”')
+    expect(context.verification).toBe('Verified')
+    expect(context.executionMode).toBe('background ax')
+  })
+
+  it('没有 Session 证据时不虚构目标', () => {
+    expect(buildComputerContext([], null)).toMatchObject({
+      target: null,
+      window: null,
+      lastAction: null,
+      verification: null,
+      recentActions: [],
+    })
   })
 })
 

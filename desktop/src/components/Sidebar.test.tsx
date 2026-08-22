@@ -11,7 +11,7 @@ describe('Sidebar (App Shell)', () => {
       <Sidebar current="chat" onNavigate={() => {}} connected />,
     )
     for (const label of [
-      'Chat',
+      'Workspace',
       'Runs',
       'Automations',
       'Approvals',
@@ -52,8 +52,8 @@ describe('Sidebar (App Shell)', () => {
     const html = renderToStaticMarkup(
       <Sidebar current="chat" onNavigate={() => {}} connected />,
     )
-    expect(html).toContain('title="Chat"')
-    expect(html).toContain('aria-label="Chat"')
+    expect(html).toContain('title="Workspace"')
+    expect(html).toContain('aria-label="Workspace"')
     expect(html).not.toContain('v0.1.0')
   })
 

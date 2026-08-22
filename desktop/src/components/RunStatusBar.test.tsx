@@ -14,9 +14,9 @@ const base = {
 }
 
 describe('RunStatusBar', () => {
-  it('无 Run 时显示 Idle 与标题', () => {
+  it('无 Run 时显示 Ready 与标题', () => {
     const html = renderToStaticMarkup(<RunStatusBar {...base} />)
-    expect(html).toContain('Idle')
+    expect(html).toContain('Ready')
     expect(html).toContain('打开备忘录输入你好')
     expect(html).toContain('Activity')
   })

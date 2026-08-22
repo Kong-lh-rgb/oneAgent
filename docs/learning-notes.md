@@ -1910,3 +1910,36 @@ Multi-Agent / Task Graph / Planner DAG。Pattern Mining V1 完全用一次结构
 - `computer_type` 始终用 Unicode CGEvent 插入，因此已有 `hello` 时输入 ` Vesta` 会得到 `hello Vesta`。
 - Native 只能确认事件已定向投递；真实效果由 mutation 后的新 Observe 确认。
 - 真机 E2E 应验证 UI 内容，而不是只断言返回的 `characters` 或 `success=true`。
+
+## 45. Agent Workspace：消息不是长期工作的正确产品单位（2026-08-21）
+
+### 45.1 Request、AgentTurn、Run 各有不同职责
+
+- Request 是用户交给 Vesta 的目标；AgentTurn 是用户能理解和控制的一次工作记录；Run 是一次可追踪、可恢复的执行 attempt。
+- 实时事件不应在 Run 结束后消失。AgentTurn 需要从同一组事件经历 Working → Approval → Verifying → Completed，并在终态压缩成持久 Work Record。
+- Conversation 是长期上下文，Runs 是执行历史。两者不能做成两份相同列表：Conversation 展示连续工作，Runs 负责单次执行分析与恢复。
+
+### 45.2 Presentation Layer 隔离 Runtime 协议与产品语言
+
+- React 组件不应到处解析 `AgentEvent`。`turnPresentation` 统一把 tool name、arguments、usage、verification、target 和 stop reason 变成稳定 ViewModel。
+- 主界面只显示“Opened Notes”“Waiting for verification”这类用户动作；tool_name、raw result、error_code、snapshot id 留在 Technical details。
+- `delivery_status=delivered` 仍不能渲染为绿色完成；只有 fresh evidence 能把动作从 Waiting for verification 推进到 Verified。
+
+### 45.3 Progressive Disclosure 是克制与可分析性的共同解
+
+- Layer 1 直接可见：Working、Approval、Completed、Stopped、Result。
+- Layer 2 轻量或可展开：动作、steps、tokens、duration、Computer target、verification。
+- Layer 3 默认折叠：provider/model、arguments、raw result、event JSON 与错误码。
+- 因此 AgentTurn 负责“看懂”，Activity / RunDetail 负责“分析”，Computer Observation inspector 负责“查证”。极简不等于删掉证据。
+
+### 45.4 Durable UI 依赖正确的 Read Model
+
+- 实时 `AgentEvent[]` 足以构建当前 AgentTurn，但历史消息若没有稳定的 message_id → run_id 关联，就无法可靠判断哪几条消息属于哪次 Run。
+- 前端不能按时间或消息顺序猜测这种关系，否则 recovery、automation 或并发 Run 会产生错误归组。
+- 正确的后续最小能力是只读关联字段或 historical AgentTurn read-model，而不是在本轮为了界面新增第二套事件系统。
+
+### 45.5 性能边界仍然属于产品正确性
+
+- Provider delta 继续在 Store 中短时批量提交，AgentTurn 按 run + step 细粒度订阅；ChatPage 不随每个 token 全量重渲染。
+- 流式正文直接使用真实增量，不增加假打字机；完成事件立即 flush，避免最后几个字符丢失。
+- 持久 AgentTurn 只改变展示生命周期，不改变 Runtime、RPC、审批路由或 durable SQLite 事实来源。

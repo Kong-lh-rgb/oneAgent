@@ -22,9 +22,19 @@ function scheduleText(schedule: {
   cron_expr: string | null
   timezone: string
 }): string {
-  if (schedule.kind === 'once') return `once · ${schedule.run_at ?? '-'}`
-  if (schedule.kind === 'interval') return `interval · ${schedule.interval_seconds}s`
-  return `cron · ${schedule.cron_expr ?? '-'}`
+  if (schedule.kind === 'once') {
+    return schedule.run_at
+      ? `Once · ${new Date(schedule.run_at).toLocaleString()}`
+      : 'Once · time not set'
+  }
+  if (schedule.kind === 'interval') {
+    const seconds = schedule.interval_seconds ?? 0
+    if (seconds % 86_400 === 0) return `Every ${seconds / 86_400} day${seconds === 86_400 ? '' : 's'}`
+    if (seconds % 3600 === 0) return `Every ${seconds / 3600} hour${seconds === 3600 ? '' : 's'}`
+    if (seconds % 60 === 0) return `Every ${seconds / 60} minutes`
+    return `Every ${seconds} seconds`
+  }
+  return `Scheduled · ${schedule.timezone}`
 }
 
 function formatTime(iso: string | null): string {
@@ -83,13 +93,13 @@ export default function AutomationsPage(): React.JSX.Element {
   return (
     <PageShell
       title="Automations"
-      subtitle="定时 / 周期触发 Agent 运行。"
+      subtitle="Scheduled work Vesta will run in the future."
       actions={
         <button
           className="btn btn-primary btn-sm"
           onClick={() => setShowForm((value) => !value)}
         >
-          {showForm ? '收起' : '＋ 新建'}
+          {showForm ? 'Close' : 'New automation'}
         </button>
       }
     >
@@ -111,63 +121,56 @@ export default function AutomationsPage(): React.JSX.Element {
         />
       ) : automations.length === 0 ? (
         <EmptyState
-          title="暂无 Automation"
-          hint="点击右上角「＋ 新建」创建第一个定时任务。"
+          title="No scheduled work"
+          hint="Create an automation for work Vesta should repeat or run later."
           icon="automations"
         />
       ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>title</th>
-              <th>status</th>
-              <th>schedule</th>
-              <th>next_run_at</th>
-              <th>last_run_at</th>
-              <th>last_run_id</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {automations.map((automation) => (
-              <tr key={automation.id}>
-                <td>{automation.title}</td>
-                <td>
-                  <span className={`badge badge-${automation.status}`}>{automation.status}</span>
-                </td>
-                <td className="text-dim">{scheduleText(automation.schedule)}</td>
-                <td className="text-dim">{formatTime(automation.next_run_at)}</td>
-                <td className="text-dim">{formatTime(automation.last_run_at)}</td>
-                <td className="text-dim">{automation.last_run_id?.slice(0, 8) ?? '-'}</td>
-                <td>
-                  <div style={{ display: 'flex', gap: 6 }}>
+        <div className="automation-list">
+          {automations.map((automation) => (
+            <article key={automation.id} className={`automation-row automation-row--${automation.status}`}>
+              <div className="automation-row__main">
+                <div className="automation-row__heading">
+                  <strong>{automation.title}</strong>
+                  <span className={`automation-state automation-state--${automation.status}`}>{automation.status}</span>
+                </div>
+                <p>{automation.prompt}</p>
+                <div className="automation-row__schedule">{scheduleText(automation.schedule)}</div>
+              </div>
+              <dl className="automation-row__timing">
+                <div><dt>Next run</dt><dd>{formatTime(automation.next_run_at)}</dd></div>
+                <div><dt>Last run</dt><dd>{formatTime(automation.last_run_at)}</dd></div>
+              </dl>
+              <details className="automation-row__details">
+                <summary>Details</summary>
+                <code>{automation.schedule.cron_expr ?? automation.schedule.kind} · {automation.schedule.timezone}</code>
+              </details>
+              <div className="automation-row__actions">
                     <button
                       className="btn btn-sm"
                       disabled={automation.status !== 'active'}
                       onClick={() => controlMutation.mutate({ id: automation.id, op: 'pause' })}
                     >
-                      pause
+                      Pause
                     </button>
                     <button
                       className="btn btn-sm"
                       disabled={automation.status !== 'paused'}
                       onClick={() => controlMutation.mutate({ id: automation.id, op: 'resume' })}
                     >
-                      resume
+                      Resume
                     </button>
                     <button
                       className="btn btn-sm btn-danger"
                       disabled={automation.status === 'cancelled' || automation.status === 'completed'}
                       onClick={() => setCancelTarget(automation.id)}
                     >
-                      cancel
+                      Cancel
                     </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+              </div>
+            </article>
+          ))}
+        </div>
       )}
       <ConfirmDialog
         open={cancelTarget !== null}

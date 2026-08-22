@@ -3,10 +3,10 @@
 import type { ReactElement } from 'react'
 
 export const EXAMPLE_PROMPTS = [
-  'Organize a set of files',
-  'Research and write a report',
-  'Plan a multi-step task',
-  'Work with an app on this Mac',
+  'Open Notes and add today’s ideas',
+  'Organize files in a folder',
+  'Create a recurring morning brief',
+  'Investigate something and make a plan',
 ] as const
 
 export default function ChatEmptyState({
@@ -16,9 +16,9 @@ export default function ChatEmptyState({
 }): ReactElement {
   return (
     <section className="chat-empty" aria-label="开始新会话">
-      <div className="chat-empty__mark">oa</div>
-      <h1>What can I work on for you?</h1>
-      <p>Give Vesta a goal. It can plan, use tools, and keep working across runs.</p>
+      <div className="chat-empty__mark">V</div>
+      <h1>What should Vesta work on?</h1>
+      <p>Give Vesta an outcome. You can follow the work, approve actions, and inspect results.</p>
       <div className="chat-empty__prompts">
         {EXAMPLE_PROMPTS.map((prompt) => (
           <button key={prompt} type="button" onClick={() => onSelectPrompt(prompt)}>

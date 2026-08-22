@@ -1,4 +1,4 @@
-/** Computer Host 状态展示（可复用：ComputerPage / SettingsPage）。只读展示 + 权限按钮。 */
+/** Computer Runtime 与权限的紧凑产品状态。 */
 
 import { leaseLabel, permissionLabel } from '../api/computer'
 import type {
@@ -6,25 +6,25 @@ import type {
   ComputerPermissionStatus,
   ComputerStatus,
 } from '../api/computer'
+import { StatusDot } from './ui'
 
-function PermissionCell({
+function PermissionRow({
+  name,
   status,
   onRequest,
 }: {
+  name: string
   status: ComputerPermissionStatus
   onRequest?: () => void
 }): React.JSX.Element {
-  const granted = status === 'granted'
-  const label = permissionLabel(status)
   return (
-    <div>
-      <span className={granted ? '' : status === 'required' ? 'error-text' : 'text-dim'}>
-        {label}
+    <div className="permission-row">
+      <span>{name}</span>
+      <span className={`permission-row__state permission-row__state--${status}`}>
+        {permissionLabel(status)}
       </span>
-      {!granted && onRequest ? (
-        <button className="btn btn-sm" style={{ marginLeft: 8 }} onClick={() => onRequest()}>
-          Request
-        </button>
+      {status !== 'granted' && onRequest ? (
+        <button className="btn btn-sm" onClick={onRequest}>Request</button>
       ) : null}
     </div>
   )
@@ -39,75 +39,51 @@ export default function ComputerStatusView({
   loading?: boolean
   onRequestPermission?: (permission: ComputerPermissionName) => void
 }): React.JSX.Element {
-  if (loading && !status) {
-    return (
-      <div className="text-dim">
-        <span className="spinner" /> 正在检查 Computer…
-      </div>
-    )
-  }
-  if (!status) {
-    return <div className="error-text">Computer 状态不可用</div>
-  }
+  if (loading && !status) return <div className="loading-inline"><span className="spinner" /> Checking Computer…</div>
+  if (!status) return <div className="empty-inline empty-inline--error">Computer status unavailable</div>
 
-  const reason =
-    status.reason === 'helper_not_found'
-      ? 'helper not found'
-      : status.reason === 'unsupported_platform'
-        ? `unsupported platform (${status.platform})`
-        : status.reason ?? 'n/a'
+  const reason = status.reason === 'helper_not_found'
+    ? 'helper not found'
+    : status.reason === 'unsupported_platform'
+      ? `unsupported platform (${status.platform})`
+      : status.reason
 
   return (
-    <table className="table">
-      <tbody>
-        <tr>
-          <td className="text-muted">Computer Runtime</td>
-          <td>
-            <span className={status.available ? '' : 'error-text'}>
-              {status.available ? `Available (${status.runtime ?? 'macos'})` : 'Unavailable'}
-            </span>
-            {!status.available ? <span className="text-dim"> · {reason}</span> : null}
-          </td>
-        </tr>
-        <tr>
-          <td className="text-muted">Accessibility</td>
-          <td>
-            <PermissionCell
-              status={status.permissions.accessibility}
-              onRequest={
-                onRequestPermission
-                  ? () => onRequestPermission('accessibility')
-                  : undefined
-              }
-            />
-          </td>
-        </tr>
-        <tr>
-          <td className="text-muted">Screen Recording</td>
-          <td>
-            <PermissionCell
-              status={status.permissions.screen_recording}
-              onRequest={
-                onRequestPermission
-                  ? () => onRequestPermission('screen_recording')
-                  : undefined
-              }
-            />
-          </td>
-        </tr>
-        <tr>
-          <td className="text-muted">Machine Lease</td>
-          <td className="text-dim">{leaseLabel(status.lease)}</td>
-        </tr>
-        {status.helper_path ? (
-          <tr>
-            <td className="text-muted">helper</td>
-            <td className="text-dim" style={{ wordBreak: 'break-all' }}>
-              {status.helper_path}
-            </td>
-          </tr>
-        ) : null}
-      </tbody>
-    </table>
+    <div className="computer-status-view">
+      <div className="computer-status-view__runtime">
+        <StatusDot tone={status.available ? 'ready' : 'failed'} />
+        <div>
+          <strong>{status.available ? 'Available' : 'Unavailable'}</strong>
+          <span>
+            {status.available
+              ? `Computer Runtime · ${status.runtime ?? 'macOS'}`
+              : reason ?? 'Runtime not available'}
+          </span>
+        </div>
+        <small>{leaseLabel(status.lease)}</small>
+      </div>
+      <div className="permission-list">
+        <PermissionRow
+          name="Accessibility"
+          status={status.permissions.accessibility}
+          onRequest={onRequestPermission
+            ? () => onRequestPermission('accessibility')
+            : undefined}
+        />
+        <PermissionRow
+          name="Screen Recording"
+          status={status.permissions.screen_recording}
+          onRequest={onRequestPermission
+            ? () => onRequestPermission('screen_recording')
+            : undefined}
+        />
+      </div>
+      {status.helper_path ? (
+        <details className="technical-inline">
+          <summary>Runtime details</summary>
+          <code>{status.helper_path}</code>
+        </details>
+      ) : null}
+    </div>
   )
 }

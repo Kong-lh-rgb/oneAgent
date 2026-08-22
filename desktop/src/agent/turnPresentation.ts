@@ -6,6 +6,7 @@
 */
 
 import type { AgentEvent, ModelUsage } from '../api/types'
+import type { ComputerObservation } from '../api/computer'
 
 export type ToolState = 'active' | 'done' | 'failed' | 'waiting'
 
@@ -17,6 +18,9 @@ export interface ToolStepVM {
   state: ToolState
   /** 技术细节（原始 arguments 摘要），主界面不 dump。 */
   details: string
+  resultDetails?: string
+  durationMs?: number
+  errorCode?: string | null
   approval?: 'pending' | 'approved' | 'denied'
   verification?: 'unverified' | 'verified'
   isComputer: boolean
@@ -36,7 +40,29 @@ export interface TurnView {
   steps: number
   usage: UsageVM | null
   durationMs: number | null
-  status: 'running' | 'completed' | 'failed' | 'cancelled'
+  status:
+    | 'thinking'
+    | 'working'
+    | 'waiting_approval'
+    | 'verifying'
+    | 'completed'
+    | 'failed'
+    | 'cancelled'
+    | 'interrupted'
+  finalText: string
+  currentAction: string | null
+  targetApp: string | null
+  capability: 'Computer' | 'Files' | 'Web' | 'Memory' | 'Task' | 'Artifact' | null
+  error: { title: string; message: string; technical: string | null } | null
+}
+
+export interface ComputerContextVM {
+  target: string | null
+  window: string | null
+  lastAction: string | null
+  verification: 'Verified' | 'Waiting for verification' | null
+  executionMode: string | null
+  recentActions: ToolStepVM[]
 }
 
 /** 从 ToolCall arguments 里取可读参数（可能为对象或 JSON 字符串）。 */
@@ -59,11 +85,17 @@ function argValue(args: unknown, key: string): string | null {
 function formatKeyShortcut(args: unknown): string {
   const key = argValue(args, 'key') ?? argValue(args, 'keycode')
   if (!key) return 'a key'
-  const mods = argValue(args, 'modifiers')
+  const rawMods =
+    typeof args === 'object' && args !== null
+      ? (args as Record<string, unknown>).modifiers
+      : null
+  const mods = Array.isArray(rawMods)
+    ? rawMods.filter((item): item is string => typeof item === 'string')
+    : (argValue(args, 'modifiers')?.split(',') ?? [])
   const symbols: Record<string, string> = {
     command: '⌘', cmd: '⌘', shift: '⇧', option: '⌥', alt: '⌥', control: '⌃', ctrl: '⌃',
   }
-  const parts = mods ? mods.split(',').map((m) => symbols[m.trim()] ?? m.trim()).filter(Boolean) : []
+  const parts = mods.map((m) => symbols[m.trim()] ?? m.trim()).filter(Boolean)
   const prettyKey = key.length === 1 ? key.toUpperCase() : key.replace(/^(?:key|Key)/, '')
   return [...parts, prettyKey].join(' ')
 }
@@ -76,7 +108,10 @@ const COMPUTER_TOOLS = new Set([
 /** 人类可读动作标签（进行态 / 完成态）。未知工具走 fallback。 */
 export function toolActiveLabel(name: string, args: unknown): string {
   switch (name) {
-    case 'computer_open_app': return 'Opening an application'
+    case 'computer_open_app': {
+      const app = argValue(args, 'app')
+      return app ? `Opening ${app}` : 'Opening an application'
+    }
     case 'computer_observe': return 'Inspecting the screen'
     case 'computer_type': {
       const text = argValue(args, 'text')
@@ -85,7 +120,7 @@ export function toolActiveLabel(name: string, args: unknown): string {
     case 'computer_click': return 'Clicking an interface element'
     case 'computer_key': return `Pressing ${formatKeyShortcut(args)}`
     case 'computer_scroll': return 'Scrolling the window'
-    case 'computer_focus_window': return 'Focusing a window'
+    case 'computer_focus_window': return 'Focusing the target window'
     case 'read_file': {
       const path = argValue(args, 'path')
       return path ? `Reading ${path}` : 'Reading a file'
@@ -94,6 +129,14 @@ export function toolActiveLabel(name: string, args: unknown): string {
       const path = argValue(args, 'path')
       return path ? `Writing ${path}` : 'Writing a file'
     }
+    case 'list_files': return 'Reviewing files'
+    case 'artifact_publish': return 'Preparing a result'
+    case 'memory_get': return 'Reading memory'
+    case 'memory_search': return 'Searching memory'
+    case 'task_create': return 'Creating a plan'
+    case 'task_update': return 'Updating the plan'
+    case 'task_get': return 'Reviewing the plan'
+    case 'task_list': return 'Reviewing tasks'
     case 'run_shell_command': return 'Running command'
     case 'web_search': {
       const query = argValue(args, 'query')
@@ -117,15 +160,29 @@ export function toolDoneLabel(name: string, args: unknown, ok: boolean): string 
     }
   }
   switch (name) {
-    case 'computer_open_app': return 'Opened application'
-    case 'computer_observe': return 'Inspected the screen'
-    case 'computer_type': return 'Typed text'
+    case 'computer_open_app': {
+      const app = argValue(args, 'app')
+      return app ? `Opened ${app}` : 'Opened application'
+    }
+    case 'computer_observe': return 'Observed the target window'
+    case 'computer_type': {
+      const text = argValue(args, 'text')
+      return text ? `Typed “${text.slice(0, 40)}”` : 'Typed text'
+    }
     case 'computer_click': return 'Clicked element'
     case 'computer_key': return `Pressed ${formatKeyShortcut(args)}`
     case 'computer_scroll': return 'Scrolled'
     case 'computer_focus_window': return 'Focused window'
     case 'read_file': return 'Read file'
     case 'write_file': return 'Wrote file'
+    case 'list_files': return 'Reviewed files'
+    case 'artifact_publish': return 'Created a result'
+    case 'memory_get': return 'Read memory'
+    case 'memory_search': return 'Searched memory'
+    case 'task_create': return 'Created a plan'
+    case 'task_update': return 'Updated the plan'
+    case 'task_get': return 'Reviewed the plan'
+    case 'task_list': return 'Reviewed tasks'
     case 'run_shell_command': return 'Command completed'
     case 'web_search': return 'Searched the web'
     default: return `Completed ${humanizeToolName(name)}`
@@ -143,6 +200,64 @@ function detailsText(args: unknown): string {
     return JSON.stringify(args, null, 2)
   } catch {
     return String(args)
+  }
+}
+
+function parseObject(value: string | null): Record<string, unknown> | null {
+  if (!value) return null
+  try {
+    const parsed = JSON.parse(value)
+    return typeof parsed === 'object' && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : null
+  } catch {
+    return null
+  }
+}
+
+function targetFromOutput(output: string | null): string | null {
+  const parsed = parseObject(output)
+  if (!parsed) return null
+  const direct = parsed.app
+  if (typeof direct === 'string' && direct) return direct
+  for (const key of ['target', 'active_app']) {
+    const app = parsed[key]
+    if (typeof app === 'object' && app !== null) {
+      const name = (app as Record<string, unknown>).name
+      if (typeof name === 'string' && name) return name
+    }
+  }
+  return null
+}
+
+function capabilityForTool(name: string): TurnView['capability'] {
+  if (COMPUTER_TOOLS.has(name)) return 'Computer'
+  if (name.includes('artifact')) return 'Artifact'
+  if (name.startsWith('memory_')) return 'Memory'
+  if (name.startsWith('task_')) return 'Task'
+  if (name === 'web_search') return 'Web'
+  if (name.includes('file') || name.includes('shell')) return 'Files'
+  return null
+}
+
+export function humanizeRunError(
+  stopReason: string | null,
+  rawError: string | null = null,
+): { title: string; message: string; technical: string | null } {
+  const known: Record<string, string> = {
+    max_steps: 'Vesta reached the step limit before it could finish.',
+    repeated_tool_call: 'Vesta repeated the same strategy without making progress.',
+    stale_observation: 'The desktop changed before the action could be verified.',
+    stale_snapshot: 'The desktop changed before the action could be verified.',
+    permission_denied: 'The requested action was not approved.',
+    model_error: 'The model could not continue this run.',
+    context_error: 'The conversation exceeded the available context window.',
+    interrupted: 'The run was interrupted and can be recovered.',
+  }
+  return {
+    title: stopReason === 'interrupted' ? 'Interrupted' : 'Stopped',
+    message: known[stopReason ?? ''] ?? 'Vesta could not complete this run.',
+    technical: rawError || stopReason || null,
   }
 }
 
@@ -167,6 +282,11 @@ export function buildTurnView(
   let finalUsage: ModelUsage | null = null
   let startedAt: number | null = null
   let endedAt: number | null = null
+  let finalText = ''
+  let targetApp: string | null = null
+  let capability: TurnView['capability'] = null
+  let stopReason: string | null = null
+  let rawError: string | null = null
   const modelSteps = new Set<number>()
 
   const upsertTool = (
@@ -222,6 +342,10 @@ export function buildTurnView(
         if (event.tool_call) {
           const name = event.tool_call.name
           const isComputer = COMPUTER_TOOLS.has(name)
+          capability = capabilityForTool(name) ?? capability
+          if (name === 'computer_open_app') {
+            targetApp = argValue(event.tool_call.arguments, 'app') ?? targetApp
+          }
           const idx = upsertTool(
             event.tool_call.id,
             name,
@@ -270,7 +394,11 @@ export function buildTurnView(
           if (idx !== undefined) {
             tools[idx].name = name
             tools[idx].state = ok ? 'done' : 'failed'
-            tools[idx].label = toolDoneLabel(name, undefined, ok)
+            tools[idx].label = toolDoneLabel(name, tools[idx].details, ok)
+            tools[idx].durationMs = event.tool_result.duration_ms
+            tools[idx].resultDetails = event.tool_result.output ?? undefined
+            tools[idx].errorCode = event.tool_result.error
+            targetApp = targetFromOutput(event.tool_result.output) ?? targetApp
             if (COMPUTER_TOOLS.has(name)) {
               const verification = parseVerificationStatus(event.tool_result.output)
               if (verification === 'unverified') {
@@ -297,6 +425,9 @@ export function buildTurnView(
       case 'agent_failed': {
         finalUsage = event.result?.usage ?? event.usage ?? finalUsage
         if (event.result?.steps) steps = event.result.steps
+        finalText = event.result?.final_message?.content ?? finalText
+        stopReason = event.stop_reason ?? event.result?.stop_reason ?? stopReason
+        rawError = event.result?.error?.message ?? rawError
         break
       }
       default:
@@ -335,13 +466,30 @@ export function buildTurnView(
     durationMs = Math.max(0, end - startedAt)
   }
 
+  const hasPendingApproval = tools.some(
+    (tool) => tool.approval === 'pending' && tool.state === 'waiting',
+  )
+  const hasUnverified = tools.some(
+    (tool) => tool.verification === 'unverified',
+  )
+  const hasActiveTool = tools.some((tool) => tool.state === 'active')
   const status: TurnView['status'] = events.some((e) => e.type === 'agent_failed')
-    ? 'failed'
+    ? stopReason === 'interrupted' ? 'interrupted' : 'failed'
     : events.some((e) => e.type === 'agent_cancelled')
       ? 'cancelled'
       : events.some((e) => e.type === 'agent_completed')
         ? 'completed'
-        : 'running'
+        : hasPendingApproval
+          ? 'waiting_approval'
+          : hasUnverified
+            ? 'verifying'
+            : hasActiveTool
+              ? 'working'
+              : 'thinking'
+
+  const currentTool = [...tools].reverse().find(
+    (tool) => tool.state === 'active' || tool.state === 'waiting',
+  )
 
   return {
     tools,
@@ -350,6 +498,40 @@ export function buildTurnView(
     usage,
     durationMs,
     status,
+    finalText,
+    currentAction: currentTool?.label ?? null,
+    targetApp,
+    capability,
+    error:
+      status === 'failed' || status === 'interrupted'
+        ? humanizeRunError(stopReason, rawError)
+        : null,
+  }
+}
+
+export function buildComputerContext(
+  events: AgentEvent[],
+  observation: ComputerObservation | null,
+): ComputerContextVM {
+  const view = buildTurnView(events)
+  const computerActions = view.tools.filter((tool) => tool.isComputer)
+  const last = computerActions.at(-1)
+  const parsed = parseObject(last?.resultDetails ?? null)
+  const mode = parsed?.execution_mode
+  return {
+    target:
+      observation?.target?.name
+      ?? observation?.active_app?.name
+      ?? view.targetApp,
+    window: observation?.active_window?.title || null,
+    lastAction: last?.label ?? null,
+    verification: last?.verification === 'verified'
+      ? 'Verified'
+      : last?.verification === 'unverified'
+        ? 'Waiting for verification'
+        : null,
+    executionMode: typeof mode === 'string' ? mode.replaceAll('_', ' ') : null,
+    recentActions: computerActions.slice(-6),
   }
 }
 

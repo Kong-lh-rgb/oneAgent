@@ -57,6 +57,7 @@ export interface ComputerElement {
   value: string | null
   enabled: boolean
   focused: boolean
+  editable?: boolean
   bounds: ComputerBounds | null
   actions: string[]
 }
@@ -65,9 +66,21 @@ export interface ComputerObservation {
   id: string
   created_at: string | null
   active_app: ComputerActiveApp | null
+  target?: ComputerActiveApp | null
+  target_is_frontmost?: boolean
+  user_frontmost_app?: ComputerActiveApp | null
   active_window: ComputerWindow | null
   windows: ComputerWindow[]
   elements: ComputerElement[]
+  focused_element_ref?: string | null
+  truncated?: boolean
+  element_stats?: {
+    observed: number
+    returned: number
+    editable_count: number
+    actionable_count: number
+    repetitive_elements_dropped: number
+  }
   screenshot_ref: string | null
 }
 

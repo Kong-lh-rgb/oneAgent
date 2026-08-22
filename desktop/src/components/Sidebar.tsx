@@ -13,7 +13,7 @@ export interface SidebarItem {
 }
 
 export const SIDEBAR_ITEMS: SidebarItem[] = [
-  { key: 'chat', label: 'Chat', icon: 'chat' },
+  { key: 'chat', label: 'Workspace', icon: 'chat' },
   { key: 'runs', label: 'Runs', icon: 'runs' },
   { key: 'automations', label: 'Automations', icon: 'automations' },
   { key: 'approvals', label: 'Approvals', icon: 'approvals' },
@@ -45,7 +45,7 @@ export default function Sidebar({
 
   return (
     <nav className="sidebar" aria-label="主导航">
-      <div className="sidebar-brand" aria-label="Vesta">oa</div>
+      <div className="sidebar-brand" aria-label="Vesta">V</div>
       <div className="sidebar-nav">
         {SIDEBAR_ITEMS.map((item) => (
           <button

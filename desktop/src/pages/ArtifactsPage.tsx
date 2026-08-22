@@ -47,7 +47,7 @@ export function ArtifactsView({
   return (
     <PageShell
       title="Artifacts"
-      subtitle="Agent 生成的交付物（文件 / 链接 / 文本）。"
+      subtitle="Files and links Vesta has delivered across your work."
     >
       {error ? (
         <ErrorState message={error} onRetry={onRetry} />
@@ -55,8 +55,8 @@ export function ArtifactsView({
         <LoadingState label="正在加载 Artifacts…" />
       ) : artifacts.length === 0 ? (
         <EmptyState
-          title="暂无 Artifact"
-          hint="Agent 生成文件或链接后，会以交付物形式出现在这里。"
+          title="No delivered results yet"
+          hint="Files and links created by Vesta will appear here."
           icon="artifacts"
         />
       ) : (

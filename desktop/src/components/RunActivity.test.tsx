@@ -4,7 +4,12 @@ import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 
 import type { AgentEvent } from '../api/types'
-import { ActivityItems, buildActivityEntries, describeActivity } from './RunActivity'
+import {
+  ActivityItems,
+  ActivityTechnicalDetails,
+  buildActivityEntries,
+  describeActivity,
+} from './RunActivity'
 
 function event(partial: Partial<AgentEvent>): AgentEvent {
   return {
@@ -119,14 +124,23 @@ describe('ActivityItems', () => {
     expect(entries).toHaveLength(1)
     expect(entries[0]).toMatchObject({
       id: 'c1',
-      label: 'Completed read file',
+      label: 'Read file',
       meta: 'read_file',
       state: 'done',
     })
 
     const html = renderToStaticMarkup(<ActivityItems events={events} />)
-    expect(html.match(/Completed read file/g)).toHaveLength(1)
+    expect(html.match(/Read file/g)).toHaveLength(1)
     expect(html).toContain('activity-item--done')
     expect(html).not.toContain('activity-item--active')
+  })
+
+  it('Technical details 默认折叠但保留原始分析证据', () => {
+    const events = [event({ event_id: 'raw-1', provider: 'fake', model: 'test-model' })]
+    const html = renderToStaticMarkup(<ActivityTechnicalDetails events={events} />)
+    expect(html).toContain('<details class="activity-details activity-section">')
+    expect(html).not.toContain('<details class="activity-details activity-section" open="">')
+    expect(html).toContain('Technical details')
+    expect(html).toContain('test-model')
   })
 })

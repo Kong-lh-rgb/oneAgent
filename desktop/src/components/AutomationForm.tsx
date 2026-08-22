@@ -64,57 +64,57 @@ export default function AutomationForm({ onSubmit, onCancel }: Props): React.JSX
   }
 
   return (
-    <div style={{ background: 'var(--bg-panel)', border: '1px solid var(--border)', borderRadius: 8, padding: 14, marginBottom: 12 }}>
-      <div style={{ fontWeight: 600, marginBottom: 10 }}>新建 Automation</div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-        <input placeholder="标题" value={title} onChange={(e) => setTitle(e.target.value)} />
+    <div className="automation-form">
+      <div className="automation-form__title">New scheduled work</div>
+      <div className="automation-form__grid">
+        <input placeholder="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
         <select value={kind} onChange={(e) => setKind(e.target.value as AutomationKind)}>
-          <option value="once">once（一次性）</option>
-          <option value="interval">interval（固定间隔）</option>
-          <option value="cron">cron（计划表达式）</option>
+          <option value="once">Once</option>
+          <option value="interval">Recurring interval</option>
+          <option value="cron">Schedule</option>
         </select>
       </div>
       <textarea
-        placeholder="触发时真正要执行的指令（不要包含调度条件）"
+        placeholder="What should Vesta do when this runs?"
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
         rows={2}
-        style={{ width: '100%', marginTop: 10 }}
+        className="automation-form__prompt"
       />
       {kind === 'once' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
+        <div className="automation-form__grid automation-form__conditional">
           <input
             type="datetime-local"
             value={runAt}
             onChange={(e) => setRunAt(e.target.value)}
           />
-          <input placeholder="时区（默认 Asia/Shanghai）" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
+          <input placeholder="Timezone (Asia/Shanghai)" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
         </div>
       )}
       {kind === 'interval' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
+        <div className="automation-form__grid automation-form__conditional">
           <input
             type="number"
             min="1"
-            placeholder="间隔秒数"
+            placeholder="Interval in seconds"
             value={intervalSeconds}
             onChange={(e) => setIntervalSeconds(e.target.value)}
           />
-          <input placeholder="时区" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
+          <input placeholder="Timezone" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
         </div>
       )}
       {kind === 'cron' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
-          <input placeholder='cron 表达式，如 "0 9 * * *"' value={cronExpr} onChange={(e) => setCronExpr(e.target.value)} />
-          <input placeholder="时区" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
+        <div className="automation-form__grid automation-form__conditional">
+          <input placeholder='Schedule expression, e.g. "0 9 * * *"' value={cronExpr} onChange={(e) => setCronExpr(e.target.value)} />
+          <input placeholder="Timezone" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
         </div>
       )}
-      {error && <div className="error-text" style={{ marginTop: 8 }}>{error}</div>}
-      <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+      {error && <div className="error-text automation-form__error">{error}</div>}
+      <div className="automation-form__actions">
         <button className="btn btn-primary" onClick={() => void submit()} disabled={busy}>
-          {busy ? '创建中…' : '创建'}
+          {busy ? 'Creating…' : 'Create'}
         </button>
-        <button className="btn" onClick={onCancel}>取消</button>
+        <button className="btn" onClick={onCancel}>Cancel</button>
       </div>
     </div>
   )

@@ -67,8 +67,8 @@ function ApprovalItem({
             {desktop ? '⌘' : '›'}
           </span>
         </div>
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="approval-card__content">
+          <div className="approval-card__title-row">
             <strong className="approval-card__title">{title}</strong>
             <Badge tone={STATUS_TONE[approval.status]}>{approval.status}</Badge>
           </div>
@@ -172,14 +172,14 @@ export default function ApprovalsPage(): React.JSX.Element {
   return (
     <PageShell
       title="Approvals"
-      subtitle="工具调用的人工审批：桌面操作走浮动小窗，对话内审批在这里。"
+      subtitle="Review sensitive actions. Desktop approvals continue in the floating window."
     >
       <section className="approvals-section">
         <h2 className="approvals-section__title">
           Pending {pending.length > 0 ? `(${pending.length})` : ''}
         </h2>
         {pendingQuery.isPending ? (
-          <LoadingState label="正在加载待审批…" />
+          <LoadingState label="Loading approvals…" />
         ) : pendingQuery.isError ? (
           <ErrorState
             message={String(pendingQuery.error)}
@@ -191,8 +191,8 @@ export default function ApprovalsPage(): React.JSX.Element {
           />
         ) : pending.length === 0 ? (
           <EmptyState
-            title="没有待审批的工具调用"
-            hint="Agent 请求人工确认时会出现在这里；电脑操作审批会直接浮到桌面。"
+            title="No approvals waiting"
+            hint="Sandbox actions appear here; Computer actions open in the desktop floating window."
             icon="approvals"
           />
         ) : (
@@ -217,8 +217,8 @@ export default function ApprovalsPage(): React.JSX.Element {
       <section className="approvals-section">
         <h2 className="approvals-section__title">Recent</h2>
         {history.length === 0 ? (
-          <div className="text-muted" style={{ padding: '8px 2px' }}>
-            暂无已处理的审批记录。
+          <div className="approval-history-empty">
+            No recent approval decisions.
           </div>
         ) : (
           <div className="approvals-list">

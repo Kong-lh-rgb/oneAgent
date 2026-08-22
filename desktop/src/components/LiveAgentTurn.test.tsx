@@ -121,8 +121,8 @@ describe('LiveAgentTurn', () => {
       />,
     )
     expect(html).toContain('turn-timeline')
-    expect(html).toContain('turn-tool--done')
-    expect(html).toContain('Typed text')
+    expect(html).toContain('agent-action--done')
+    expect(html).toContain('Typed “测试”')
   })
 
   it('sandbox 审批等待显示 Waiting for approval', () => {
@@ -142,7 +142,7 @@ describe('LiveAgentTurn', () => {
         ]}
       />,
     )
-    expect(html).toContain('turn-tool--waiting')
+    expect(html).toContain('agent-action--waiting')
     expect(html).toContain('Waiting for approval')
   })
 
@@ -191,7 +191,7 @@ describe('LiveAgentTurn', () => {
         ]}
       />,
     )
-    expect(html).toContain('Action sent · result not yet verified')
+    expect(html).toContain('Action sent · waiting for verification')
   })
 
   it('usage footer 显示 steps / tools / tokens / duration', () => {
@@ -216,5 +216,27 @@ describe('LiveAgentTurn', () => {
     expect(html).toContain('500 in')
     expect(html).toContain('300 out')
     expect(html).toContain('10.0s')
+  })
+
+  it.each([
+    ['completed', 'agent_completed', 'Completed'],
+    ['failed', 'agent_failed', 'Stopped'],
+    ['interrupted', 'agent_failed', 'Interrupted'],
+  ] as const)('持久展示 %s 终态', (status, type, label) => {
+    const html = renderToStaticMarkup(
+      <LiveAgentTurn
+        runId="run-1"
+        step={2}
+        events={[
+          event({ type: 'agent_started' }),
+          event({
+            type,
+            stop_reason: status === 'interrupted' ? 'interrupted' : status === 'failed' ? 'model_error' : 'final_answer',
+          }),
+        ]}
+      />,
+    )
+    expect(html).toContain(`data-status="${status}"`)
+    expect(html).toContain(label)
   })
 })

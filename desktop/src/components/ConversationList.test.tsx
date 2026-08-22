@@ -39,4 +39,29 @@ describe('ConversationList', () => {
     )
     expect(html).toContain('No conversations yet')
   })
+
+  it('突出 working / approval / failed，弱化 completed，并展示当前动作', () => {
+    const conversations = ['running', 'pending', 'failed', 'completed'].map((status) => ({
+      ...conversation,
+      id: status,
+      title: status,
+    }))
+    const html = renderToStaticMarkup(
+      <ConversationList
+        conversations={conversations}
+        selectedId="running"
+        statusByConversation={{ running: 'running', pending: 'pending', failed: 'failed', completed: 'completed' }}
+        activityByConversation={{ running: 'Typing in Notes', pending: 'Waiting for approval' }}
+        onSelect={() => {}}
+        onNew={() => {}}
+      />,
+    )
+    expect(html).toContain('Typing in Notes')
+    expect(html).toContain('Waiting for approval')
+    expect(html).toContain('Working')
+    expect(html).toContain('Waiting')
+    expect(html).toContain('Failed')
+    expect(html).toContain('conversation-item__status--completed">✓')
+    expect(html).not.toContain('>Completed</span>')
+  })
 })

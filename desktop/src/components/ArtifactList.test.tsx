@@ -25,7 +25,7 @@ const base: Artifact = {
 describe('Artifact UI', () => {
   it('Artifacts empty state', () => {
     const html = renderToStaticMarkup(<ArtifactsView artifacts={[]} />)
-    expect(html).toContain('暂无 Artifact')
+    expect(html).toContain('No delivered results yet')
   })
 
   it('file artifact 展示并用 id 构造下载地址', () => {
@@ -33,7 +33,8 @@ describe('Artifact UI', () => {
     expect(html).toContain('Market Report')
     expect(html).toContain('report.md')
     expect(html).toContain(`/artifacts/${base.id}/content`)
-    expect(html).toContain('Download / Open')
+    expect(html).toContain('Open')
+    expect(html).toContain('Download')
   })
 
   it('URL artifact 展示 Open Link', () => {
@@ -47,7 +48,7 @@ describe('Artifact UI', () => {
     }
     const html = renderToStaticMarkup(<ArtifactList artifacts={[artifact]} />)
     expect(html).toContain('https://example.com/result')
-    expect(html).toContain('Open Link')
+    expect(html).toContain('Open link')
   })
 
   it('Run Detail 有 Artifact 时展示交付区', () => {
