@@ -18,7 +18,7 @@ describe('RunStatusBar', () => {
     const html = renderToStaticMarkup(<RunStatusBar {...base} />)
     expect(html).toContain('Ready')
     expect(html).toContain('打开备忘录输入你好')
-    expect(html).toContain('活动')
+    expect(html).toContain('详情')
   })
 
   it('运行中显示 Working、Step/tools/tokens/duration 与 Stop', () => {
@@ -73,7 +73,7 @@ describe('RunStatusBar', () => {
     expect(html).toContain('10 steps')
     expect(html).toContain('8 tools')
     expect(html).toContain('24.1k tokens')
-    expect(html).toContain('活动')
+    expect(html).toContain('详情')
   })
 
   it('interrupted 提供 Recover 动作', () => {

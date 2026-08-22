@@ -1,4 +1,10 @@
-import type { AgentEvent } from '../api/types'
+import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
+
+import { listArtifacts } from '../api/artifacts'
+import { getRun, getRunTrace } from '../api/runs'
+import type { AgentEvent, Run } from '../api/types'
+import { mergeRunEvents } from '../agent/runAnalysis'
 import {
   buildTurnView,
   formatDuration,
@@ -7,6 +13,8 @@ import {
   toolDoneLabel,
 } from '../agent/turnPresentation'
 import { useEventsStore } from '../stores/events'
+import ContextInspector from './ContextInspector'
+import ExecutionTrace from './ExecutionTrace'
 import { Icon } from './Icon'
 import { EmptyState, StatusDot, type StatusTone } from './ui'
 
@@ -59,6 +67,7 @@ export function describeActivity(event: AgentEvent): string {
 export function buildActivityEntries(events: AgentEvent[]): ActivityEntry[] {
   const entries: ActivityEntry[] = []
   const toolIndexes = new Map<string, number>()
+  const toolArguments = new Map<string, unknown>()
   let lastThinkingIndex: number | null = null
 
   for (const event of events) {
@@ -71,6 +80,7 @@ export function buildActivityEntries(events: AgentEvent[]): ActivityEntry[] {
         time: formatEventTime(event.event_time),
       }
       toolIndexes.set(event.tool_call.id, entries.length)
+      toolArguments.set(event.tool_call.id, event.tool_call.arguments)
       entries.push(entry)
       lastThinkingIndex = null
       continue
@@ -82,7 +92,11 @@ export function buildActivityEntries(events: AgentEvent[]): ActivityEntry[] {
       const state: ActivityState = event.tool_result.success ? 'done' : 'failed'
       const next: ActivityEntry = {
         id: callId,
-        label: toolDoneLabel(event.tool_result.tool_name, undefined, event.tool_result.success),
+        label: toolDoneLabel(
+          event.tool_result.tool_name,
+          event.tool_call?.arguments ?? toolArguments.get(callId),
+          event.tool_result.success,
+        ),
         meta: event.tool_result.tool_name,
         state,
         time: formatEventTime(event.event_time),
@@ -99,6 +113,19 @@ export function buildActivityEntries(events: AgentEvent[]): ActivityEntry[] {
         label: '等待你的审批',
         meta: event.tool_call?.name,
         state: 'waiting',
+        time: formatEventTime(event.event_time),
+      })
+      lastThinkingIndex = null
+      continue
+    }
+
+    if (event.type === 'tool_approval_completed') {
+      const approved = event.approval_decision === 'approved'
+      entries.push({
+        id: event.event_id,
+        label: approved ? '审批已通过' : '审批已拒绝',
+        meta: event.tool_call?.name,
+        state: approved ? 'done' : 'failed',
         time: formatEventTime(event.event_time),
       })
       lastThinkingIndex = null
@@ -147,7 +174,7 @@ export function buildActivityEntries(events: AgentEvent[]): ActivityEntry[] {
     }
   }
 
-  return entries.slice(-12)
+  return entries
 }
 
 function formatEventTime(iso: string): string {
@@ -221,57 +248,177 @@ const STATUS_TONE: Record<string, StatusTone> = {
   interrupted: 'waiting',
 }
 
+type InspectorTab = 'run' | 'context' | 'trace'
+
+const STATUS_LABEL: Record<string, string> = {
+  pending: '准备中',
+  running: '执行中',
+  completed: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+  interrupted: '已中断',
+}
+
+export function RunInspectorOverview({
+  run,
+  events,
+  artifactCount = 0,
+}: {
+  run: Run | null
+  events: AgentEvent[]
+  artifactCount?: number
+}): React.JSX.Element {
+  const view = buildTurnView(events, { now: Date.now() })
+  const status = run?.status ?? view.status
+  return (
+    <div className="run-inspector-overview">
+      <section className="inspector-section">
+        <h3>概览</h3>
+        {run?.user_message ? <p className="run-inspector-request">{run.user_message}</p> : null}
+        <dl className="activity-overview">
+          <div><dt>状态</dt><dd>{STATUS_LABEL[status] ?? status}</dd></div>
+          <div><dt>模式</dt><dd>{run?.mode ?? '—'}</dd></div>
+          <div><dt>步骤</dt><dd>{view.steps}</dd></div>
+          <div><dt>动作</dt><dd>{view.toolCount}</dd></div>
+          <div><dt>耗时</dt><dd>{formatDuration(view.durationMs) || '—'}</dd></div>
+          <div><dt>Token</dt><dd>{view.usage ? formatTokens(view.usage.totalTokens) : '—'}</dd></div>
+          {view.capability ? <div><dt>能力</dt><dd>{view.capability}</dd></div> : null}
+          {view.targetApp ? <div><dt>目标</dt><dd>{view.targetApp}</dd></div> : null}
+        </dl>
+      </section>
+      {view.error ? (
+        <section className="inspector-error">
+          <strong>{view.error.title}</strong>
+          <p>{view.error.message}</p>
+        </section>
+      ) : null}
+      <section className="inspector-section">
+        <div className="inspector-section__heading">
+          <h3>执行过程</h3>
+          <span>{view.toolCount} actions</span>
+        </div>
+        <ActivityItems events={events} />
+      </section>
+      {artifactCount > 0 ? (
+        <section className="inspector-result-summary">
+          <Icon name="artifacts" size={15} />
+          <div><strong>{artifactCount} 个交付结果</strong><span>可在完整 Run Detail 中打开</span></div>
+        </section>
+      ) : null}
+    </div>
+  )
+}
+
 export default function RunActivity({
   runId,
   onClose,
+  onStop,
+  onRecover,
+  onOpenFullDetail,
 }: {
   runId: string | null
   onClose?: () => void
+  onStop?: () => void
+  onRecover?: () => void
+  onOpenFullDetail?: (runId: string) => void
 }): React.JSX.Element {
+  const [tab, setTab] = useState<InspectorTab>('run')
   const eventsByRun = useEventsStore((state) => state.eventsByRun)
   const runStatuses = useEventsStore((state) => state.runStatuses)
-  const events = runId ? (eventsByRun[runId] ?? []) : []
-  const status = runId ? runStatuses[runId] : undefined
-  const view = buildTurnView(events, { now: Date.now() })
+  const liveEvents = runId ? (eventsByRun[runId] ?? []) : []
+  const liveStatus = runId ? runStatuses[runId] : undefined
+  const running = liveStatus === 'running' || liveStatus === 'pending'
+  const runQuery = useQuery({
+    queryKey: ['run', runId],
+    queryFn: () => getRun(runId!),
+    enabled: runId !== null,
+    refetchInterval: (query) => {
+      const current = query.state.data as Run | undefined
+      return running || current?.status === 'running' || current?.status === 'pending'
+        ? 2500
+        : false
+    },
+  })
+  const durableRunning = runQuery.data?.status === 'running' || runQuery.data?.status === 'pending'
+  const traceQuery = useQuery({
+    queryKey: ['run-trace', runId],
+    queryFn: () => getRunTrace(runId!),
+    enabled: runId !== null,
+    refetchInterval: running || durableRunning ? 2500 : false,
+  })
+  const artifactsQuery = useQuery({
+    queryKey: ['artifacts', 'run', runId],
+    queryFn: () => listArtifacts({ runId: runId!, limit: 100 }),
+    enabled: runId !== null,
+    refetchInterval: running || durableRunning ? 3000 : false,
+  })
+  const events = mergeRunEvents(traceQuery.data?.events ?? [], liveEvents)
+  const run = runQuery.data ?? null
+  const status = run?.status ?? liveStatus
+  const title = run?.user_message || '当前 Run'
 
   return (
-    <aside className="activity" aria-label="Run activity">
-      <div className="activity__header">
-        <div>
-          <strong>活动</strong>
-          <span>Vesta 正在做什么</span>
+    <aside className="activity run-inspector" aria-label="Run inspector">
+      <header className="run-inspector__header">
+        <div className="run-inspector__identity">
+          <strong>{title}</strong>
+          <span className="mono">{runId ? `Run ${runId.slice(0, 8)}` : '尚无 Run'}</span>
         </div>
-        <div className="activity__header-actions">
-          {status ? <StatusDot tone={STATUS_TONE[status] ?? 'offline'} /> : null}
+        <div className="run-inspector__header-actions">
+          {status ? (
+            <span className="run-inspector__status">
+              <StatusDot tone={STATUS_TONE[status] ?? 'offline'} />
+              {STATUS_LABEL[status] ?? status}
+            </span>
+          ) : null}
           {onClose ? (
-            <button type="button" className="icon-btn" onClick={onClose} aria-label="关闭 Activity">
+            <button type="button" className="icon-btn" onClick={onClose} aria-label="关闭 Run Inspector">
               <Icon name="close" />
             </button>
           ) : null}
         </div>
-      </div>
-      <div className="activity__body">
-        {runId ? (
-          <section className="activity-section">
-            <h3>概览</h3>
-            <dl className="activity-overview">
-              <div><dt>状态</dt><dd>{status ?? view.status}</dd></div>
-              <div><dt>运行</dt><dd className="mono">{runId.slice(0, 8)}</dd></div>
-              <div><dt>步骤</dt><dd>{view.steps}</dd></div>
-              <div><dt>动作</dt><dd>{view.toolCount}</dd></div>
-              <div><dt>耗时</dt><dd>{formatDuration(view.durationMs) || '—'}</dd></div>
-              <div><dt>Token</dt><dd>{view.usage ? formatTokens(view.usage.totalTokens) : '—'}</dd></div>
-              {view.capability ? <div><dt>能力</dt><dd>{view.capability}</dd></div> : null}
-              {view.targetApp ? <div><dt>目标</dt><dd>{view.targetApp}</dd></div> : null}
-            </dl>
-          </section>
+      </header>
+      <nav className="run-inspector__tabs" aria-label="Run inspector sections" role="tablist">
+        {([
+          ['run', 'Run'],
+          ['context', 'Context'],
+          ['trace', 'Trace'],
+        ] as const).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className={tab === id ? 'active' : ''}
+            aria-selected={tab === id}
+            role="tab"
+            onClick={() => setTab(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+      <div className="run-inspector__body">
+        {runQuery.isError || traceQuery.isError ? (
+          <div className="inspector-error"><strong>部分持久化数据暂时无法加载</strong><p>下面仍显示当前已收到的实时事件。</p></div>
         ) : null}
-        <section className="activity-section">
-          <h3>执行</h3>
-          <ActivityItems events={events} />
-        </section>
-        <ActivityTechnicalDetails events={events} />
+        {!runId ? (
+          <EmptyState title="暂无 Run" hint="开始执行任务后可在这里分析过程。" />
+        ) : tab === 'run' ? (
+          <RunInspectorOverview run={run} events={events} artifactCount={artifactsQuery.data?.length ?? 0} />
+        ) : tab === 'context' ? (
+          <ContextInspector events={events} />
+        ) : (
+          <ExecutionTrace events={events} />
+        )}
       </div>
+      {runId ? (
+        <footer className="run-inspector__footer">
+          <div>
+            {status === 'running' && onStop ? <button type="button" className="btn btn-danger btn-sm" onClick={onStop}>Stop</button> : null}
+            {status === 'interrupted' && onRecover ? <button type="button" className="btn btn-primary btn-sm" onClick={onRecover}>Recover</button> : null}
+          </div>
+          {onOpenFullDetail ? <button type="button" className="btn btn-sm" onClick={() => onOpenFullDetail(runId)}>Open full detail</button> : null}
+        </footer>
+      ) : null}
     </aside>
   )
 }

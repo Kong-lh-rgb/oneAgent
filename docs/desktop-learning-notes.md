@@ -1,5 +1,36 @@
 # Vesta Desktop 学习记录
 
+## 2026-08-22：Run Inspector 与可解释 Context
+
+Run Inspector 不应该再创建一份运行事实。它只是已有事实的 read model：
+
+```text
+SQLite durable Trace ─┐
+                      ├─ event_id 去重 + sequence 排序
+Renderer live Events ─┘
+                               ↓
+                   runAnalysis（纯 ViewModel）
+                               ↓
+                  Run / Context / Trace 三种视图
+```
+
+关键边界：
+
+1. durable Trace 负责刷新后的完整性，live Events 负责运行中的低延迟；相同
+   `event_id` 只能显示一次。
+2. Context 是“每一次模型请求”的属性，不是整个 Run 的单个总数。因此界面按
+   Model Step 切换，默认查看最近一步，不能只展示一个模糊的全局百分比。
+3. `prepared_usage_ratio` 相对的是 Runtime 的 Input Budget；`prepared / context_window`
+   才是完整模型窗口占比。这两个比例必须分别展示。
+4. `message_tokens_after` 已包含历史工具结果和 Skill 注入。Breakdown 再单列它们时，
+   Messages 必须先扣除对应值，否则柱状图总和会超过实际 Input。
+5. 当前事件没有 Memory、Task、system prompt 各自的独立 token 字段，所以它们只能
+   诚实地留在 `Messages & injected`。展示层不能靠猜测制造“精确”成本。
+6. `approval.resolved` 只证明用户做出决定，`tool_completed` 才证明工具执行结束；
+   两者必须在执行时间线与 Trace 中分别保留。
+7. “为什么贵”应由 Runtime 事实确定性解释（模型调用次数、重复 Schema、工具结果峰值、
+   Context 增长和压缩开始步骤），不需要再调用模型做一次昂贵且不可复现的解释。
+
 ## 2026-08-20：实时 Agent Turn 与流式输出
 
 一次“流式聊天”其实包含三条不同的数据链，不能混在一起：

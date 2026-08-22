@@ -158,6 +158,33 @@ export interface AgentEvent {
   approval_decision: string | null
   /** agent_completed / agent_failed 携带的最终结果（含 usage / steps）。 */
   result?: AgentResult | null
+  original_estimated_input_tokens?: number | null
+  prepared_input_tokens?: number | null
+  estimated_input_tokens?: number | null
+  context_trimmed?: boolean | null
+  context_window?: number | null
+  input_budget?: number | null
+  working_input_budget?: number | null
+  usage_ratio?: number | null
+  tool_result_budget_tokens?: number | null
+  tool_result_tokens_before?: number | null
+  tool_result_tokens_after?: number | null
+  tool_schema_tokens?: number | null
+  message_tokens_before?: number | null
+  message_tokens_after?: number | null
+  original_usage_ratio?: number | null
+  prepared_usage_ratio?: number | null
+  compaction_stage?: string | null
+  compacted_tool_results?: number | null
+  removed_tool_rounds?: number | null
+  reached_target?: boolean | null
+  summary_updated?: boolean | null
+  summarized_conversation_blocks?: number | null
+  summary_error?: string | null
+  available_skill_count?: number | null
+  skill_catalog_tokens?: number | null
+  active_skill_names?: string[]
+  active_skill_tokens?: number | null
   [key: string]: unknown
 }
 

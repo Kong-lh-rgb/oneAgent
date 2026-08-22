@@ -5,6 +5,28 @@
 > 对架构调整和缺陷修复，应同时记录 Bad Case、影响、根因和修复结果，避免只记录最终功能。
 
 ---
+## 2026-08-22
+
+### 完成：Run Inspector（Run / Context / Trace）
+
+#### Bad Case
+- [x] 旧 Activity 只是半高执行列表，另有一个无内容的 Panel；相同 Run 的状态、上下文和技术证据被拆散
+- [x] Context 压缩数据已经存在于 `model_started` 事件，但 Desktop 无法回答某一步输入多大、压缩了什么、为什么成本升高
+- [x] 实时事件只在 Renderer Store 中，关闭或刷新后分析面板不能可靠恢复完整 Trace
+- [x] 若把 `message_tokens_after`、Tool Results 和 Skills 直接相加，会因字段包含关系重复计算 Context breakdown
+- [x] 审批通过与工具真正执行完成是两个事实，旧活动时间线容易让等待审批成为最后一条可见证据
+
+#### 实现结果
+- [x] 右侧 Activity 升级为单一全高 Run Inspector，采用 Run / Context / Trace 三个选项卡，并移除旧空 Panel 组件和入口
+- [x] Run 页展示请求、终态、步骤、动作、耗时、真实 Usage、人类可读执行过程、错误与 Artifact 数量
+- [x] Context 页可选择任意 Model Step，展示 Input、Context Window、Input Budget、窗口/预算占比、Schema、Tool Results、Messages、Skills 与压缩动作
+- [x] 新增纯展示分析层 `runAnalysis`，统一 durable/live 事件合并、Context ViewModel、成本事实解释和 Trace 分组
+- [x] Context breakdown 扣除 Messages 已包含的 Tool Results / Skills；Memory、Task、系统注入在缺少独立事件字段时明确归入 `Messages & injected`
+- [x] Trace 页按 Step 分组，支持 Model / Tools / Approval / Memory 筛选，并可展开完整原始 JSON
+- [x] Run Detail 复用同一套 Context 与 Trace 组件，Inspector 的 Stop / Recover / Open full detail 保持现有 Run 语义
+- [x] 工具完成事件复用 started 阶段参数，审批完成独立进入时间线，不再混同于 `tool_completed`
+- [x] Desktop 36 个测试文件 / 218 tests、typecheck、production build 全部通过
+
 ## 2026-08-21
 
 ### 完成：Vesta Agent Workspace V2

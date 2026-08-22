@@ -18,7 +18,6 @@ import { buildTurnView } from '../agent/turnPresentation'
 import { chatShouldShowApproval } from '../approval/computerApproval'
 import ApprovalCard from '../components/ApprovalCard'
 import ChatEmptyState from '../components/ChatEmptyState'
-import ChatSidePanel from '../components/ChatSidePanel'
 import RunStatusBar from '../components/RunStatusBar'
 import Composer from '../components/Composer'
 import type { ComposerCommand } from '../components/Composer'
@@ -35,8 +34,10 @@ import type { PageKey } from '../App'
 
 export default function ChatPage({
   onNavigate,
+  onOpenRun,
 }: {
   onNavigate?: (page: PageKey) => void
+  onOpenRun?: (runId: string) => void
 }): React.JSX.Element {
   const queryClient = useQueryClient()
   const eventsByRun = useEventsStore((state) => state.eventsByRun)
@@ -47,15 +48,7 @@ export default function ChatPage({
   const [mode, setMode] = useState<AgentMode>('normal')
   const [draft, setDraft] = useState('')
   const [conversationSidebarOpen, setConversationSidebarOpen] = useState(true)
-  // 右侧面板点击顺序：先点击的排前面（竖向排列时在上方），后点击的追加到下面。
-  const [panelOrder, setPanelOrder] = useState<('panel' | 'activity')[]>(['panel'])
-  const togglePanel = (which: 'panel' | 'activity'): void => {
-    setPanelOrder((prev) =>
-      prev.includes(which)
-        ? prev.filter((p) => p !== which)
-        : [...prev, which],
-    )
-  }
+  const [runInspectorOpen, setRunInspectorOpen] = useState(false)
   const [planTask, setPlanTask] = useState<Task | null>(null)
   const [planResolved, setPlanResolved] = useState<string | null>(null)
   const [optimisticMessage, setOptimisticMessage] = useState<{
@@ -222,7 +215,7 @@ export default function ChatPage({
         setPlanTask(null)
         setPlanResolved(null)
         setLiveTurnActive(false)
-        setPanelOrder((prev) => prev.filter((p) => p !== 'activity'))
+        setRunInspectorOpen(false)
       }
       void queryClient.invalidateQueries({ queryKey: ['conversations'] })
       void queryClient.invalidateQueries({ queryKey: ['conversation', id] })
@@ -370,7 +363,7 @@ export default function ChatPage({
       label: 'View current Run',
       icon: 'runs',
       onSelect: () => {
-        if (activeRunId) onNavigate?.('runs')
+        if (activeRunId) onOpenRun?.(activeRunId)
       },
     },
     { id: 'stop', label: 'Stop Run', icon: 'close', onSelect: () => void stopRun() },
@@ -481,7 +474,7 @@ export default function ChatPage({
             setLastRunId(null)
             setPlanTask(null)
             setPlanResolved(null)
-            setPanelOrder((prev) => prev.filter((p) => p !== 'activity'))
+            setRunInspectorOpen(false)
             setLiveTurnActive(false)
           }}
           onNew={() => newConversationMutation.mutate()}
@@ -505,10 +498,8 @@ export default function ChatPage({
           stopReason={stopReason}
           mode={mode}
           turnState={activeEvents.length > 0 ? turnView.status : undefined}
-          activityOpen={panelOrder.includes('activity')}
-          onToggleActivity={() => togglePanel('activity')}
-          panelOpen={panelOrder.includes('panel')}
-          onTogglePanel={() => togglePanel('panel')}
+          activityOpen={runInspectorOpen}
+          onToggleActivity={() => setRunInspectorOpen((open) => !open)}
           onStop={() => void stopRun()}
           onRecover={() => void recoverRunAction()}
         />
@@ -546,11 +537,7 @@ export default function ChatPage({
                 step={latestModelStep ?? null}
                 events={activeEvents}
                 onRecover={() => void recoverRunAction()}
-                onInspect={() =>
-                  setPanelOrder((prev) =>
-                    prev.includes('activity') ? prev : [...prev, 'activity'],
-                  )
-                }
+                onInspect={() => setRunInspectorOpen(true)}
               />
             ) : null}
 
@@ -626,17 +613,19 @@ export default function ChatPage({
           }}
           />
           </main>
-          <div className="chat-panels">
-        {panelOrder.map((which) =>
-          which === 'panel' ? (
-            <ChatSidePanel key="panel" />
-          ) : (
-            <div key="activity" className="activity-drawer">
-              <RunActivity runId={activeRunId} onClose={() => togglePanel('activity')} />
+          {runInspectorOpen ? (
+            <div className="chat-panels">
+              <div className="activity-drawer">
+                <RunActivity
+                  runId={activeRunId}
+                  onClose={() => setRunInspectorOpen(false)}
+                  onStop={() => void stopRun()}
+                  onRecover={() => void recoverRunAction()}
+                  onOpenFullDetail={onOpenRun}
+                />
+              </div>
             </div>
-          ),
-        )}
-        </div>
+          ) : null}
       </div>
       </div>
     </div>

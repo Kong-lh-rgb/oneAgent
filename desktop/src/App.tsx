@@ -118,7 +118,7 @@ export default function App(): React.JSX.Element {
             Host 连接已断开，正在重连…
           </div>
         ) : null}
-        {page === 'chat' && <ChatPage onNavigate={navigate} />}
+        {page === 'chat' && <ChatPage onNavigate={navigate} onOpenRun={openRun} />}
         {page === 'runs' &&
           (selectedRunId ? (
             <RunDetailPage runId={selectedRunId} onBack={() => setSelectedRunId(null)} />

@@ -55,8 +55,6 @@ export default function RunStatusBar({
   turnState,
   activityOpen,
   onToggleActivity,
-  panelOpen = false,
-  onTogglePanel,
   onStop,
   onRecover,
 }: {
@@ -75,8 +73,6 @@ export default function RunStatusBar({
   turnState?: TurnView['status']
   activityOpen: boolean
   onToggleActivity: () => void
-  panelOpen?: boolean
-  onTogglePanel?: () => void
   onStop?: () => void
   onRecover?: () => void
 }): ReactElement {
@@ -165,19 +161,10 @@ export default function RunStatusBar({
           className={`header-action ${activityOpen ? 'active' : ''}`}
           onClick={onToggleActivity}
           aria-pressed={activityOpen}
+          title="Run 详情、Context 与 Trace"
         >
           <Icon name="activity" size={14} />
-          活动
-        </button>
-        <button
-          type="button"
-          className={`header-action ${panelOpen ? 'active' : ''}`}
-          onClick={onTogglePanel}
-          aria-pressed={panelOpen}
-          title="侧栏"
-        >
-          <Icon name="panelOpen" size={14} />
-          面板
+          详情
         </button>
       </div>
 
