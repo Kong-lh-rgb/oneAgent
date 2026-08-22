@@ -3902,8 +3902,10 @@ kbd { padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; bac
 /* 设置 · 模型：保持与通用页相同的轻量信息层级 */
 .settings-models { max-width: 760px; }
 .settings-active-model { color: #777773; font-size: 9.5px; white-space: nowrap; }
-.model-field { display: grid; gap: 7px; color: #555552; font-size: 9.5px; }
-.model-field--inline { grid-template-columns: 135px minmax(0, 1fr); align-items: center; }
+.model-field { display: grid; grid-template-rows: 13px 37px 13px; gap: 6px; color: #555552; font-size: 9.5px; }
+.model-field--inline { grid-template-columns: 135px minmax(0, 1fr); grid-template-rows: 37px; align-items: center; }
+.model-field--inline > span { align-self: center; }
+.model-field--inline select { align-self: center; }
 .model-field input,
 .model-field select,
 .model-role-custom input,
@@ -3926,24 +3928,23 @@ kbd { padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; bac
 .model-role-custom input:focus,
 .model-role-custom select:focus { border-color: #858581; box-shadow: 0 0 0 2px rgb(20 20 19 / 7%); }
 .model-field input::placeholder { color: #aaa9a4; }
-.model-field small { color: #969691; font-size: 8.5px; }
-.model-provider-tabs { display: flex; gap: 4px; margin-bottom: 17px; border-bottom: 1px solid #e2e2dd; }
-.model-provider-tabs button { display: flex; align-items: center; gap: 7px; padding: 9px 11px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #777773; font-size: 10px; }
+.model-field small { align-self: start; color: #969691; font-size: 8.5px; line-height: 13px; }
+.model-provider-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 18px; border-bottom: 1px solid #e2e2dd; }
+.model-provider-tabs button { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 8px 11px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #777773; font-size: 10px; }
 .model-provider-tabs button:hover { color: #222; }
 .model-provider-tabs button.active { border-bottom-color: #222; color: #111; }
 .model-provider-tabs i { width: 5px; height: 5px; border-radius: 50%; background: #d2d2ce; }
 .model-provider-tabs i.configured { background: #45806f; }
-.model-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 18px; }
-.model-role-row { display: grid; grid-template-columns: 120px 120px minmax(0, 1fr); align-items: center; gap: 16px; min-height: 53px; border-top: 1px solid #e5e5e1; }
+.model-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 18px; row-gap: 10px; }
+.model-role-row { display: grid; grid-template-columns: 132px 76px 132px minmax(0, 1fr); align-items: center; gap: 14px; min-height: 55px; border-top: 1px solid #e5e5e1; }
 .model-role-row:last-child { border-bottom: 1px solid #e5e5e1; }
-.model-role-row__title { display: flex; align-items: center; gap: 9px; }
-.model-role-row__title strong { color: #222; font-size: 10.5px; }
-.model-role-row__title label,
-.model-role-inherit { display: inline-flex; align-items: center; gap: 6px; color: #777773; font-size: 9px; }
+.model-role-row__name { color: #222; font-size: 10.5px; }
+.model-role-toggle,
+.model-role-inherit { display: inline-flex; align-items: center; gap: 6px; color: #777773; font-size: 9px; white-space: nowrap; }
 .model-role-row input[type='checkbox'] { accent-color: #222; }
 .model-role-custom { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 8px; }
 .model-role-custom input { padding: 0 10px; }
-.model-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding-top: 18px; }
+.model-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 18px; }
 .model-actions--secondary { justify-content: flex-start; padding-top: 15px; }
 .model-actions span { color: #8b8b86; font-size: 8.5px; }
 .settings-models .btn { min-height: 34px; border-color: #cfcfca; border-radius: 8px; background: #fff; color: #171716; }
@@ -4132,7 +4133,7 @@ kbd { padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; bac
   .settings-nav button { padding-inline: 8px; }
   .settings-info-list > div { grid-template-columns: 105px minmax(0, 1fr); }
   .model-form { grid-template-columns: 1fr; }
-  .model-role-row { grid-template-columns: 105px minmax(0, 1fr); padding: 10px 0; }
+  .model-role-row { grid-template-columns: 105px 72px minmax(0, 1fr); padding: 10px 0; }
   .model-role-custom { grid-column: 1 / -1; }
   .model-field--inline { grid-template-columns: 105px minmax(0, 1fr); }
 }

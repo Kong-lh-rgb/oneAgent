@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 
 from pydantic import SecretStr
 
+from app.context import ContextSummaryModelConfig
 from app.memory import MemoryMaintenanceConfig, MemoryReflectionConfig
 from app.models.config import ModelSettings, ProviderConfig
 from app.models.providers import AnthropicAdapter, OpenAICompatibleAdapter
@@ -49,6 +50,7 @@ class EffectiveModelConfiguration:
     settings: ModelSettings
     reflection: MemoryReflectionConfig | None
     maintenance: MemoryMaintenanceConfig | None
+    summary: ContextSummaryModelConfig | None
 
 
 class ModelSettingsService:
@@ -91,6 +93,7 @@ class ModelSettingsService:
             "providers": providers,
             "reflection": stored.reflection.model_dump(mode="json"),
             "maintenance": stored.maintenance.model_dump(mode="json"),
+            "summary": stored.summary.model_dump(mode="json"),
             "active_provider": active_provider,
             "active_model": active_model,
             "restart_required": (
@@ -110,7 +113,7 @@ class ModelSettingsService:
         default_item = submitted[update.default_provider]
         if not default_item.api_key and not existing_keys[update.default_provider]:
             raise ValueError("default provider requires an API key")
-        for role in (update.reflection, update.maintenance):
+        for role in (update.reflection, update.maintenance, update.summary):
             if (
                 role.enabled
                 and not role.inherit_main
@@ -132,6 +135,7 @@ class ModelSettingsService:
             },
             reflection=update.reflection,
             maintenance=update.maintenance,
+            summary=update.summary,
         )
         for item in update.providers:
             if item.api_key:
@@ -196,7 +200,7 @@ def load_effective_model_configuration(
     stored = resolved_store.load()
     base = base_settings or ModelSettings()
     if stored is None:
-        return EffectiveModelConfiguration(base, None, None)
+        return EffectiveModelConfiguration(base, None, None, None)
     resolved_secrets = secrets or MacOSKeychainSecretStore()
     data = base.model_dump(mode="python")
     data["model_default_provider"] = stored.default_provider
@@ -213,7 +217,8 @@ def load_effective_model_configuration(
     settings = ModelSettings.model_validate(data)
     reflection = _reflection_config(stored.reflection)
     maintenance = _maintenance_config(stored.maintenance)
-    return EffectiveModelConfiguration(settings, reflection, maintenance)
+    summary = _summary_config(stored.summary)
+    return EffectiveModelConfiguration(settings, reflection, maintenance, summary)
 
 
 def _defaults(settings: ModelSettings) -> StoredModelSettings:
@@ -249,6 +254,14 @@ def _reflection_config(role: ModelRoleSettings) -> MemoryReflectionConfig:
 
 def _maintenance_config(role: ModelRoleSettings) -> MemoryMaintenanceConfig:
     return MemoryMaintenanceConfig(
+        enabled=role.enabled,
+        provider=None if role.inherit_main else role.provider.value,
+        model=None if role.inherit_main else role.model,
+    )
+
+
+def _summary_config(role: ModelRoleSettings) -> ContextSummaryModelConfig:
+    return ContextSummaryModelConfig(
         enabled=role.enabled,
         provider=None if role.inherit_main else role.provider.value,
         model=None if role.inherit_main else role.model,

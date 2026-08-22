@@ -52,6 +52,7 @@ from app.computer import (
 from app.context import (
     ContextManager,
     ContextSettings,
+    ContextSummaryModelConfig,
     ConversationReducer,
     ModelContextSummarizer,
     SQLiteConversationSummaryStore,
@@ -215,6 +216,7 @@ class Application:
         shared_event_handler: AgentEventHandler | None = None,
         memory_reflection_config: MemoryReflectionConfig | None = None,
         memory_maintenance_config: MemoryMaintenanceConfig | None = None,
+        context_summary_config: ContextSummaryModelConfig | None = None,
         skill_learning_settings: SkillLearningSettings | None = None,
         desktop_approval: bool = False,
         computer_runtime: ComputerRuntime | None = None,
@@ -256,6 +258,11 @@ class Application:
         )
         self._memory_maintenance_config = memory_maintenance_config or (
             effective_model_configuration.maintenance
+            if effective_model_configuration is not None
+            else None
+        )
+        self._context_summary_config = context_summary_config or (
+            effective_model_configuration.summary
             if effective_model_configuration is not None
             else None
         )
@@ -473,11 +480,18 @@ class Application:
         )
 
         context_settings = ContextSettings()
-        context_summarizer = ModelContextSummarizer(
-            self.registry,
-            provider=self.provider,
-            model=self.model,
-            max_output_tokens=context_settings.context_summary_max_output_tokens,
+        summary_config = self._context_summary_config or ContextSummaryModelConfig()
+        context_summarizer = (
+            ModelContextSummarizer(
+                self.registry,
+                provider=summary_config.provider or self.provider,
+                model=summary_config.model or self.model,
+                max_output_tokens=(
+                    context_settings.context_summary_max_output_tokens
+                ),
+            )
+            if summary_config.enabled
+            else None
         )
 
         # MCP：配置缺失 / 损坏时不阻断启动（CLI 会检查 mcp_error 决定退出码）。
@@ -509,14 +523,18 @@ class Application:
             rule_store=rule_store,
             context_manager=ContextManager(
                 context_settings=context_settings,
-                conversation_reducer=ConversationReducer(
-                    context_summarizer,
-                    keep_recent_conversation_blocks=(
-                        context_settings.context_keep_recent_conversation_blocks
-                    ),
-                    keep_recent_tool_rounds=(
-                        context_settings.context_keep_recent_tool_rounds
-                    ),
+                conversation_reducer=(
+                    ConversationReducer(
+                        context_summarizer,
+                        keep_recent_conversation_blocks=(
+                            context_settings.context_keep_recent_conversation_blocks
+                        ),
+                        keep_recent_tool_rounds=(
+                            context_settings.context_keep_recent_tool_rounds
+                        ),
+                    )
+                    if context_summarizer is not None
+                    else None
                 ),
             ),
             task_context_provider=TaskContextProvider(task_store),

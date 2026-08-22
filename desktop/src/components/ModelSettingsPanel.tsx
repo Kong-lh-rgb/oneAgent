@@ -38,6 +38,7 @@ export default function ModelSettingsPanel(): React.JSX.Element {
   const [providers, setProviders] = useState<ProviderDraft[]>([])
   const [reflection, setReflection] = useState<ModelRoleSettings>(defaultRole())
   const [maintenance, setMaintenance] = useState<ModelRoleSettings>(defaultRole())
+  const [summary, setSummary] = useState<ModelRoleSettings>(defaultRole())
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -55,6 +56,7 @@ export default function ModelSettingsPanel(): React.JSX.Element {
     })))
     setReflection(query.data.reflection)
     setMaintenance(query.data.maintenance)
+    setSummary(query.data.summary ?? defaultRole())
   }, [query.data])
 
   const current = useMemo(
@@ -109,6 +111,7 @@ export default function ModelSettingsPanel(): React.JSX.Element {
       providers: providers.map(({ configured: _configured, keySource: _keySource, ...item }) => item),
       reflection: normalizedRole(reflection),
       maintenance: normalizedRole(maintenance),
+      summary: normalizedRole(summary),
     })
   }
 
@@ -212,18 +215,19 @@ export default function ModelSettingsPanel(): React.JSX.Element {
 
       <section className="settings-group">
         <header className="settings-group__header">
-          <div><h3>后台模型</h3><p>记忆反思和容量维护默认继承主模型，也可单独指定</p></div>
+          <div><h3>后台模型</h3><p>非交互任务默认继承主模型，也可使用更轻量的独立模型</p></div>
         </header>
+        <RoleEditor title="会话摘要" value={summary} providers={providers} onChange={setSummary} />
         <RoleEditor title="记忆反思" value={reflection} providers={providers} onChange={setReflection} />
         <RoleEditor title="容量维护" value={maintenance} providers={providers} onChange={setMaintenance} />
       </section>
 
       {(notice || error) && <div className={error ? 'model-notice model-notice--error' : 'model-notice'}>{error ?? notice}</div>}
       <div className="model-actions">
+        <span>保存不会中断正在执行的 Run。</span>
         <button type="button" className="btn btn--primary" disabled={saveMutation.isPending} onClick={save}>
           {saveMutation.isPending ? '正在保存…' : '保存模型设置'}
         </button>
-        <span>保存不会中断正在执行的 Run。</span>
       </div>
     </div>
   )
@@ -244,7 +248,8 @@ function RoleEditor({
   const selectedModel = value.model ?? providers.find((item) => item.provider === selectedProvider)?.model ?? ''
   return (
     <div className="model-role-row">
-      <div className="model-role-row__title"><strong>{title}</strong><label><input type="checkbox" checked={value.enabled} onChange={(event) => onChange({ ...value, enabled: event.target.checked })} />启用</label></div>
+      <strong className="model-role-row__name">{title}</strong>
+      <label className="model-role-toggle"><input type="checkbox" checked={value.enabled} onChange={(event) => onChange({ ...value, enabled: event.target.checked })} />启用</label>
       <label className="model-role-inherit">
         <input
           type="checkbox"

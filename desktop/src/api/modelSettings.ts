@@ -36,6 +36,7 @@ export interface ModelSettingsView {
   providers: ProviderModelSettings[]
   reflection: ModelRoleSettings
   maintenance: ModelRoleSettings
+  summary: ModelRoleSettings
   active_provider: string
   active_model: string
   restart_required: boolean
@@ -46,6 +47,7 @@ export interface ModelSettingsUpdate {
   providers: ProviderModelSettingsUpdate[]
   reflection: ModelRoleSettings
   maintenance: ModelRoleSettings
+  summary: ModelRoleSettings
 }
 
 export interface ModelConnectionResult {

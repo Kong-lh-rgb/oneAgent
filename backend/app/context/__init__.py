@@ -21,7 +21,7 @@ from .capabilities import (
     ModelCapabilityRegistry,
     build_model_capability_registry,
 )
-from .config import ContextSettings
+from .config import ContextSettings, ContextSummaryModelConfig
 from .history import compact_model_blocks, compact_model_history
 from .manager import ContextCompactionStage, ContextDecision, ContextManager
 from .reducers import (
@@ -55,6 +55,7 @@ __all__ = [
     "ContextManager",
     "ContextSummarizer",
     "ContextSettings",
+    "ContextSummaryModelConfig",
     "ConversationBlock",
     "ConversationReducer",
     "ConversationReductionResult",

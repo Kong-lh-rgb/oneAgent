@@ -31,6 +31,7 @@ describe('model settings api', () => {
       providers: [provider],
       reflection: { enabled: true, inherit_main: true, provider: null, model: null },
       maintenance: { enabled: false, inherit_main: true, provider: null, model: null },
+      summary: { enabled: true, inherit_main: false, provider: 'qwen' as const, model: 'qwen-turbo' },
     }
     callMock.mockResolvedValue({})
     await updateModelSettings(input)

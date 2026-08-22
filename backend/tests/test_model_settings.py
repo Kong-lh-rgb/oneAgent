@@ -84,6 +84,12 @@ def _update() -> ModelSettingsUpdate:
             "provider": "openai",
             "model": "gpt-small",
         },
+        summary={
+            "enabled": True,
+            "inherit_main": False,
+            "provider": "qwen",
+            "model": "qwen-summary",
+        },
     )
 
 
@@ -129,6 +135,30 @@ def test_effective_configuration_merges_roles_and_keychain(tmp_path: Path) -> No
     assert effective.reflection.model == "qwen-small"
     assert effective.maintenance is not None
     assert effective.maintenance.enabled is False
+    assert effective.summary is not None
+    assert effective.summary.enabled is True
+    assert effective.summary.provider == "qwen"
+    assert effective.summary.model == "qwen-summary"
+
+
+def test_old_settings_without_summary_use_inherited_enabled_default(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "models.json"
+    ModelSettingsService(
+        store=ModelSettingsStore(path),
+        secrets=FakeSecrets(),
+        base_settings=_base_settings(),
+    ).save(_update())
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload.pop("summary")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    stored = ModelSettingsStore(path).load()
+
+    assert stored is not None
+    assert stored.summary.enabled is True
+    assert stored.summary.inherit_main is True
 
 
 @pytest.mark.asyncio

@@ -106,6 +106,7 @@ class StoredModelSettings(BaseModel):
     providers: dict[str, ProviderSettings]
     reflection: ModelRoleSettings = Field(default_factory=ModelRoleSettings)
     maintenance: ModelRoleSettings = Field(default_factory=ModelRoleSettings)
+    summary: ModelRoleSettings = Field(default_factory=ModelRoleSettings)
 
 
 class ModelSettingsUpdate(BaseModel):
@@ -117,6 +118,7 @@ class ModelSettingsUpdate(BaseModel):
     providers: tuple[ProviderSettingsUpdate, ...]
     reflection: ModelRoleSettings = Field(default_factory=ModelRoleSettings)
     maintenance: ModelRoleSettings = Field(default_factory=ModelRoleSettings)
+    summary: ModelRoleSettings = Field(default_factory=ModelRoleSettings)
 
     @model_validator(mode="after")
     def unique_providers(self) -> ModelSettingsUpdate:

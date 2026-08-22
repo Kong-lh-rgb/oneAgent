@@ -95,6 +95,18 @@ class ModelContextSummarizer(ContextSummarizer):
         # None 表示自动：仅对支持关闭 reasoning 的 Provider 生效。
         self._disable_reasoning = disable_reasoning
 
+    @property
+    def provider_hint(self) -> ModelProvider | str | None:
+        """返回摘要实际选择的 Provider，供装配诊断与测试读取。"""
+
+        return self._provider
+
+    @property
+    def model_hint(self) -> str | None:
+        """返回摘要实际选择的模型。"""
+
+        return self._model
+
     async def summarize(
         self,
         previous_summary: RollingConversationSummary | None,

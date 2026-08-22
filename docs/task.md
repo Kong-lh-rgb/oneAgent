@@ -2550,3 +2550,21 @@ Automation ─┤  → ConversationService.dispatch(conversation_id, content, tr
 - [x] Desktop `npm test`：239 passed
 - [x] Desktop `typecheck`、生产构建：通过
 - [x] `git diff --check`：通过
+
+### 优化：设置中心 V2 模型页精确对齐
+
+- [x] Provider 标签改为四列等宽，状态点、文字和选中线统一居中
+- [x] 两列配置表单使用固定标签、控件和辅助说明三行栅格
+- [x] 后台模型拆分名称、启用、继承与自定义模型四列，展开前后保持基线稳定
+- [x] 保存说明回到操作栏左侧，主按钮固定在右侧
+- [x] 使用真实 Desktop 页面检查默认态与后台模型展开态
+
+### 完成：会话摘要独立小模型配置
+
+- [x] 设置中心后台模型增加“会话摘要”，支持启用、继承主模型或独立 Provider/Model
+- [x] 新增 `ContextSummaryModelConfig`，Host 启动时装配独立滚动摘要模型
+- [x] 摘要模型只负责生成结构化滚动摘要，不改变主模型上下文窗口与压缩阈值
+- [x] 关闭摘要时不装配 `ConversationReducer`；重新启用并重启 Host 后恢复
+- [x] 旧版 `models.json` 缺少 summary 字段时兼容为“启用并继承主模型”
+- [x] 设置保存继续复用 Provider Keychain 密钥校验，不增加第二份密钥配置
+- [x] 已检查三行后台模型的真实页面布局

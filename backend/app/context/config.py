@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
@@ -74,4 +74,28 @@ class ContextSettings(BaseSettings):
         return self
 
 
-__all__ = ["ContextSettings"]
+class ContextSummaryModelConfig(BaseSettings):
+    """滚动会话摘要使用的独立模型配置。"""
+
+    model_config = SettingsConfigDict(
+        env_file=_BACKEND_ENV_FILE,
+        env_file_encoding="utf-8",
+        env_prefix="CONTEXT_SUMMARY_",
+        extra="ignore",
+    )
+
+    enabled: bool = True
+    provider: str | None = None
+    model: str | None = None
+
+    @field_validator("provider", "model", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise TypeError("summary provider and model must be strings")
+        return value.strip() or None
+
+
+__all__ = ["ContextSettings", "ContextSummaryModelConfig"]
