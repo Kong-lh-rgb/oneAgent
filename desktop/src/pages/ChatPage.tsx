@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { approveApproval, denyApproval, listApprovals } from '../api/approvals'
 import { listArtifacts } from '../api/artifacts'
@@ -14,6 +14,7 @@ import {
 import { cancelRun, interruptRun, listRuns, recoverRun } from '../api/runs'
 import { getTask, planAccept, planReject } from '../api/tasks'
 import type { AgentMode, Message, Task } from '../api/types'
+import { latestRunId } from '../agent/runAnalysis'
 import { buildTurnView } from '../agent/turnPresentation'
 import { chatShouldShowApproval } from '../approval/computerApproval'
 import ApprovalCard from '../components/ApprovalCard'
@@ -35,15 +36,21 @@ import type { PageKey } from '../App'
 export default function ChatPage({
   onNavigate,
   onOpenRun,
+  initialConversationId,
+  onConversationChange,
 }: {
   onNavigate?: (page: PageKey) => void
   onOpenRun?: (runId: string) => void
+  initialConversationId?: string | null
+  onConversationChange?: (conversationId: string | null) => void
 }): React.JSX.Element {
   const queryClient = useQueryClient()
   const eventsByRun = useEventsStore((state) => state.eventsByRun)
   const runStatuses = useEventsStore((state) => state.runStatuses)
   const connected = useEventsStore((state) => state.connected)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(
+    initialConversationId ?? null,
+  )
   const [lastRunId, setLastRunId] = useState<string | null>(null)
   const [mode, setMode] = useState<AgentMode>('normal')
   const [draft, setDraft] = useState('')
@@ -59,6 +66,10 @@ export default function ChatPage({
   // Persistent AgentTurn：完成后仍保留为本轮 Work Record。
   const [liveTurnActive, setLiveTurnActive] = useState(false)
 
+  const selectConversation = useCallback((conversationId: string | null): void => {
+    setSelectedId(conversationId)
+    onConversationChange?.(conversationId)
+  }, [onConversationChange])
 
   const conversationsQuery = useQuery({
     queryKey: ['conversations'],
@@ -68,9 +79,15 @@ export default function ChatPage({
 
   useEffect(() => {
     if (selectedId === null && conversations.length > 0) {
-      setSelectedId(conversations[0].id)
+      selectConversation(conversations[0].id)
     }
-  }, [conversations, selectedId])
+  }, [conversations, selectedId, selectConversation])
+
+  useEffect(() => {
+    if (initialConversationId && initialConversationId !== selectedId) {
+      setSelectedId(initialConversationId)
+    }
+  }, [initialConversationId, selectedId])
 
   const conversationQuery = useQuery({
     queryKey: ['conversation', selectedId],
@@ -115,6 +132,8 @@ export default function ChatPage({
         const map: Record<string, string> = {}
         for (const run of runs) map[run.id] = run.status
         useEventsStore.getState().syncRunStatuses(map)
+        const persistedRunId = latestRunId(runs)
+        setLastRunId((current) => current ?? persistedRunId)
       })
       .catch(() => {
         /* 同步失败不影响 UI；实时事件仍会工作 */
@@ -184,7 +203,7 @@ export default function ChatPage({
   const newConversationMutation = useMutation({
     mutationFn: () => createConversation(),
     onSuccess: (conversation) => {
-      setSelectedId(conversation.id)
+      selectConversation(conversation.id)
       setLastRunId(null)
       setPlanTask(null)
       setPlanResolved(null)
@@ -210,7 +229,7 @@ export default function ChatPage({
       await deleteConversation(id)
       if (id === selectedId) {
         const next = conversations.find((c) => c.id !== id)?.id ?? null
-        setSelectedId(next)
+        selectConversation(next)
         setLastRunId(null)
         setPlanTask(null)
         setPlanResolved(null)
@@ -470,7 +489,7 @@ export default function ChatPage({
           statusByConversation={conversationStatus}
           activityByConversation={conversationActivity}
           onSelect={(id) => {
-            setSelectedId(id)
+            selectConversation(id)
             setLastRunId(null)
             setPlanTask(null)
             setPlanResolved(null)

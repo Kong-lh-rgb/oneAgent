@@ -185,6 +185,16 @@ def _print_agent_event(event: AgentEvent) -> None:
             print(f"{prefix} 模型请求调用 {tool_count} 个工具")
         else:
             print(f"{prefix} 模型已返回回复")
+    elif event.type is AgentEventType.RUN_BUDGET_WARNING:
+        print(
+            f"{prefix} Run 用量进入预警区："
+            f"{event.run_budget_chargeable_tokens or 0} tokens · "
+            f"{event.run_budget_model_calls or 0} calls"
+        )
+    elif event.type is AgentEventType.RUN_BUDGET_FINALIZING:
+        print(f"{prefix} Run 用量达到收口线，正在生成最终答复")
+    elif event.type is AgentEventType.RUN_BUDGET_EXCEEDED:
+        print(f"{prefix} Run 用量达到硬上限，停止继续请求模型")
     elif event.type is AgentEventType.TOOL_STARTED and event.tool_call:
         print(f"{prefix} 开始执行工具：{event.tool_call.name}")
     elif event.type is AgentEventType.TOOL_COMPLETED and event.tool_result:
@@ -476,6 +486,12 @@ def _print_trace(events: tuple[AgentEvent, ...]) -> None:
                 )
             if event.compaction_stage not in (None, "none"):
                 details.append(f"context={event.compaction_stage}")
+        if event.run_budget_status is not None:
+            details.append(
+                f"budget={event.run_budget_status}:"
+                f"{event.run_budget_chargeable_tokens or 0}t/"
+                f"{event.run_budget_model_calls or 0}calls"
+            )
         detail_text = f"  {' '.join(details)}" if details else ""
         print(f"{event.sequence:03d}  {event_time}  {event.type.value}{detail_text}")
 

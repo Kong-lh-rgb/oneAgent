@@ -74,6 +74,38 @@ export interface RunUsageSummary {
   tool_schema_tokens_estimated: number
   memory_reflection_status: string
   memory_reflection_skip_reason: string | null
+  main_agent_chargeable_tokens: number
+  run_budget_status: string
+  run_budget_reason: string | null
+  run_budget_warning_tokens: number | null
+  run_budget_finalization_tokens: number | null
+  run_budget_hard_tokens: number | null
+  run_budget_warning_model_calls: number | null
+  run_budget_finalization_model_calls: number | null
+  run_budget_hard_model_calls: number | null
+}
+
+export interface LongTermMemory {
+  id: string
+  title: string
+  summary: string
+  content: string
+  created_at: string
+  updated_at: string
+  last_accessed_at: string
+  access_count: number
+  revision: number
+  status: 'active' | 'archived'
+  last_update_reason: string | null
+  archive_reason: string | null
+}
+
+export interface LongTermMemoryOverview {
+  core: string
+  active: LongTermMemory[]
+  archived: LongTermMemory[]
+  active_count: number
+  max_active: number
 }
 
 export interface AgentResult {

@@ -25,6 +25,15 @@ describe('UsageInspector', () => {
       tool_schema_tokens_estimated: 39_000,
       memory_reflection_status: 'completed',
       memory_reflection_skip_reason: null,
+      main_agent_chargeable_tokens: 26_200,
+      run_budget_status: 'warning',
+      run_budget_reason: 'model_calls',
+      run_budget_warning_tokens: 50_000,
+      run_budget_finalization_tokens: 75_000,
+      run_budget_hard_tokens: 100_000,
+      run_budget_warning_model_calls: 8,
+      run_budget_finalization_model_calls: 10,
+      run_budget_hard_model_calls: 12,
     }
     const html = renderToStaticMarkup(<UsageInspector summary={summary} />)
     expect(html).toContain('94.6k processed')
@@ -33,6 +42,8 @@ describe('UsageInspector', () => {
     expect(html).toContain('100.5k')
     expect(html).toContain('10 calls')
     expect(html).toContain('≈39k')
+    expect(html).toContain('26.2k budgeted')
+    expect(html).toContain('Triggered by model_calls')
   })
 
   it('缓存字段未知时不显示成零', () => {
@@ -44,6 +55,15 @@ describe('UsageInspector', () => {
       tool_schema_tokens_estimated: 0,
       memory_reflection_status: 'skipped',
       memory_reflection_skip_reason: 'gate:smalltalk',
+      main_agent_chargeable_tokens: 12,
+      run_budget_status: 'active',
+      run_budget_reason: null,
+      run_budget_warning_tokens: 50_000,
+      run_budget_finalization_tokens: 75_000,
+      run_budget_hard_tokens: 100_000,
+      run_budget_warning_model_calls: 8,
+      run_budget_finalization_model_calls: 10,
+      run_budget_hard_model_calls: 12,
     }
     const html = renderToStaticMarkup(<UsageInspector summary={summary} />)
     expect(html).toContain('Unavailable')

@@ -26,6 +26,7 @@ export const RpcMethods = {
   approvalDeny: 'approval.deny',
   artifactList: 'artifact.list',
   artifactGet: 'artifact.get',
+  memoryList: 'memory.list',
   taskGet: 'task.get',
   taskPlanAccept: 'task.plan_accept',
   taskPlanReject: 'task.plan_reject',

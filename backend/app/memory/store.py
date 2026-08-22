@@ -190,6 +190,23 @@ class MemoryStore:
                 logger.warning("skip unreadable memory %s: %s", path.name, exc)
         return tuple(sorted(records, key=lambda record: record.id))
 
+    async def list_archived(self) -> tuple[MemoryRecord, ...]:
+        """列出所有已归档记忆，按最近更新时间倒序。"""
+
+        records: list[MemoryRecord] = []
+        for path in self.archive_dir.glob("M*.md"):
+            if await asyncio.to_thread(path.is_symlink):
+                continue
+            try:
+                record = await asyncio.to_thread(_read_record, path)
+                if record.status is MemoryStatus.ARCHIVED:
+                    records.append(record)
+            except (ValueError, OSError) as exc:
+                logger.warning("skip unreadable archived memory %s: %s", path.name, exc)
+        return tuple(
+            sorted(records, key=lambda record: record.updated_at, reverse=True)
+        )
+
     async def count_active(self) -> int:
         return len(await self.list_active())
 

@@ -46,7 +46,7 @@ function contextEvent(): AgentEvent {
 }
 
 describe('ContextInspector', () => {
-  it('展示窗口、预算、压缩动作与成本解释', () => {
+  it('展示窗口、预算与压缩动作', () => {
     const html = renderToStaticMarkup(<ContextInspector events={[contextEvent()]} />)
     expect(html).toContain('Model step')
     expect(html).toContain('128k')
@@ -58,6 +58,7 @@ describe('ContextInspector', () => {
     expect(html).toContain('3 个旧工具轮已移除')
     expect(html).toContain('Conversation summary 已更新')
     expect(html).toContain('Memory、Task 与系统消息当前没有独立计数字段')
+    expect(html).not.toContain('为什么这轮可能更贵')
   })
 
   it('没有模型请求时显示明确空状态', () => {

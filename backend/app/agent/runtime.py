@@ -60,6 +60,13 @@ from app.tools.permissions.policy import PermissionPolicyEngine
 from app.tools.permissions.store import PermissionRuleStore
 from app.tools.registry import ToolRegistry
 
+from .budget import (
+    RunBudget,
+    RunBudgetConfig,
+    RunBudgetDecision,
+    RunBudgetStatus,
+    chargeable_tokens,
+)
 from .computer_guard import ComputerStagnationGuard
 from .errors import (
     AgentRuntimeError,
@@ -68,6 +75,7 @@ from .errors import (
     MaxStepsExceededError,
     ModelInvocationError,
     RepeatedToolCallError,
+    RunBudgetExceededError,
 )
 from .events import (
     AgentEvent,
@@ -100,6 +108,15 @@ _PLAN_MODE_SYSTEM_MESSAGE = (
 
 _PLAN_NO_TASK_MESSAGE = "Plan mode finished without creating a task."
 _PLAN_NO_VALID_TASK_MESSAGE = "Plan mode finished without a valid pending task."
+_RUN_BUDGET_FINALIZATION_MESSAGE = (
+    "本 Run 已达到 Main Agent 用量收口线。不要再调用工具，请基于已有证据立即"
+    "给出简洁的最终答复；明确区分已完成、未完成和无法验证的内容，不要伪造"
+    "执行结果。"
+)
+_RUN_BUDGET_WARNING_MESSAGE = (
+    "本 Run 的累计 Main Agent 用量已进入预警区。请减少不必要的重复调查和工具"
+    "调用，优先完成当前目标；仍可在确有必要时继续使用工具。"
+)
 
 
 class AgentRuntime:
@@ -129,6 +146,7 @@ class AgentRuntime:
         skill_store: SkillStore | None = None,
         skill_context_provider: SkillContextProvider | None = None,
         post_run_submit: Callable[[Callable[[], Any]], bool] | None = None,
+        run_budget_config: RunBudgetConfig | None = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be at least 1")
@@ -159,6 +177,7 @@ class AgentRuntime:
         self._skill_store = skill_store
         self._skill_context_provider = skill_context_provider
         self._post_run_submit = post_run_submit
+        self._run_budget = RunBudget(run_budget_config)
         self._tool_executor = tool_executor or ToolExecutor(
             tool_registry,
             approval_gate=approval_gate,
@@ -317,6 +336,8 @@ class AgentRuntime:
         tool_rounds: list[ToolRound] = []
         tool_calls: list[ToolCallRecord] = []
         usage = ModelUsage()
+        main_model_calls = 0
+        budget_chargeable_tokens = 0
         current_summary_state = summary_state
         memory_context_messages: tuple[Message, ...] = ()
         memory_context_loaded = False
@@ -332,6 +353,8 @@ class AgentRuntime:
         computer_verification_pending = False
         computer_guard = ComputerStagnationGuard()
         computer_halted = False
+        budget_warning_emitted = False
+        budget_finalization_attempted = False
 
         await emitter.emit(
             AgentEventType.AGENT_STARTED,
@@ -365,11 +388,64 @@ class AgentRuntime:
             finalization_step = step > self._max_steps
             if finalization_step and not finalization_pending:
                 break
+            budget_decision = self._run_budget.evaluate(
+                usage,
+                chargeable_tokens_override=budget_chargeable_tokens,
+                model_calls_override=main_model_calls,
+            )
+            budget_warning_in_request = budget_decision.should_warn
+            budget_config = self._run_budget.config
+            if budget_decision.exceeded:
+                await emitter.emit(
+                    AgentEventType.RUN_BUDGET_EXCEEDED,
+                    step=step,
+                    **_run_budget_event_fields(budget_decision, budget_config),
+                )
+                return await stop_with_error(
+                    RunBudgetExceededError(
+                        _run_budget_detail(budget_decision)
+                    ),
+                    AgentStopReason.RUN_BUDGET,
+                    step=max(0, step - 1),
+                )
+            if budget_decision.should_warn and not budget_warning_emitted:
+                budget_warning_emitted = True
+                await emitter.emit(
+                    AgentEventType.RUN_BUDGET_WARNING,
+                    step=step,
+                    **_run_budget_event_fields(budget_decision, budget_config),
+                )
+            budget_forces_final = budget_decision.should_finalize
+            if budget_forces_final:
+                if budget_finalization_attempted:
+                    await emitter.emit(
+                        AgentEventType.RUN_BUDGET_EXCEEDED,
+                        step=step,
+                        **_run_budget_event_fields(
+                            budget_decision,
+                            budget_config,
+                            status=RunBudgetStatus.EXCEEDED,
+                        ),
+                    )
+                    return await stop_with_error(
+                        RunBudgetExceededError(
+                            "dedicated finalization call was already used"
+                        ),
+                        AgentStopReason.RUN_BUDGET,
+                        step=max(0, step - 1),
+                    )
+                budget_finalization_attempted = True
+                await emitter.emit(
+                    AgentEventType.RUN_BUDGET_FINALIZING,
+                    step=step,
+                    **_run_budget_event_fields(budget_decision, budget_config),
+                )
             if self._checkpoint_store is not None:
                 await self._checkpoint_store.before_model(run_id, step=step)
             force_final_answer = (
                 finalization_step
                 or computer_halted
+                or budget_forces_final
                 or (
                     self._max_tool_rounds is not None
                     and len(tool_rounds) >= self._max_tool_rounds
@@ -395,6 +471,11 @@ class AgentRuntime:
                 effective_max_output_tokens = (
                     self._max_output_tokens or adapter.config.default_max_output_tokens
                 )
+                if budget_forces_final:
+                    effective_max_output_tokens = min(
+                        effective_max_output_tokens,
+                        budget_config.finalization_max_output_tokens,
+                    )
             except Exception as exc:
                 return await stop_with_error(
                     ModelInvocationError(f"{type(exc).__name__}: {exc}"),
@@ -460,6 +541,13 @@ class AgentRuntime:
                             content=_PLAN_MODE_SYSTEM_MESSAGE,
                         )
                     )
+                if budget_warning_in_request:
+                    ephemeral_messages.append(
+                        Message(
+                            role=MessageRole.SYSTEM,
+                            content=_RUN_BUDGET_WARNING_MESSAGE,
+                        )
+                    )
                 if ephemeral_messages:
                     request_messages = (
                         *request_messages[:historical_message_count],
@@ -467,18 +555,21 @@ class AgentRuntime:
                         *request_messages[historical_message_count:],
                     )
                 if force_final_answer:
-                    final_instruction = (
-                        "Computer 操作已因同一失败且桌面无进展而停止。不要再输出或"
-                        "伪造任何工具调用；请根据已有证据直接说明阻塞原因、已经完成"
-                        "的部分和用户可采取的恢复步骤。"
-                        if computer_halted
-                        else (
+                    if computer_halted:
+                        final_instruction = (
+                            "Computer 操作已因同一失败且桌面无进展而停止。不要再输出"
+                            "或伪造任何工具调用；请根据已有证据直接说明阻塞原因、"
+                            "已经完成的部分和用户可采取的恢复步骤。"
+                        )
+                    elif budget_forces_final:
+                        final_instruction = _RUN_BUDGET_FINALIZATION_MESSAGE
+                    else:
+                        final_instruction = (
                             "工具调用轮次已用完。请读取最后一条工具结果，停止"
                             "调用工具并直接回答用户。对于 verification_status="
                             "unverified 的电脑操作，只能说明事件已投递、效果未"
                             "确认，不能宣称界面操作已经完成。"
                         )
-                    )
                     request_messages = (
                         *request_messages,
                         Message(
@@ -512,8 +603,67 @@ class AgentRuntime:
 
             current_summary_state = context_decision.summary_state
             usage = _add_usage(usage, context_decision.summary_usage)
+            main_model_calls += _usage_call_count(context_decision.summary_usage)
+            budget_chargeable_tokens += chargeable_tokens(
+                context_decision.summary_usage
+            )
             request_messages = context_decision.messages
             request_tools = context_decision.tools
+            # Context summary 也是 critical-path 模型调用；它可能让本 Run 在真正
+            # 请求主模型前跨过预算线，因此准备完成后必须再评估一次。
+            prepared_budget_decision = self._run_budget.evaluate(
+                usage,
+                chargeable_tokens_override=budget_chargeable_tokens,
+                model_calls_override=main_model_calls,
+            )
+            budget_decision = prepared_budget_decision
+            if budget_decision.exceeded:
+                await emitter.emit(
+                    AgentEventType.RUN_BUDGET_EXCEEDED,
+                    step=step,
+                    **_run_budget_event_fields(budget_decision, budget_config),
+                )
+                return await stop_with_error(
+                    RunBudgetExceededError(_run_budget_detail(budget_decision)),
+                    AgentStopReason.RUN_BUDGET,
+                    step=max(0, step - 1),
+                )
+            if budget_decision.should_warn and not budget_warning_emitted:
+                budget_warning_emitted = True
+                await emitter.emit(
+                    AgentEventType.RUN_BUDGET_WARNING,
+                    step=step,
+                    **_run_budget_event_fields(budget_decision, budget_config),
+                )
+            if budget_decision.should_warn and not budget_warning_in_request:
+                request_messages = (
+                    *request_messages,
+                    Message(
+                        role=MessageRole.SYSTEM,
+                        content=_RUN_BUDGET_WARNING_MESSAGE,
+                    ),
+                )
+            if budget_decision.should_finalize and not budget_forces_final:
+                budget_forces_final = True
+                force_final_answer = True
+                budget_finalization_attempted = True
+                request_tools = ()
+                effective_max_output_tokens = min(
+                    effective_max_output_tokens,
+                    budget_config.finalization_max_output_tokens,
+                )
+                request_messages = (
+                    *request_messages,
+                    Message(
+                        role=MessageRole.SYSTEM,
+                        content=_RUN_BUDGET_FINALIZATION_MESSAGE,
+                    ),
+                )
+                await emitter.emit(
+                    AgentEventType.RUN_BUDGET_FINALIZING,
+                    step=step,
+                    **_run_budget_event_fields(budget_decision, budget_config),
+                )
             await emitter.emit(
                 AgentEventType.MODEL_STARTED,
                 step=step,
@@ -593,6 +743,7 @@ class AgentRuntime:
                     else None
                 ),
                 active_skill_message_names=injected_active_skill_names,
+                **_run_budget_event_fields(budget_decision, budget_config),
             )
             if context_decision.exceeds_input_budget:
                 return await stop_with_error(
@@ -645,6 +796,8 @@ class AgentRuntime:
                 )
 
             usage = _add_usage(usage, response.usage)
+            main_model_calls += max(1, response.usage.model_calls)
+            budget_chargeable_tokens += chargeable_tokens(response.usage)
             assistant_message = response.message
             messages.append(assistant_message)
             await emitter.emit(
@@ -658,6 +811,14 @@ class AgentRuntime:
             tool_calls_in_message = assistant_message.tool_calls
             if force_final_answer and tool_calls_in_message:
                 # 最终化请求没有提供工具定义；即使模型伪造工具调用也不执行。
+                if budget_forces_final:
+                    return await stop_with_error(
+                        RunBudgetExceededError(
+                            "model attempted a tool call during budget finalization"
+                        ),
+                        AgentStopReason.RUN_BUDGET,
+                        step=step,
+                    )
                 break
             if not tool_calls_in_message:
                 if force_final_answer and _looks_like_textual_tool_call(
@@ -665,6 +826,15 @@ class AgentRuntime:
                 ):
                     # 部分模型在 tools=() 时仍会把 Provider 工具协议作为普通文本
                     # 输出。它没有被执行，不能因此把 Run 标为 completed。
+                    if budget_forces_final:
+                        return await stop_with_error(
+                            RunBudgetExceededError(
+                                "model emitted a textual tool call during budget "
+                                "finalization"
+                            ),
+                            AgentStopReason.RUN_BUDGET,
+                            step=step,
+                        )
                     break
                 if computer_verification_pending and not computer_halted:
                     messages.append(
@@ -894,6 +1064,11 @@ class AgentRuntime:
                         call.name == "computer_observe"
                         for call in tool_calls_in_message
                     )
+                    or self._run_budget.evaluate(
+                        usage,
+                        chargeable_tokens_override=budget_chargeable_tokens,
+                        model_calls_override=main_model_calls,
+                    ).should_finalize
                 )
             )
 
@@ -1680,6 +1855,50 @@ def _add_usage(total: ModelUsage, current: ModelUsage) -> ModelUsage:
     """累加多轮模型调用的 token 用量。"""
 
     return add_model_usage(total, current)
+
+
+def _usage_call_count(usage: ModelUsage) -> int:
+    """从附属模型 Usage 中取得调用数；旧实现仅有 Token 时推断为一次。"""
+
+    if usage.model_calls > 0:
+        return usage.model_calls
+    if usage.input_tokens or usage.output_tokens or usage.total_tokens:
+        return 1
+    return 0
+
+
+def _run_budget_detail(decision: RunBudgetDecision) -> str:
+    """生成稳定、可诊断的预算停止原因。"""
+
+    reason = decision.reason.value if decision.reason is not None else "unknown"
+    return (
+        f"reason={reason}, chargeable_tokens={decision.chargeable_tokens}, "
+        f"model_calls={decision.model_calls}"
+    )
+
+
+def _run_budget_event_fields(
+    decision: RunBudgetDecision,
+    config: RunBudgetConfig,
+    *,
+    status: RunBudgetStatus | None = None,
+) -> dict[str, object]:
+    """把预算快照转换为 AgentEvent 的统一字段。"""
+
+    return {
+        "run_budget_status": (status or decision.status).value,
+        "run_budget_reason": (
+            decision.reason.value if decision.reason is not None else None
+        ),
+        "run_budget_chargeable_tokens": decision.chargeable_tokens,
+        "run_budget_model_calls": decision.model_calls,
+        "run_budget_warning_tokens": config.warning_tokens,
+        "run_budget_finalization_tokens": config.finalization_tokens,
+        "run_budget_hard_tokens": config.hard_tokens,
+        "run_budget_warning_model_calls": config.warning_model_calls,
+        "run_budget_finalization_model_calls": config.finalization_model_calls,
+        "run_budget_hard_model_calls": config.hard_model_calls,
+    }
 
 
 def _reflection_tool_context(

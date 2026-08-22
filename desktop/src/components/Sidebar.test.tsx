@@ -11,13 +11,14 @@ describe('Sidebar (App Shell)', () => {
       <Sidebar current="chat" onNavigate={() => {}} connected />,
     )
     for (const label of [
-      'Workspace',
-      'Runs',
-      'Automations',
-      'Approvals',
-      'Artifacts',
-      'Computer',
-      'Settings',
+      '工作区',
+      '执行历史',
+      '自动化',
+      '审批',
+      '长期记忆',
+      '交付物',
+      '电脑',
+      '设置',
     ]) {
       expect(html).toContain(label)
     }
@@ -31,20 +32,20 @@ describe('Sidebar (App Shell)', () => {
     expect(html).toContain('nav-item active')
   })
 
-  it('connected 显示 Host Ready', () => {
+  it('connected 显示 Host 就绪', () => {
     const html = renderToStaticMarkup(
       <Sidebar current="chat" onNavigate={() => {}} connected />,
     )
-    expect(html).toContain('Host Ready')
+    expect(html).toContain('Host 就绪')
     expect(html).toContain('status-dot--ready')
-    expect(html).not.toContain('Host Offline')
+    expect(html).not.toContain('Host 离线')
   })
 
-  it('断开连接显示 Host Offline', () => {
+  it('断开连接显示 Host 离线', () => {
     const html = renderToStaticMarkup(
       <Sidebar current="chat" onNavigate={() => {}} connected={false} />,
     )
-    expect(html).toContain('Host Offline')
+    expect(html).toContain('Host 离线')
     expect(html).toContain('status-dot--offline')
   })
 
@@ -52,8 +53,8 @@ describe('Sidebar (App Shell)', () => {
     const html = renderToStaticMarkup(
       <Sidebar current="chat" onNavigate={() => {}} connected />,
     )
-    expect(html).toContain('title="Workspace"')
-    expect(html).toContain('aria-label="Workspace"')
+    expect(html).toContain('title="工作区"')
+    expect(html).toContain('aria-label="工作区"')
     expect(html).not.toContain('v0.1.0')
   })
 

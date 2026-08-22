@@ -14,11 +14,11 @@ function Screenshot({
   serverUrl: string
 }): React.JSX.Element {
   const [failed, setFailed] = useState(false)
-  if (failed) return <div className="computer-preview__missing">Screenshot unavailable</div>
+  if (failed) return <div className="computer-preview__missing">截图不可用</div>
   return (
     <img
       src={`${serverUrl}/computer/screenshots/${observationId}.png`}
-      alt="Latest target application"
+      alt="最新目标应用截图"
       className="computer-preview__image"
       onError={() => setFailed(true)}
     />
@@ -30,7 +30,7 @@ export default function ComputerObservationPanel({
   runId,
   eventTime,
   serverUrl,
-  title = 'Target preview',
+  title = '目标预览',
 }: {
   observation: ComputerObservation | null
   runId: string | null
@@ -42,7 +42,7 @@ export default function ComputerObservationPanel({
     return (
       <section className="computer-observation computer-observation--empty">
         <h3>{title}</h3>
-        <p>暂无 Computer Observation</p>
+        <p>暂无电脑观察结果</p>
       </section>
     )
   }
@@ -64,7 +64,7 @@ export default function ComputerObservationPanel({
       <div className="section-heading">
         <div>
           <h3>{title}</h3>
-          <p>{app?.name ?? 'Unknown target'} · {window?.title || 'Untitled window'}</p>
+          <p>{app?.name ?? '未知目标'} · {window?.title || '未命名窗口'}</p>
         </div>
         <time>{eventTime ? new Date(eventTime).toLocaleTimeString() : ''}</time>
       </div>
@@ -74,45 +74,45 @@ export default function ComputerObservationPanel({
           <Screenshot observationId={observation.id} serverUrl={baseUrl} />
         ) : null}
         <dl className="computer-preview__meta">
-          <div><dt>Target</dt><dd>{app?.name ?? '—'}</dd></div>
-          <div><dt>Window</dt><dd>{window?.title || '—'}</dd></div>
+          <div><dt>目标</dt><dd>{app?.name ?? '—'}</dd></div>
+          <div><dt>窗口</dt><dd>{window?.title || '—'}</dd></div>
           <div><dt>Run</dt><dd className="mono">{runId?.slice(0, 8) ?? '—'}</dd></div>
-          <div><dt>Snapshot</dt><dd className="mono">{observation.id.slice(0, 8)}</dd></div>
+          <div><dt>快照</dt><dd className="mono">{observation.id.slice(0, 8)}</dd></div>
         </dl>
       </div>
 
       <details className="observation-inspector">
         <summary>
-          <span>Observation</span>
+          <span>观察详情</span>
           <small>
-            {observation.element_stats?.observed ?? observation.elements.length} elements
-            {' · '}{editableCount + actionableCount} editable/actionable
-            {focused ? ` · focused: ${focused.role.replaceAll('_', ' ')}` : ''}
+            {observation.element_stats?.observed ?? observation.elements.length} 个元素
+            {' · '}{editableCount + actionableCount} 个可编辑/可操作
+            {focused ? ` · 焦点：${focused.role.replaceAll('_', ' ')}` : ''}
           </small>
         </summary>
         <div className="observation-inspector__body">
           <div className="observation-inspector__summary mono">
-            snapshot {observation.id}
-            {observation.truncated ? ' · output truncated' : ''}
+            快照 {observation.id}
+            {observation.truncated ? ' · 输出已截断' : ''}
           </div>
-          <h4>Windows</h4>
+          <h4>窗口</h4>
           <div className="inspector-rows">
             {observation.windows.map((item) => (
               <div key={item.ref} className="inspector-row">
-                <code>{item.ref}</code><span>{item.title || 'Untitled'}</span>
+                <code>{item.ref}</code><span>{item.title || '未命名'}</span>
                 <small>{item.bounds.width}×{item.bounds.height}</small>
               </div>
             ))}
           </div>
-          <h4>Elements ({elements.length}{observation.elements.length > MAX_ELEMENTS ? '+' : ''})</h4>
+          <h4>界面元素（{elements.length}{observation.elements.length > MAX_ELEMENTS ? '+' : ''}）</h4>
           <div className="inspector-rows">
             {elements.map((element) => (
               <div key={element.ref} className="inspector-row">
                 <code>{element.ref}</code>
                 <span>{element.role || 'element'} · {element.title ?? element.value ?? '—'}</span>
                 <small>
-                  {element.focused ? 'focused ' : ''}
-                  {element.editable ? 'editable ' : ''}
+                  {element.focused ? '已聚焦 ' : ''}
+                  {element.editable ? '可编辑 ' : ''}
                   {element.actions.join(', ')}
                 </small>
               </div>

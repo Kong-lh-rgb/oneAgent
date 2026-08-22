@@ -36,6 +36,13 @@ class MaxStepsExceededError(AgentRuntimeError):
         super().__init__(f"maximum step limit ({max_steps}) reached")
 
 
+class RunBudgetExceededError(AgentRuntimeError):
+    """Main Agent 已达到 Run 硬预算，不能继续请求模型。"""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(f"main agent run budget exceeded: {detail}")
+
+
 class RepeatedToolCallError(AgentRuntimeError):
     """模型连续三次重复同一工具调用时抛出。"""
 

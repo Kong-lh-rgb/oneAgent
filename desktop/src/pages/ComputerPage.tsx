@@ -37,11 +37,11 @@ export function ComputerSessionOverview({
       <section className="computer-ready">
         <Icon name="computer" size={20} />
         <div>
-          <h2>{available ? 'Computer ready' : 'Computer unavailable'}</h2>
+          <h2>{available ? '电脑操作已就绪' : '电脑操作不可用'}</h2>
           <p>
             {available
-              ? 'Vesta is not currently controlling an application.'
-              : 'The macOS Computer runtime is not available.'}
+              ? 'Vesta 当前没有控制任何应用。'
+              : 'macOS 电脑操作运行时当前不可用。'}
           </p>
         </div>
       </section>
@@ -51,19 +51,19 @@ export function ComputerSessionOverview({
   return (
     <section className="computer-session">
       <div className="section-heading">
-        <div><h2>Agent control</h2><p>Current Computer Session</p></div>
-        <span className="computer-session__live">Live</span>
+        <div><h2>Agent 控制</h2><p>当前电脑操作会话</p></div>
+        <span className="computer-session__live">实时</span>
       </div>
       <dl className="computer-session__grid">
-        <div><dt>Target</dt><dd>{context.target ?? 'Waiting for target'}</dd></div>
-        <div><dt>Window</dt><dd>{context.window ?? '—'}</dd></div>
+        <div><dt>目标应用</dt><dd>{context.target ?? '等待确定目标'}</dd></div>
+        <div><dt>窗口</dt><dd>{context.window ?? '—'}</dd></div>
         <div className="computer-session__wide">
-          <dt>Run</dt><dd>{runLabel ?? 'Active Computer work'}</dd>
+          <dt>Run</dt><dd>{runLabel ?? '正在执行电脑操作'}</dd>
         </div>
-        <div><dt>Session</dt><dd>Active{acquiredAt ? ` · since ${new Date(acquiredAt).toLocaleTimeString()}` : ''}</dd></div>
-        <div><dt>Mode</dt><dd>{context.executionMode ?? 'Targeted'}</dd></div>
-        <div><dt>Last action</dt><dd>{context.lastAction ?? 'Preparing'}</dd></div>
-        <div><dt>Verification</dt><dd>{context.verification ?? 'No pending verification'}</dd></div>
+        <div><dt>会话</dt><dd>活动中{acquiredAt ? ` · ${new Date(acquiredAt).toLocaleTimeString('zh-CN')} 开始` : ''}</dd></div>
+        <div><dt>模式</dt><dd>{context.executionMode ?? '定向操作'}</dd></div>
+        <div><dt>最近动作</dt><dd>{context.lastAction ?? '正在准备'}</dd></div>
+        <div><dt>验证</dt><dd>{context.verification ?? '暂无待验证动作'}</dd></div>
       </dl>
     </section>
   )
@@ -108,12 +108,12 @@ export default function ComputerPage(): React.JSX.Element {
 
   return (
     <PageShell
-      title="Computer"
-      subtitle="Live desktop control, target evidence, and runtime permissions."
+      title="电脑"
+      subtitle="查看桌面控制状态、目标证据与运行时权限。"
       maxWidth={1120}
       actions={
         <span className={`page-live-status ${active ? 'active' : ''}`}>
-          <span />{active ? 'Active' : statusQuery.data?.available ? 'Ready' : 'Unavailable'}
+          <span />{active ? '控制中' : statusQuery.data?.available ? '已就绪' : '不可用'}
         </span>
       }
     >
@@ -133,9 +133,9 @@ export default function ComputerPage(): React.JSX.Element {
           serverUrl={SERVER_URL}
         />
         <aside className="computer-actions">
-          <div className="section-heading"><div><h3>Recent actions</h3><p>Computer activity in this Run</p></div></div>
+          <div className="section-heading"><div><h3>最近动作</h3><p>当前 Run 中的电脑操作</p></div></div>
           {context.recentActions.length === 0 ? (
-            <p className="empty-inline">No Computer actions yet.</p>
+            <p className="empty-inline">暂无电脑操作。</p>
           ) : (
             <ol>
               {context.recentActions.map((action) => (
@@ -150,7 +150,7 @@ export default function ComputerPage(): React.JSX.Element {
       </div>
 
       <section className="computer-permissions">
-        <div className="section-heading"><div><h3>Runtime &amp; permissions</h3><p>Required macOS access</p></div></div>
+        <div className="section-heading"><div><h3>运行时与权限</h3><p>macOS 所需系统权限</p></div></div>
         <ComputerStatusView
           status={statusQuery.data ?? null}
           loading={statusQuery.isLoading}

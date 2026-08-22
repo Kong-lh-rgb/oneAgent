@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable, Sequence
 import pytest
 from pydantic import SecretStr
 
+from app.agent.budget import RunBudgetConfig
 from app.agent.events import (
     AgentEvent,
     AgentEventHandler,
@@ -1034,6 +1035,106 @@ async def test_tool_round_budget_forces_final_answer_without_more_tools() -> Non
         "工具调用轮次已用完" not in (message.content or "")
         for message in result.messages
     )
+
+
+@pytest.mark.asyncio
+async def test_run_budget_uses_one_dedicated_finalization_call() -> None:
+    registry, adapter = fake_registry(
+        [
+            model_response(
+                tool_calls=(
+                    ToolCall(
+                        id="count-1",
+                        name="count",
+                        arguments={"value": 1},
+                    ),
+                ),
+                usage=ModelUsage(
+                    input_tokens=100,
+                    output_tokens=1,
+                    total_tokens=101,
+                    cached_input_tokens=90,
+                    uncached_input_tokens=10,
+                ),
+            ),
+            model_response(content="已根据现有结果提前收口"),
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(CountingTool())
+    events = InMemoryEventHandler()
+
+    result = await AgentRuntime(
+        registry,
+        tools,
+        provider="fake",
+        run_budget_config=RunBudgetConfig(
+            _env_file=None,
+            warning_tokens=5,
+            finalization_tokens=10,
+            hard_tokens=20,
+            warning_model_calls=100,
+            finalization_model_calls=101,
+            hard_model_calls=102,
+        ),
+    ).run("执行计数任务", event_handler=events)
+
+    assert result.ok is True
+    assert result.steps == 2
+    assert len(adapter.requests) == 2
+    assert adapter.requests[-1].tools == ()
+    assert adapter.requests[-1].max_output_tokens == 1_200
+    assert "用量收口线" in (adapter.requests[-1].messages[-1].content or "")
+    assert any(
+        event.type is AgentEventType.RUN_BUDGET_FINALIZING
+        and event.run_budget_reason == "tokens"
+        and event.run_budget_chargeable_tokens == 11
+        for event in events.events
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_budget_hard_limit_stops_without_another_model_call() -> None:
+    registry, adapter = fake_registry(
+        [
+            model_response(
+                tool_calls=(
+                    ToolCall(
+                        id="count-1",
+                        name="count",
+                        arguments={"value": 1},
+                    ),
+                ),
+                usage=ModelUsage(
+                    input_tokens=25,
+                    output_tokens=1,
+                    total_tokens=26,
+                ),
+            ),
+        ]
+    )
+    tools = ToolRegistry()
+    tools.register(CountingTool())
+
+    result = await AgentRuntime(
+        registry,
+        tools,
+        provider="fake",
+        run_budget_config=RunBudgetConfig(
+            _env_file=None,
+            warning_tokens=5,
+            finalization_tokens=10,
+            hard_tokens=20,
+            warning_model_calls=100,
+            finalization_model_calls=101,
+            hard_model_calls=102,
+        ),
+    ).run("执行计数任务")
+
+    assert len(adapter.requests) == 1
+    assert result.stop_reason is AgentStopReason.RUN_BUDGET
+    assert result.error is not None
+    assert result.error.type == "RunBudgetExceededError"
 
 
 @pytest.mark.asyncio

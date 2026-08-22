@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from app.agent.budget import chargeable_tokens
 from app.agent.events import AgentEvent, AgentEventType
 from app.models.types import ModelUsage, add_model_usage
 
@@ -30,6 +31,7 @@ def summarize_run_usage(events: Sequence[AgentEvent]) -> RunUsageSummary:
     reflection = _sum_event_usage(events, _REFLECTION_USAGE_EVENTS)
     maintenance = _sum_event_usage(events, _MAINTENANCE_USAGE_EVENTS)
     reflection_status, reflection_skip_reason = _reflection_status(events)
+    budget = _run_budget_snapshot(events)
     provider_total = add_model_usage(
         add_model_usage(main_agent, reflection),
         maintenance,
@@ -46,7 +48,61 @@ def summarize_run_usage(events: Sequence[AgentEvent]) -> RunUsageSummary:
         ),
         memory_reflection_status=reflection_status,
         memory_reflection_skip_reason=reflection_skip_reason,
+        main_agent_chargeable_tokens=_main_agent_chargeable_tokens(
+            events,
+            fallback=main_agent,
+        ),
+        **budget,
     )
+
+
+def _run_budget_snapshot(events: Sequence[AgentEvent]) -> dict[str, object]:
+    """读取最后一个带预算字段的事件，保留当时 Runtime 的策略快照。"""
+
+    latest: AgentEvent | None = None
+    for event in events:
+        if event.run_budget_status is not None:
+            latest = event
+    if latest is None:
+        return {}
+    return {
+        "run_budget_status": latest.run_budget_status,
+        "run_budget_reason": latest.run_budget_reason,
+        "run_budget_warning_tokens": latest.run_budget_warning_tokens,
+        "run_budget_finalization_tokens": (
+            latest.run_budget_finalization_tokens
+        ),
+        "run_budget_hard_tokens": latest.run_budget_hard_tokens,
+        "run_budget_warning_model_calls": (
+            latest.run_budget_warning_model_calls
+        ),
+        "run_budget_finalization_model_calls": (
+            latest.run_budget_finalization_model_calls
+        ),
+        "run_budget_hard_model_calls": latest.run_budget_hard_model_calls,
+    }
+
+
+def _main_agent_chargeable_tokens(
+    events: Sequence[AgentEvent],
+    *,
+    fallback: ModelUsage,
+) -> int:
+    """逐次计算预算Token，避免一次未知缓存破坏其它调用的已知细分。"""
+
+    values: list[ModelUsage] = []
+    for event in events:
+        if event.type is AgentEventType.MODEL_COMPLETED and event.usage is not None:
+            values.append(event.usage)
+        if (
+            event.type is AgentEventType.MODEL_STARTED
+            and event.summary_usage is not None
+            and _has_tokens(event.summary_usage)
+        ):
+            values.append(event.summary_usage)
+    if not values:
+        return chargeable_tokens(fallback)
+    return sum(chargeable_tokens(usage) for usage in values)
 
 
 def _reflection_status(events: Sequence[AgentEvent]) -> tuple[str, str | None]:

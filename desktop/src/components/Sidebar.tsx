@@ -13,12 +13,13 @@ export interface SidebarItem {
 }
 
 export const SIDEBAR_ITEMS: SidebarItem[] = [
-  { key: 'chat', label: 'Workspace', icon: 'chat' },
-  { key: 'runs', label: 'Runs', icon: 'runs' },
-  { key: 'automations', label: 'Automations', icon: 'automations' },
-  { key: 'approvals', label: 'Approvals', icon: 'approvals' },
-  { key: 'artifacts', label: 'Artifacts', icon: 'artifacts' },
-  { key: 'computer', label: 'Computer', icon: 'computer' },
+  { key: 'chat', label: '工作区', icon: 'chat' },
+  { key: 'runs', label: '执行历史', icon: 'runs' },
+  { key: 'automations', label: '自动化', icon: 'automations' },
+  { key: 'approvals', label: '审批', icon: 'approvals' },
+  { key: 'memory', label: '长期记忆', icon: 'memory' },
+  { key: 'artifacts', label: '交付物', icon: 'artifacts' },
+  { key: 'computer', label: '电脑', icon: 'computer' },
 ]
 
 export interface SidebarProps {
@@ -75,16 +76,16 @@ export default function Sidebar({
           className={`nav-item ${current === 'settings' ? 'active' : ''}`}
           onClick={() => onNavigate('settings')}
           aria-current={current === 'settings' ? 'page' : undefined}
-          title="Settings"
-          aria-label="Settings"
+          title="设置"
+          aria-label="设置"
         >
           <Icon name="settings" />
-          <span className="nav-item__label">Settings</span>
+          <span className="nav-item__label">设置</span>
         </button>
         <div
           className="host-status"
-          title={connected ? 'Host connected' : 'Host offline'}
-          aria-label={connected ? 'Host Ready' : 'Host Offline'}
+          title={connected ? 'Host 已连接' : 'Host 已离线'}
+          aria-label={connected ? 'Host 就绪' : 'Host 离线'}
         >
           <StatusDot tone={connected ? 'ready' : 'offline'} />
         </div>

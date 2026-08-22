@@ -59,6 +59,21 @@ export default function UsageInspector({
       {!cacheKnown ? (
         <p className="usage-note">当前 Provider 没有返回缓存细分；Unavailable 不等于 0。</p>
       ) : null}
+      <div className="usage-budget">
+        <div className="usage-heading">
+          <div><h3>Run Budget</h3><span>{summary.run_budget_status}</span></div>
+          <strong className="mono">{formatTokens(summary.main_agent_chargeable_tokens)} budgeted</strong>
+        </div>
+        <p className="usage-note">
+          Token {summary.run_budget_warning_tokens === null ? '—' : formatTokens(summary.run_budget_warning_tokens)}
+          {' → '}{summary.run_budget_finalization_tokens === null ? '—' : formatTokens(summary.run_budget_finalization_tokens)}
+          {' → '}{summary.run_budget_hard_tokens === null ? '—' : formatTokens(summary.run_budget_hard_tokens)}
+          {' · Calls '}{summary.run_budget_warning_model_calls ?? '—'}
+          {' → '}{summary.run_budget_finalization_model_calls ?? '—'}
+          {' → '}{summary.run_budget_hard_model_calls ?? '—'}
+          {summary.run_budget_reason ? ` · Triggered by ${summary.run_budget_reason}` : ''}
+        </p>
+      </div>
       <div className="usage-post-run">
         <PostRunRow
           label="Memory Reflection"

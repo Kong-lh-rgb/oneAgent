@@ -26,7 +26,7 @@ describe('ComputerSessionOverview', () => {
         acquiredAt="2026-08-21T10:00:00+08:00"
       />,
     )
-    expect(html).toContain('Agent control')
+    expect(html).toContain('Agent 控制')
     expect(html).toContain('TextEdit')
     expect(html).toContain('Untitled')
     expect(html).toContain('Append text in TextEdit')
@@ -44,8 +44,8 @@ describe('ComputerSessionOverview', () => {
         acquiredAt={null}
       />,
     )
-    expect(html).toContain('Computer ready')
-    expect(html).toContain('not currently controlling')
-    expect(html).not.toContain('Agent control')
+    expect(html).toContain('电脑操作已就绪')
+    expect(html).toContain('当前没有控制任何应用')
+    expect(html).not.toContain('Agent 控制')
   })
 })

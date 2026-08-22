@@ -90,8 +90,8 @@ describe('ComputerObservationPanel', () => {
         serverUrl="http://127.0.0.1:8000"
       />,
     )
-    expect(html).toContain('Elements (0)')
-    expect(html).toContain('Windows')
+    expect(html).toContain('界面元素（0）')
+    expect(html).toContain('窗口')
   })
 
   it('无 observation 显示空状态', () => {
@@ -103,6 +103,6 @@ describe('ComputerObservationPanel', () => {
         serverUrl="http://127.0.0.1:8000"
       />,
     )
-    expect(html).toContain('暂无 Computer Observation')
+    expect(html).toContain('暂无电脑观察结果')
   })
 })

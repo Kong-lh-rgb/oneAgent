@@ -1,10 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
 
 import { listArtifacts } from '../api/artifacts'
 import { getRun, getRunTrace } from '../api/runs'
 import type { AgentEvent, Run, RunUsageSummary } from '../api/types'
-import { mergeRunEvents } from '../agent/runAnalysis'
+import { buildContextSteps, mergeRunEvents } from '../agent/runAnalysis'
 import {
   buildTurnView,
   formatDuration,
@@ -13,11 +12,8 @@ import {
   toolDoneLabel,
 } from '../agent/turnPresentation'
 import { useEventsStore } from '../stores/events'
-import ContextInspector from './ContextInspector'
-import ExecutionTrace from './ExecutionTrace'
 import { Icon } from './Icon'
 import { EmptyState, StatusDot, type StatusTone } from './ui'
-import UsageInspector from './UsageInspector'
 
 export type ActivityState = 'active' | 'done' | 'failed' | 'waiting' | 'neutral'
 
@@ -38,6 +34,12 @@ export function describeActivity(event: AgentEvent): string {
       return '思考中'
     case 'model_completed':
       return event.message?.tool_calls?.length ? '选择下一步动作' : '生成回复'
+    case 'run_budget_warning':
+      return 'Run 用量进入预警区'
+    case 'run_budget_finalizing':
+      return '达到用量收口线，生成最终答复'
+    case 'run_budget_exceeded':
+      return 'Run 用量达到硬上限'
     case 'tool_started':
       return `运行 ${event.tool_call?.name ?? '工具'}`
     case 'tool_completed':
@@ -145,6 +147,21 @@ export function buildActivityEntries(events: AgentEvent[]): ActivityEntry[] {
       continue
     }
 
+    if (event.type.startsWith('run_budget_')) {
+      const failed = event.type === 'run_budget_exceeded'
+      entries.push({
+        id: event.event_id,
+        label: describeActivity(event),
+        meta: typeof event.run_budget_reason === 'string'
+          ? event.run_budget_reason
+          : undefined,
+        state: failed ? 'failed' : event.type === 'run_budget_warning' ? 'waiting' : 'active',
+        time: formatEventTime(event.event_time),
+      })
+      lastThinkingIndex = null
+      continue
+    }
+
     if (event.type === 'model_completed' && lastThinkingIndex !== null) {
       const hasTools = (event.message?.tool_calls?.length ?? 0) > 0
       entries[lastThinkingIndex] = {
@@ -218,14 +235,23 @@ export function ActivityTechnicalDetails({
   )
 }
 
-export function ActivityItems({ events }: { events: AgentEvent[] }): React.JSX.Element {
+export function ActivityItems({
+  events,
+  limit,
+}: {
+  events: AgentEvent[]
+  limit?: number
+}): React.JSX.Element {
   const entries = buildActivityEntries(events)
   if (entries.length === 0) {
     return <EmptyState title="暂无活动" hint="运行进度会显示在这里。" />
   }
+  const visible = limit === undefined ? entries : entries.slice(-limit)
+  const hiddenCount = entries.length - visible.length
   return (
+    <>
     <ol className="activity-list">
-      {entries.map((entry) => (
+      {visible.map((entry) => (
         <li key={entry.id} className={`activity-item activity-item--${entry.state}`}>
           <span className="activity-item__marker">
             {entry.state === 'done' ? <Icon name="check" size={11} /> : null}
@@ -237,6 +263,10 @@ export function ActivityItems({ events }: { events: AgentEvent[] }): React.JSX.E
         </li>
       ))}
     </ol>
+    {hiddenCount > 0 ? (
+      <p className="activity-list__more">另有 {hiddenCount} 条活动，可在完整详情中查看</p>
+    ) : null}
+    </>
   )
 }
 
@@ -249,8 +279,6 @@ const STATUS_TONE: Record<string, StatusTone> = {
   interrupted: 'waiting',
 }
 
-type InspectorTab = 'run' | 'context' | 'trace'
-
 const STATUS_LABEL: Record<string, string> = {
   pending: '准备中',
   running: '执行中',
@@ -261,38 +289,77 @@ const STATUS_LABEL: Record<string, string> = {
 }
 
 export function RunInspectorOverview({
-  run,
   events,
   artifactCount = 0,
   usageSummary,
 }: {
-  run: Run | null
   events: AgentEvent[]
   artifactCount?: number
   usageSummary?: RunUsageSummary | null
 }): React.JSX.Element {
   const view = buildTurnView(events, { now: Date.now() })
-  const status = run?.status ?? view.status
+  const context = buildContextSteps(events).at(-1)
+  const postRunTokens = usageSummary
+    ? usageSummary.memory_reflection.total_tokens
+      + usageSummary.memory_maintenance.total_tokens
+    : 0
+  const traceEvents = events.filter(
+    (event) => event.type !== 'model_output_delta' && event.type !== 'model_reasoning_delta',
+  )
   return (
     <div className="run-inspector-overview">
       <section className="inspector-section">
-        <h3>概览</h3>
-        {run?.user_message ? <p className="run-inspector-request">{run.user_message}</p> : null}
-        <dl className="activity-overview">
-          <div><dt>状态</dt><dd>{STATUS_LABEL[status] ?? status}</dd></div>
-          <div><dt>模式</dt><dd>{run?.mode ?? '—'}</dd></div>
+        <h3>Run</h3>
+        <dl className="activity-overview activity-overview--compact">
           <div><dt>步骤</dt><dd>{view.steps}</dd></div>
           <div><dt>动作</dt><dd>{view.toolCount}</dd></div>
           <div><dt>耗时</dt><dd>{formatDuration(view.durationMs) || '—'}</dd></div>
-          <div><dt>Token</dt><dd>{view.usage ? formatTokens(view.usage.totalTokens) : '—'}</dd></div>
-          {view.capability ? <div><dt>能力</dt><dd>{view.capability}</dd></div> : null}
           {view.targetApp ? <div><dt>目标</dt><dd>{view.targetApp}</dd></div> : null}
         </dl>
       </section>
       <section className="inspector-section">
-        <h3>Usage</h3>
-        <UsageInspector summary={usageSummary} />
+        <div className="inspector-section__heading">
+          <h3>Usage</h3>
+          <span>{usageSummary?.run_budget_status ?? '—'}</span>
+        </div>
+        <dl className="inspector-signal-grid">
+          <div><dt>Main</dt><dd>{usageSummary ? formatTokens(usageSummary.main_agent.total_tokens) : '—'}</dd></div>
+          <div><dt>预算计入</dt><dd>{usageSummary ? formatTokens(usageSummary.main_agent_chargeable_tokens) : '—'}</dd></div>
+          <div><dt>调用</dt><dd>{usageSummary?.main_agent.model_calls ?? '—'}</dd></div>
+          <div>
+            <dt>Post-Run</dt>
+            <dd className={postRunTokens > 0 ? undefined : 'is-empty'}>
+              {postRunTokens > 0 ? formatTokens(postRunTokens) : '暂无后台处理'}
+            </dd>
+          </div>
+        </dl>
       </section>
+      {context ? (
+        <section className="inspector-section">
+          <div className="inspector-section__heading">
+            <h3>Context</h3>
+            <span>Step {context.step}</span>
+          </div>
+          <dl className="inspector-signal-grid">
+            <div><dt>Input</dt><dd>{formatTokens(context.preparedInputTokens)}</dd></div>
+            <div><dt>Working budget</dt><dd>{formatTokens(context.workingInputBudget)}</dd></div>
+            <div>
+              <dt>Tool results</dt>
+              <dd className={context.toolResultTokensBefore > 0 ? undefined : 'is-empty'}>
+                {context.toolResultTokensBefore > 0
+                  ? `${formatTokens(context.toolResultTokensBefore)} → ${formatTokens(context.toolResultTokensAfter)}`
+                  : '暂无工具结果'}
+              </dd>
+            </div>
+            <div>
+              <dt>Compaction</dt>
+              <dd className={context.compactionStage === 'none' ? 'is-empty' : undefined}>
+                {context.compactionStage === 'none' ? '暂无压缩' : '已执行'}
+              </dd>
+            </div>
+          </dl>
+        </section>
+      ) : null}
       {view.error ? (
         <section className="inspector-error">
           <strong>{view.error.title}</strong>
@@ -301,10 +368,10 @@ export function RunInspectorOverview({
       ) : null}
       <section className="inspector-section">
         <div className="inspector-section__heading">
-          <h3>执行过程</h3>
-          <span>{view.toolCount} actions</span>
+          <h3>Trace</h3>
+          <span>{traceEvents.length} events</span>
         </div>
-        <ActivityItems events={events} />
+        <ActivityItems events={events} limit={5} />
       </section>
       {artifactCount > 0 ? (
         <section className="inspector-result-summary">
@@ -329,7 +396,6 @@ export default function RunActivity({
   onRecover?: () => void
   onOpenFullDetail?: (runId: string) => void
 }): React.JSX.Element {
-  const [tab, setTab] = useState<InspectorTab>('run')
   const eventsByRun = useEventsStore((state) => state.eventsByRun)
   const runStatuses = useEventsStore((state) => state.runStatuses)
   const liveEvents = runId ? (eventsByRun[runId] ?? []) : []
@@ -385,41 +451,18 @@ export default function RunActivity({
           ) : null}
         </div>
       </header>
-      <nav className="run-inspector__tabs" aria-label="Run inspector sections" role="tablist">
-        {([
-          ['run', 'Run'],
-          ['context', 'Context'],
-          ['trace', 'Trace'],
-        ] as const).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            className={tab === id ? 'active' : ''}
-            aria-selected={tab === id}
-            role="tab"
-            onClick={() => setTab(id)}
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
       <div className="run-inspector__body">
         {runQuery.isError || traceQuery.isError ? (
           <div className="inspector-error"><strong>部分持久化数据暂时无法加载</strong><p>下面仍显示当前已收到的实时事件。</p></div>
         ) : null}
         {!runId ? (
           <EmptyState title="暂无 Run" hint="开始执行任务后可在这里分析过程。" />
-        ) : tab === 'run' ? (
+        ) : (
           <RunInspectorOverview
-            run={run}
             events={events}
             artifactCount={artifactsQuery.data?.length ?? 0}
             usageSummary={traceQuery.data?.usage}
           />
-        ) : tab === 'context' ? (
-          <ContextInspector events={events} />
-        ) : (
-          <ExecutionTrace events={events} />
         )}
       </div>
       {runId ? (

@@ -19,7 +19,15 @@ import RunBadge from '../components/RunBadge'
 import UsageInspector from '../components/UsageInspector'
 import { toast } from '../stores/toasts'
 
-export default function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => void }): React.JSX.Element {
+export default function RunDetailPage({
+  runId,
+  onBack,
+  onOpenConversation,
+}: {
+  runId: string
+  onBack: () => void
+  onOpenConversation: (conversationId: string) => void
+}): React.JSX.Element {
   const queryClient = useQueryClient()
   const [confirmCancel, setConfirmCancel] = useState(false)
   const runQuery = useQuery({ queryKey: ['run', runId], queryFn: () => getRun(runId), refetchInterval: 3000 })
@@ -73,7 +81,18 @@ export default function RunDetailPage({ runId, onBack }: { runId: string; onBack
           : run ? (
             <div className="run-detail">
               <section className="run-summary">
-                <div className="section-heading"><div><h2>Summary</h2><p>{run.user_message || 'Untitled execution'}</p></div></div>
+                <div className="section-heading">
+                  <div><h2>Summary</h2><p>{run.user_message || 'Untitled execution'}</p></div>
+                  {run.conversation_id ? (
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => onOpenConversation(run.conversation_id as string)}
+                    >
+                      <Icon name="chat" size={14} /> Open conversation
+                    </button>
+                  ) : null}
+                </div>
                 {error ? <div className="run-error"><strong>{error.title}</strong><p>{error.message}</p></div> : null}
                 <dl className="stat-strip">
                   <div><dt>Status</dt><dd>{run.status}</dd></div>
@@ -96,7 +115,7 @@ export default function RunDetailPage({ runId, onBack }: { runId: string; onBack
               </section>
 
               <section className="run-detail-section">
-                <div className="section-heading"><div><h2>Context</h2><p>Per-step input, compaction, and cost analysis</p></div></div>
+                <div className="section-heading"><div><h2>Context</h2><p>Per-step input and compaction</p></div></div>
                 <ContextInspector events={events} />
               </section>
 

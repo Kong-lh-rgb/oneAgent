@@ -65,17 +65,17 @@ export default function AutomationForm({ onSubmit, onCancel }: Props): React.JSX
 
   return (
     <div className="automation-form">
-      <div className="automation-form__title">New scheduled work</div>
+      <div className="automation-form__title">新建自动化</div>
       <div className="automation-form__grid">
-        <input placeholder="Title" value={title} onChange={(e) => setTitle(e.target.value)} />
+        <input placeholder="标题" value={title} onChange={(e) => setTitle(e.target.value)} />
         <select value={kind} onChange={(e) => setKind(e.target.value as AutomationKind)}>
-          <option value="once">Once</option>
-          <option value="interval">Recurring interval</option>
-          <option value="cron">Schedule</option>
+          <option value="once">单次执行</option>
+          <option value="interval">固定间隔</option>
+          <option value="cron">Cron 计划</option>
         </select>
       </div>
       <textarea
-        placeholder="What should Vesta do when this runs?"
+        placeholder="触发时希望 Vesta 做什么？"
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
         rows={2}
@@ -88,7 +88,7 @@ export default function AutomationForm({ onSubmit, onCancel }: Props): React.JSX
             value={runAt}
             onChange={(e) => setRunAt(e.target.value)}
           />
-          <input placeholder="Timezone (Asia/Shanghai)" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
+          <input placeholder="时区（Asia/Shanghai）" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
         </div>
       )}
       {kind === 'interval' && (
@@ -96,25 +96,25 @@ export default function AutomationForm({ onSubmit, onCancel }: Props): React.JSX
           <input
             type="number"
             min="1"
-            placeholder="Interval in seconds"
+            placeholder="间隔秒数"
             value={intervalSeconds}
             onChange={(e) => setIntervalSeconds(e.target.value)}
           />
-          <input placeholder="Timezone" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
+          <input placeholder="时区" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
         </div>
       )}
       {kind === 'cron' && (
         <div className="automation-form__grid automation-form__conditional">
-          <input placeholder='Schedule expression, e.g. "0 9 * * *"' value={cronExpr} onChange={(e) => setCronExpr(e.target.value)} />
-          <input placeholder="Timezone" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
+          <input placeholder='Cron 表达式，例如“0 9 * * *”' value={cronExpr} onChange={(e) => setCronExpr(e.target.value)} />
+          <input placeholder="时区" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
         </div>
       )}
       {error && <div className="error-text automation-form__error">{error}</div>}
       <div className="automation-form__actions">
         <button className="btn btn-primary" onClick={() => void submit()} disabled={busy}>
-          {busy ? 'Creating…' : 'Create'}
+          {busy ? '正在创建…' : '创建'}
         </button>
-        <button className="btn" onClick={onCancel}>Cancel</button>
+        <button className="btn" onClick={onCancel}>取消</button>
       </div>
     </div>
   )

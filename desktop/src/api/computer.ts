@@ -130,12 +130,12 @@ export function buildComputerScreenshotUrl(observationId: string): string {
 
 /** Machine Lease 的简短展示文案。 */
 export function leaseLabel(lease: ComputerLeaseStatus | null): string {
-  if (!lease || !lease.owner_run_id) return 'Free'
-  return `Controlled by Run ${lease.owner_run_id.slice(0, 8)}`
+  if (!lease || !lease.owner_run_id) return '空闲'
+  return `由 Run ${lease.owner_run_id.slice(0, 8)} 控制`
 }
 
 export function permissionLabel(status: ComputerPermissionStatus): string {
-  if (status === 'granted') return 'Granted'
-  if (status === 'required') return 'Required'
-  return 'Unknown'
+  if (status === 'granted') return '已授权'
+  if (status === 'required') return '需要授权'
+  return '未知'
 }

@@ -134,6 +134,12 @@ class MemoryManager:
         async with self._lock:
             return await self.store.list_active()
 
+    async def list_archived(self) -> tuple[MemoryRecord, ...]:
+        """列出已归档记忆，仅供管理与观察界面读取。"""
+
+        async with self._lock:
+            return await self.store.list_archived()
+
     async def create(
         self,
         *,

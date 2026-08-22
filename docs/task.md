@@ -7,6 +7,57 @@
 ---
 ## 2026-08-22
 
+### 完成：Run浮窗恢复与会话回跳
+
+#### Bad Case
+- [x] 最近Run ID只存在`ChatPage` 内存状态，离开Chat再返回后浮窗无法打开已持久化的上一轮Run
+- [x] Run Detail可以查到`conversation_id`，但无法直接回到对应会话
+- [x] Context Detail的“为什么这轮可能更贵”重复展示已有指标，增加信息噪声
+
+#### 实现结果
+- [x] Chat挂载或切换会话时，从后端持久化Run列表恢复该会话最新Run；实时Run仍优先展示
+- [x] App层保留当前会话ID，在Chat、Runs和Run Detail之间导航时不丢失会话定位
+- [x] Run Detail新增`Open conversation`，可直接跳回Run所属会话
+- [x] 移除“为什么这轮可能更贵”区块、派生函数、测试与遗留样式
+- [x] Desktop 37个测试文件/221 tests、typecheck、production build和`git diff --check`通过
+- [x] Run浮窗的Post-Run、Tool Results和Compaction始终保留字段；无数据时显示柔和的“暂无”提示，不再留下网格空洞
+- [x] Run Inspector定向8 tests、typecheck与production build通过
+
+### 完成：Run Inspector浮窗信息收口
+
+#### Bad Case
+- [x] 右侧浮窗同时承载完整Usage、逐步Context和全量Trace，信息密度接近Run Detail，干扰用户判断当前状态
+- [x] Run/Context/Trace三个浮窗Tab迫使用户在运行中主动分析，偏离“当前发生什么、是否需要操作”的核心职责
+- [x] `charged tokens`容易被误解为Provider真实计费量，实际只是Run Budget计入口径
+
+#### 实现结果
+- [x] 移除浮窗分析Tab，统一为单页关键摘要；完整Usage、Context和Trace继续保留在Run Detail
+- [x] Run摘要只显示steps、actions、duration与Computer target；状态继续由Header唯一表达
+- [x] Usage只显示Main total、预算计入量、模型调用数，以及实际发生时的Post-Run Token
+- [x] Context只显示最近Model Step的prepared input、working budget、Tool Result压缩和是否触发Compaction
+- [x] Trace只显示最近5条人类可读活动，并说明其余活动可在完整详情查看；错误、审批、Artifact和Stop/Recover保持直接可见
+- [x] 完整Usage中的`charged`改为`budgeted`，避免与Provider账单混淆
+- [x] Desktop 37个测试文件/221 tests、typecheck和production build全部通过
+
+### 完成：Run Budget V1
+
+#### Bad Case
+- [x] Context Budget只限制单次模型请求大小，不能阻止同一Run在多次Step中累计消耗大量Token
+- [x] 直接按processed input限制会把cache read与真正的新输入等价处理，导致高缓存命中的Run被过早停止
+- [x] 只依赖`max_steps`会在额度耗尽后直接失败，没有为模型保留一次基于现有证据收口的机会
+- [x] 若把Reflection/Maintenance纳入Run Budget，会把已经后台化的Post-Run流程重新耦合到主执行路径
+
+#### 实现结果
+- [x] 新增独立`RunBudget`策略，只统计Main Agent及critical-path Context Summary的Token和Model Calls，不统计时间、Approval等待、Reflection或Maintenance
+- [x] Token口径为`uncached_input_tokens + output_tokens`；Provider未返回缓存细分时fail-safe退化为`input_tokens + output_tokens`
+- [x] 三段策略：warning注入临时节流提示；finalization隐藏全部工具并保留一次专用最终答复；hard停止任何后续模型请求并返回`run_budget`
+- [x] 最终化调用输出上限默认1200 tokens，且模型在无工具阶段伪造工具调用时按预算失败，不执行副作用
+- [x] Context Summary完成后重新评估预算，避免压缩模型调用让额度越线后仍继续请求主模型
+- [x] 新增`run_budget_warning/finalizing/exceeded`事件以及完整阈值、触发指标、预算计入Token和calls快照
+- [x] Trace Usage、CLI、Desktop Activity与Run Detail Usage均可观察预算状态；旧Trace保持`not_configured`
+- [x] 默认阈值为Token 50K/75K/100K、Calls 8/10/12，均可通过`RUN_BUDGET_*`配置；这些是累计Run治理线，不是模型Context Window
+- [x] Backend 925 tests、ruff、compileall全部通过；Desktop 37个测试文件/220 tests、typecheck和production build全部通过
+
 ### 完成：Reflection Gate V1
 
 #### Bad Case

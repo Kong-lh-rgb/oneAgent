@@ -2,11 +2,11 @@
 
 import { describe, expect, it } from 'vitest'
 
-import type { AgentEvent } from '../api/types'
+import type { AgentEvent, Run } from '../api/types'
 import {
   buildContextSteps,
   buildTraceGroups,
-  explainRunCost,
+  latestRunId,
   mergeRunEvents,
 } from './runAnalysis'
 
@@ -67,20 +67,39 @@ describe('buildContextSteps', () => {
   })
 })
 
-describe('run cost and trace', () => {
-  it('根据多步事实解释成本', () => {
-    const events = [
-      event({ step: 1, original_estimated_input_tokens: 5_000, prepared_input_tokens: 5_000, tool_schema_tokens: 3_000 }),
-      event({ event_id: 'e2', sequence: 2, step: 2, original_estimated_input_tokens: 9_000, prepared_input_tokens: 7_000, tool_schema_tokens: 3_000, tool_result_tokens_before: 4_000, compaction_stage: 'tool_results' }),
-    ]
-    expect(explainRunCost(events).join(' ')).toContain('2 次模型请求')
-    expect(explainRunCost(events).join(' ')).toContain('第 2 步')
-  })
-
+describe('trace', () => {
   it('durable 与 live 按 event_id 去重并按 sequence 排序', () => {
     const first = event({ event_id: 'e1', sequence: 1 })
     const second = event({ event_id: 'e2', sequence: 2, step: 2 })
     expect(mergeRunEvents([first], [second, first]).map((item) => item.event_id)).toEqual(['e1', 'e2'])
     expect(buildTraceGroups([first, second]).map((group) => group.label)).toEqual(['Step 1', 'Step 2'])
+  })
+
+  it('从持久化列表恢复最新Run，不依赖返回顺序', () => {
+    const base: Run = {
+      id: 'old',
+      conversation_id: 'c1',
+      status: 'completed',
+      user_message: 'old',
+      created_at: '2026-08-21T00:00:00Z',
+      started_at: null,
+      updated_at: '2026-08-21T00:00:00Z',
+      completed_at: null,
+      error: null,
+      stop_reason: 'final_answer',
+      recovered_from_run_id: null,
+      source: null,
+      source_id: null,
+      scheduled_for: null,
+      triggered_at: null,
+      mode: 'normal',
+    }
+    const newest = {
+      ...base,
+      id: 'newest',
+      created_at: '2026-08-22T00:00:00Z',
+    }
+    expect(latestRunId([newest, base])).toBe('newest')
+    expect(latestRunId([])).toBeNull()
   })
 })

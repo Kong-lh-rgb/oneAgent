@@ -20,12 +20,12 @@ const status: ComputerStatus = {
 describe('ComputerStatusView', () => {
   it('available 渲染状态与权限', () => {
     const html = renderToStaticMarkup(<ComputerStatusView status={status} />)
-    expect(html).toContain('Available')
-    expect(html).toContain('Accessibility')
-    expect(html).toContain('Granted')
-    expect(html).toContain('Screen Recording')
-    expect(html).toContain('Required')
-    expect(html).toContain('Free')
+    expect(html).toContain('可用')
+    expect(html).toContain('辅助功能')
+    expect(html).toContain('已授权')
+    expect(html).toContain('屏幕录制')
+    expect(html).toContain('需要授权')
+    expect(html).toContain('空闲')
   })
 
   it('unavailable 渲染 reason', () => {
@@ -40,16 +40,16 @@ describe('ComputerStatusView', () => {
         }}
       />,
     )
-    expect(html).toContain('Unavailable')
-    expect(html).toContain('helper not found')
-    expect(html).toContain('Unknown')
+    expect(html).toContain('不可用')
+    expect(html).toContain('未找到原生 helper')
+    expect(html).toContain('未知')
   })
 
   it('缺权限且有 handler 时显示 Request 按钮', () => {
     const html = renderToStaticMarkup(
       <ComputerStatusView status={status} onRequestPermission={() => {}} />,
     )
-    expect(html).toContain('Request')
+    expect(html).toContain('请求权限')
   })
 
   it('无 handler 时不显示 Request 按钮', () => {

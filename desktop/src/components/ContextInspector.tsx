@@ -1,11 +1,10 @@
-/** Context Inspector：按模型步骤展示输入构成、压缩结果与成本解释。 */
+/** Context Inspector：按模型步骤展示输入构成与压缩结果。 */
 
 import { useEffect, useMemo, useState } from 'react'
 
 import type { AgentEvent } from '../api/types'
 import {
   buildContextSteps,
-  explainRunCost,
   type ContextStepVM,
 } from '../agent/runAnalysis'
 import { formatTokens } from '../agent/turnPresentation'
@@ -58,7 +57,6 @@ export default function ContextInspector({
   const steps = useMemo(() => buildContextSteps(events), [events])
   const [selectedStep, setSelectedStep] = useState<number | null>(null)
   const selected = steps.find((step) => step.step === selectedStep) ?? steps.at(-1)
-  const reasons = useMemo(() => explainRunCost(events), [events])
 
   useEffect(() => {
     if (selectedStep === null && steps.length > 0) setSelectedStep(steps.at(-1)!.step)
@@ -130,16 +128,6 @@ export default function ContextInspector({
 
       <CompactionList step={selected} />
 
-      <section className="context-section">
-        <h3>为什么这轮可能更贵？</h3>
-        {reasons.length > 0 ? (
-          <ul className="context-reasons">
-            {reasons.map((reason) => <li key={reason}>{reason}</li>)}
-          </ul>
-        ) : (
-          <p className="context-muted">当前没有明显的上下文成本信号。</p>
-        )}
-      </section>
     </div>
   )
 }

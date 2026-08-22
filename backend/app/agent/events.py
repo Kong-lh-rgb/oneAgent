@@ -23,6 +23,9 @@ class AgentEventType(StrEnum):
     MODEL_OUTPUT_DELTA = "model_output_delta"
     MODEL_REASONING_DELTA = "model_reasoning_delta"
     MODEL_COMPLETED = "model_completed"
+    RUN_BUDGET_WARNING = "run_budget_warning"
+    RUN_BUDGET_FINALIZING = "run_budget_finalizing"
+    RUN_BUDGET_EXCEEDED = "run_budget_exceeded"
     TOOL_STARTED = "tool_started"
     TOOL_COMPLETED = "tool_completed"
     TOOL_APPROVAL_REQUIRED = "tool_approval_required"
@@ -133,6 +136,16 @@ class AgentEvent(BaseModel):
     active_skill_names: tuple[str, ...] = ()
     active_skill_tokens: int | None = Field(default=None, ge=0)
     active_skill_message_names: tuple[str, ...] = ()
+    run_budget_status: str | None = None
+    run_budget_reason: str | None = None
+    run_budget_chargeable_tokens: int | None = Field(default=None, ge=0)
+    run_budget_model_calls: int | None = Field(default=None, ge=0)
+    run_budget_warning_tokens: int | None = Field(default=None, ge=1)
+    run_budget_finalization_tokens: int | None = Field(default=None, ge=1)
+    run_budget_hard_tokens: int | None = Field(default=None, ge=1)
+    run_budget_warning_model_calls: int | None = Field(default=None, ge=1)
+    run_budget_finalization_model_calls: int | None = Field(default=None, ge=1)
+    run_budget_hard_model_calls: int | None = Field(default=None, ge=1)
 
     @field_validator("run_id")
     @classmethod

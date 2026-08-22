@@ -70,7 +70,7 @@ describe('computer api', () => {
   })
 
   it('lease label 简短展示 run id', () => {
-    expect(leaseLabel(null)).toBe('Free')
+    expect(leaseLabel(null)).toBe('空闲')
     expect(
       leaseLabel({
         busy: true,
@@ -78,6 +78,6 @@ describe('computer api', () => {
         acquired_at: null,
         process_id: 1,
       }),
-    ).toBe('Controlled by Run 12345678')
+    ).toBe('由 Run 12345678 控制')
   })
 })

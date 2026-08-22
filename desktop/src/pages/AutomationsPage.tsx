@@ -24,24 +24,32 @@ function scheduleText(schedule: {
 }): string {
   if (schedule.kind === 'once') {
     return schedule.run_at
-      ? `Once · ${new Date(schedule.run_at).toLocaleString()}`
-      : 'Once · time not set'
+      ? `单次 · ${new Date(schedule.run_at).toLocaleString('zh-CN')}`
+      : '单次 · 未设置时间'
   }
   if (schedule.kind === 'interval') {
     const seconds = schedule.interval_seconds ?? 0
-    if (seconds % 86_400 === 0) return `Every ${seconds / 86_400} day${seconds === 86_400 ? '' : 's'}`
-    if (seconds % 3600 === 0) return `Every ${seconds / 3600} hour${seconds === 3600 ? '' : 's'}`
-    if (seconds % 60 === 0) return `Every ${seconds / 60} minutes`
-    return `Every ${seconds} seconds`
+    if (seconds % 86_400 === 0) return `每 ${seconds / 86_400} 天`
+    if (seconds % 3600 === 0) return `每 ${seconds / 3600} 小时`
+    if (seconds % 60 === 0) return `每 ${seconds / 60} 分钟`
+    return `每 ${seconds} 秒`
   }
-  return `Scheduled · ${schedule.timezone}`
+  return `定时计划 · ${schedule.timezone}`
 }
 
 function formatTime(iso: string | null): string {
   if (!iso) return '-'
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return iso
-  return date.toLocaleString()
+  return date.toLocaleString('zh-CN')
+}
+
+function automationStatusLabel(status: string): string {
+  if (status === 'active') return '运行中'
+  if (status === 'paused') return '已暂停'
+  if (status === 'cancelled') return '已取消'
+  if (status === 'completed') return '已完成'
+  return status
 }
 
 export default function AutomationsPage(): React.JSX.Element {
@@ -65,7 +73,7 @@ export default function AutomationsPage(): React.JSX.Element {
     mutationFn: (input: CreateAutomationInput) => createAutomation(input),
     onSuccess: () => {
       setShowForm(false)
-      toast.success('Automation 已创建')
+      toast.success('自动化已创建')
       invalidate()
     },
     onError: (err: unknown) => {
@@ -82,7 +90,7 @@ export default function AutomationsPage(): React.JSX.Element {
     onSuccess: (_data, action) => {
       const verb =
         action.op === 'pause' ? '已暂停' : action.op === 'resume' ? '已恢复' : '已取消'
-      toast.info(`${verb} Automation`)
+      toast.info(`自动化${verb}`)
       invalidate()
     },
     onError: (err: unknown) => {
@@ -92,14 +100,14 @@ export default function AutomationsPage(): React.JSX.Element {
 
   return (
     <PageShell
-      title="Automations"
-      subtitle="Scheduled work Vesta will run in the future."
+      title="自动化"
+      subtitle="让 Vesta 在指定时间或周期内自动执行工作。"
       actions={
         <button
           className="btn btn-primary btn-sm"
           onClick={() => setShowForm((value) => !value)}
         >
-          {showForm ? 'Close' : 'New automation'}
+          {showForm ? '收起' : '新建自动化'}
         </button>
       }
     >
@@ -113,7 +121,7 @@ export default function AutomationsPage(): React.JSX.Element {
       )}
 
       {automationsQuery.isPending ? (
-        <LoadingState label="正在加载 Automations…" />
+        <LoadingState label="正在加载自动化…" />
       ) : automationsQuery.isError ? (
         <ErrorState
           message={String(automationsQuery.error)}
@@ -121,8 +129,8 @@ export default function AutomationsPage(): React.JSX.Element {
         />
       ) : automations.length === 0 ? (
         <EmptyState
-          title="No scheduled work"
-          hint="Create an automation for work Vesta should repeat or run later."
+          title="暂无自动化"
+          hint="可以创建稍后执行或周期重复的工作。"
           icon="automations"
         />
       ) : (
@@ -132,17 +140,17 @@ export default function AutomationsPage(): React.JSX.Element {
               <div className="automation-row__main">
                 <div className="automation-row__heading">
                   <strong>{automation.title}</strong>
-                  <span className={`automation-state automation-state--${automation.status}`}>{automation.status}</span>
+                  <span className={`automation-state automation-state--${automation.status}`}>{automationStatusLabel(automation.status)}</span>
                 </div>
                 <p>{automation.prompt}</p>
                 <div className="automation-row__schedule">{scheduleText(automation.schedule)}</div>
               </div>
               <dl className="automation-row__timing">
-                <div><dt>Next run</dt><dd>{formatTime(automation.next_run_at)}</dd></div>
-                <div><dt>Last run</dt><dd>{formatTime(automation.last_run_at)}</dd></div>
+                <div><dt>下次执行</dt><dd>{formatTime(automation.next_run_at)}</dd></div>
+                <div><dt>上次执行</dt><dd>{formatTime(automation.last_run_at)}</dd></div>
               </dl>
               <details className="automation-row__details">
-                <summary>Details</summary>
+                <summary>计划详情</summary>
                 <code>{automation.schedule.cron_expr ?? automation.schedule.kind} · {automation.schedule.timezone}</code>
               </details>
               <div className="automation-row__actions">
@@ -151,21 +159,21 @@ export default function AutomationsPage(): React.JSX.Element {
                       disabled={automation.status !== 'active'}
                       onClick={() => controlMutation.mutate({ id: automation.id, op: 'pause' })}
                     >
-                      Pause
+                      暂停
                     </button>
                     <button
                       className="btn btn-sm"
                       disabled={automation.status !== 'paused'}
                       onClick={() => controlMutation.mutate({ id: automation.id, op: 'resume' })}
                     >
-                      Resume
+                      恢复
                     </button>
                     <button
                       className="btn btn-sm btn-danger"
                       disabled={automation.status === 'cancelled' || automation.status === 'completed'}
                       onClick={() => setCancelTarget(automation.id)}
                     >
-                      Cancel
+                      取消
                     </button>
               </div>
             </article>
@@ -174,9 +182,9 @@ export default function AutomationsPage(): React.JSX.Element {
       )}
       <ConfirmDialog
         open={cancelTarget !== null}
-        title="取消这个 Automation？"
+        title="取消这个自动化？"
         message="取消后该定时任务将不再触发，且无法恢复。"
-        confirmLabel="取消 Automation"
+        confirmLabel="取消自动化"
         busy={controlMutation.isPending}
         onConfirm={() => {
           if (cancelTarget) {

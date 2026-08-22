@@ -13,6 +13,7 @@ import ArtifactsPage from './pages/ArtifactsPage'
 import AutomationsPage from './pages/AutomationsPage'
 import ChatPage from './pages/ChatPage'
 import ComputerPage from './pages/ComputerPage'
+import MemoryPage from './pages/MemoryPage'
 import RunDetailPage from './pages/RunDetailPage'
 import RunsPage from './pages/RunsPage'
 import SettingsPage from './pages/SettingsPage'
@@ -24,6 +25,7 @@ export type PageKey =
   | 'approvals'
   | 'artifacts'
   | 'computer'
+  | 'memory'
   | 'settings'
 
 export interface AppState {
@@ -36,6 +38,7 @@ export interface AppState {
 export default function App(): React.JSX.Element {
   const [page, setPage] = useState<PageKey>('chat')
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null)
   const [everConnected, setEverConnected] = useState(false)
 
   const connect = useEventsStore((state) => state.connect)
@@ -95,6 +98,12 @@ export default function App(): React.JSX.Element {
     setPage('runs')
   }
 
+  const openConversation = (conversationId: string): void => {
+    setSelectedConversationId(conversationId)
+    setSelectedRunId(null)
+    setPage('chat')
+  }
+
   return (
     <div className="app-shell">
       <Sidebar
@@ -118,10 +127,21 @@ export default function App(): React.JSX.Element {
             Host 连接已断开，正在重连…
           </div>
         ) : null}
-        {page === 'chat' && <ChatPage onNavigate={navigate} onOpenRun={openRun} />}
+        {page === 'chat' && (
+          <ChatPage
+            onNavigate={navigate}
+            onOpenRun={openRun}
+            initialConversationId={selectedConversationId}
+            onConversationChange={setSelectedConversationId}
+          />
+        )}
         {page === 'runs' &&
           (selectedRunId ? (
-            <RunDetailPage runId={selectedRunId} onBack={() => setSelectedRunId(null)} />
+            <RunDetailPage
+              runId={selectedRunId}
+              onBack={() => setSelectedRunId(null)}
+              onOpenConversation={openConversation}
+            />
           ) : (
             <RunsPage openRun={openRun} />
           ))}
@@ -129,6 +149,7 @@ export default function App(): React.JSX.Element {
         {page === 'approvals' && <ApprovalsPage />}
         {page === 'artifacts' && <ArtifactsPage />}
         {page === 'computer' && <ComputerPage />}
+        {page === 'memory' && <MemoryPage />}
         {page === 'settings' && <SettingsPage />}
       </div>
       <ToastViewport />

@@ -51,3 +51,12 @@ class RunUsageSummary(BaseModel):
     tool_schema_tokens_estimated: int = Field(default=0, ge=0)
     memory_reflection_status: str = "not_run"
     memory_reflection_skip_reason: str | None = None
+    main_agent_chargeable_tokens: int = Field(default=0, ge=0)
+    run_budget_status: str = "not_configured"
+    run_budget_reason: str | None = None
+    run_budget_warning_tokens: int | None = Field(default=None, ge=1)
+    run_budget_finalization_tokens: int | None = Field(default=None, ge=1)
+    run_budget_hard_tokens: int | None = Field(default=None, ge=1)
+    run_budget_warning_model_calls: int | None = Field(default=None, ge=1)
+    run_budget_finalization_model_calls: int | None = Field(default=None, ge=1)
+    run_budget_hard_model_calls: int | None = Field(default=None, ge=1)

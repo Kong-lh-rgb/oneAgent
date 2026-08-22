@@ -78,6 +78,16 @@ def test_summarizes_main_post_run_and_provider_total() -> None:
             event_time=datetime(2026, 8, 22, tzinfo=UTC),
             step=2,
             tool_schema_tokens=70,
+            run_budget_status="warning",
+            run_budget_reason="tokens",
+            run_budget_chargeable_tokens=100,
+            run_budget_model_calls=1,
+            run_budget_warning_tokens=100,
+            run_budget_finalization_tokens=200,
+            run_budget_hard_tokens=300,
+            run_budget_warning_model_calls=4,
+            run_budget_finalization_model_calls=6,
+            run_budget_hard_model_calls=8,
         ),
         _event(3, AgentEventType.MODEL_COMPLETED, usage=second),
         AgentEvent(
@@ -119,6 +129,10 @@ def test_summarizes_main_post_run_and_provider_total() -> None:
     assert summary.provider_total.model_calls == 4
     assert summary.provider_total.cached_input_tokens is None
     assert summary.tool_schema_tokens_estimated == 120
+    assert summary.main_agent_chargeable_tokens == 110
+    assert summary.run_budget_status == "warning"
+    assert summary.run_budget_reason == "tokens"
+    assert summary.run_budget_hard_tokens == 300
 
 
 def test_reflection_skip_reason_is_visible_without_usage() -> None:
@@ -150,3 +164,38 @@ def test_old_trace_infers_calls_without_inventing_cache_breakdown() -> None:
     assert summary.main_agent.model_calls == 1
     assert summary.main_agent.cached_input_tokens is None
     assert summary.provider_total.total_tokens == 15
+
+
+def test_chargeable_tokens_are_summed_per_call_when_cache_detail_is_mixed() -> None:
+    events = (
+        _event(
+            1,
+            AgentEventType.MODEL_COMPLETED,
+            usage=ModelUsage(
+                input_tokens=100,
+                output_tokens=5,
+                total_tokens=105,
+                cached_input_tokens=80,
+                uncached_input_tokens=20,
+                model_calls=1,
+            ),
+        ),
+        AgentEvent(
+            run_id="run-usage",
+            sequence=2,
+            type=AgentEventType.MODEL_STARTED,
+            event_time=datetime(2026, 8, 22, tzinfo=UTC),
+            step=2,
+            summary_usage=ModelUsage(
+                input_tokens=10,
+                output_tokens=2,
+                total_tokens=12,
+                model_calls=1,
+            ),
+        ),
+    )
+
+    summary = summarize_run_usage(events)
+
+    assert summary.main_agent.cached_input_tokens is None
+    assert summary.main_agent_chargeable_tokens == 37

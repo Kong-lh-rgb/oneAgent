@@ -1,4 +1,4 @@
-/** Execution History：Run 是一次执行，不重复 Conversation 历史。 */
+/** 执行历史：Run 是一次执行，不重复 Conversation 历史。 */
 
 import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
@@ -44,9 +44,9 @@ export default function RunsPage({
 
   return (
     <PageShell
-      title="Execution History"
-      subtitle="Inspect a specific execution, its evidence, usage, and recovery state."
-      maxWidth={980}
+      title="执行历史"
+      subtitle="查看每次执行的状态、证据、用量与恢复点。"
+      maxWidth={1120}
       actions={
         <div className="segmented-control" aria-label="Run filter">
           {(['all', 'running', 'attention'] as const).map((item) => (
@@ -55,34 +55,38 @@ export default function RunsPage({
               className={filter === item ? 'active' : ''}
               onClick={() => setFilter(item)}
             >
-              {item === 'all' ? 'All' : item === 'running' ? 'Running' : 'Needs attention'}
+              {item === 'all' ? '全部' : item === 'running' ? '运行中' : '需要关注'}
             </button>
           ))}
         </div>
       }
     >
-      {query.isPending ? <LoadingState label="Loading execution history…" />
+      {query.isPending ? <LoadingState label="正在加载执行历史…" />
         : query.isError ? <ErrorState message={String(query.error)} onRetry={() => void query.refetch()} />
           : runs.length === 0 ? (
-            <EmptyState title="No executions in this view" hint="Runs appear when Vesta starts working." icon="runs" />
+            <EmptyState title="当前没有执行记录" hint="Vesta 开始处理工作后，Run 会出现在这里。" icon="runs" />
           ) : (
             <div className="run-history">
               {runs.map((run) => {
                 const failed = ['failed', 'interrupted'].includes(run.status)
                 const reason = failed ? humanizeRunError(run.stop_reason, run.error) : null
                 return (
-                  <article key={run.id} className={`run-row run-row--${run.status}`}>
-                    <div className="run-row__status"><RunBadge status={run.status} /></div>
-                    <button className="run-row__body" onClick={() => openRun(run.id)}>
-                      <strong>{run.user_message || 'Untitled execution'}</strong>
-                      <span>
-                        {run.mode === 'plan' ? 'Plan' : 'Normal'} · {run.source === 'automation' ? 'Scheduled work' : 'Conversation'}
-                        {' · '}{relativeTime(run.created_at)}
-                      </span>
-                      {reason ? <small>{reason.message}</small> : null}
-                    </button>
-                    <button className="run-row__open" onClick={() => openRun(run.id)} aria-label="Inspect run">
-                      {run.status === 'interrupted' ? 'Recover' : <Icon name="chevronDown" size={15} />}
+                  <article key={run.id} className={`run-card run-card--${run.status}`}>
+                    <button className="run-card__button" onClick={() => openRun(run.id)}>
+                      <header className="run-card__header">
+                        <RunBadge status={run.status} />
+                        <span className="mono">{run.id.slice(0, 8)}</span>
+                      </header>
+                      <strong className="run-card__title">{run.user_message || '未命名执行'}</strong>
+                      <div className="run-card__meta">
+                        <span>{run.mode === 'plan' ? '计划模式' : '普通模式'}</span>
+                        <span>{run.source === 'automation' ? '自动化触发' : '会话触发'}</span>
+                      </div>
+                      {reason ? <small className="run-card__error">{reason.message}</small> : null}
+                      <footer className="run-card__footer">
+                        <time>{relativeTime(run.created_at)}</time>
+                        <span>{run.status === 'interrupted' ? '查看恢复' : '查看详情'} <Icon name="chevronDown" size={14} /></span>
+                      </footer>
                     </button>
                   </article>
                 )
@@ -97,8 +101,8 @@ function relativeTime(iso: string): string {
   const time = new Date(iso).getTime()
   if (Number.isNaN(time)) return iso
   const minutes = Math.max(0, Math.floor((Date.now() - time) / 60_000))
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${minutes}m ago`
-  if (minutes < 1440) return `${Math.floor(minutes / 60)}h ago`
-  return `${Math.floor(minutes / 1440)}d ago`
+  if (minutes < 1) return '刚刚'
+  if (minutes < 60) return `${minutes} 分钟前`
+  if (minutes < 1440) return `${Math.floor(minutes / 60)} 小时前`
+  return `${Math.floor(minutes / 1440)} 天前`
 }

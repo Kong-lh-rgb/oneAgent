@@ -1963,3 +1963,31 @@ Reflection Gate的职责不是替代模型判断“什么值得记住”，而�
    无记忆变化，failed是调用或解析失败。
 5. Gate跳过Reflection不等于跳过容量维护；Maintenance仍需保持原有独立语义。
 6. 每次跳过必须写入结构化reason，Usage才能解释为什么Post-Run为0。
+
+## 47. Run Budget治理累计成本，不治理单次窗口（2026-08-22）
+
+Context Budget与Run Budget解决的是两个不同问题：
+
+```text
+Context Budget：一次请求能否安全放进模型窗口
+Run Budget：一个Agent Loop累计请求了多少模型计算
+```
+
+关键细节：
+
+1. Run的预算Token优先使用`uncached input + output`。缓存命中的输入仍会被Provider
+   处理，但不能与新输入按相同口径决定是否停止；缓存明细未知时必须回退到全部
+   input，不能假设它已经被缓存。
+2. Model Calls是独立预算轴。即使每次请求很小，反复发送Tool Schema和保留上下文
+   仍可能形成低效循环，因此Token与调用数任一越线都应触发对应阶段。
+3. Warning不剥夺工具能力，只提醒模型减少重复调查；Finalization才隐藏工具并要求
+   根据已有证据收口；Hard表示不再发起新的模型请求。
+4. Finalization必须有且只有一次专用机会，并限制输出上限。否则“达到预算”可能
+   反而触发新的无限收尾循环。
+5. Context Summary发生在主模型请求前，也是critical-path模型开销，所以summary
+   完成后必须重新检查预算。
+6. Reflection与Maintenance已经属于Run终态后的background housekeeping。它们进入
+   Provider Total账本，但不能参与Main Agent Run Budget，也不能因此延迟
+   `agent_completed`。
+7. 50K/75K/100K与8/10/12是可调的初始治理基线，不是从Context Window推导出的
+   固定真理；后续应根据真实Run成功率、cache结构和成本分布校准。

@@ -1,6 +1,6 @@
-/** Run 分析展示层：集中解释 Context、成本与 Trace，不让组件理解事件协议。 */
+/** Run 分析展示层：集中解释 Context 与 Trace，不让组件理解事件协议。 */
 
-import type { AgentEvent } from '../api/types'
+import type { AgentEvent, Run } from '../api/types'
 
 export interface ContextBreakdownItem {
   key: 'messages' | 'tool_schemas' | 'tool_results' | 'skills' | 'other'
@@ -44,6 +44,14 @@ export interface TraceGroupVM {
 
 function numberOrZero(value: number | null | undefined): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+/** 从持久化Run列表中选出最新一轮，不依赖接口返回顺序。 */
+export function latestRunId(runs: Run[]): string | null {
+  return runs.reduce<Run | null>((latest, run) => {
+    if (!latest || run.created_at > latest.created_at) return run
+    return latest
+  }, null)?.id ?? null
 }
 
 export function mergeRunEvents(
@@ -119,29 +127,6 @@ export function buildContextSteps(events: AgentEvent[]): ContextStepVM[] {
         })),
       }
     })
-}
-
-/** 用 Runtime 事实解释成本，不调用模型、不猜测业务原因。 */
-export function explainRunCost(events: AgentEvent[]): string[] {
-  const steps = buildContextSteps(events)
-  if (steps.length === 0) return []
-  const reasons: string[] = []
-  const totalSchemas = steps.reduce((sum, step) => sum + step.toolSchemaTokens, 0)
-  const peakToolResults = Math.max(...steps.map((step) => step.toolResultTokensBefore))
-  const first = steps[0]
-  const last = steps.at(-1)!
-  if (steps.length > 1 && totalSchemas > 0) {
-    reasons.push(`${steps.length} 次模型请求累计携带了约 ${totalSchemas} 个 Tool Schema tokens。`)
-  }
-  if (peakToolResults > 0) {
-    reasons.push(`工具结果在压缩前最高达到约 ${peakToolResults} tokens。`)
-  }
-  if (last.originalInputTokens > first.originalInputTokens) {
-    reasons.push(`输入上下文从约 ${first.originalInputTokens} 增长到 ${last.originalInputTokens} tokens。`)
-  }
-  const firstCompaction = steps.find((step) => step.compactionStage !== 'none')
-  if (firstCompaction) reasons.push(`上下文压缩从第 ${firstCompaction.step} 步开始生效。`)
-  return reasons
 }
 
 export function buildTraceGroups(events: AgentEvent[]): TraceGroupVM[] {

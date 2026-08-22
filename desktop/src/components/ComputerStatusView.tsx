@@ -24,7 +24,7 @@ function PermissionRow({
         {permissionLabel(status)}
       </span>
       {status !== 'granted' && onRequest ? (
-        <button className="btn btn-sm" onClick={onRequest}>Request</button>
+        <button className="btn btn-sm" onClick={onRequest}>请求权限</button>
       ) : null}
     </div>
   )
@@ -39,13 +39,13 @@ export default function ComputerStatusView({
   loading?: boolean
   onRequestPermission?: (permission: ComputerPermissionName) => void
 }): React.JSX.Element {
-  if (loading && !status) return <div className="loading-inline"><span className="spinner" /> Checking Computer…</div>
-  if (!status) return <div className="empty-inline empty-inline--error">Computer status unavailable</div>
+  if (loading && !status) return <div className="loading-inline"><span className="spinner" /> 正在检查电脑操作状态…</div>
+  if (!status) return <div className="empty-inline empty-inline--error">无法获取电脑操作状态</div>
 
   const reason = status.reason === 'helper_not_found'
-    ? 'helper not found'
+    ? '未找到原生 helper'
     : status.reason === 'unsupported_platform'
-      ? `unsupported platform (${status.platform})`
+      ? `不支持当前平台（${status.platform}）`
       : status.reason
 
   return (
@@ -53,25 +53,25 @@ export default function ComputerStatusView({
       <div className="computer-status-view__runtime">
         <StatusDot tone={status.available ? 'ready' : 'failed'} />
         <div>
-          <strong>{status.available ? 'Available' : 'Unavailable'}</strong>
+          <strong>{status.available ? '可用' : '不可用'}</strong>
           <span>
             {status.available
-              ? `Computer Runtime · ${status.runtime ?? 'macOS'}`
-              : reason ?? 'Runtime not available'}
+              ? `电脑操作运行时 · ${status.runtime ?? 'macOS'}`
+              : reason ?? '运行时不可用'}
           </span>
         </div>
         <small>{leaseLabel(status.lease)}</small>
       </div>
       <div className="permission-list">
         <PermissionRow
-          name="Accessibility"
+          name="辅助功能"
           status={status.permissions.accessibility}
           onRequest={onRequestPermission
             ? () => onRequestPermission('accessibility')
             : undefined}
         />
         <PermissionRow
-          name="Screen Recording"
+          name="屏幕录制"
           status={status.permissions.screen_recording}
           onRequest={onRequestPermission
             ? () => onRequestPermission('screen_recording')
@@ -80,7 +80,7 @@ export default function ComputerStatusView({
       </div>
       {status.helper_path ? (
         <details className="technical-inline">
-          <summary>Runtime details</summary>
+          <summary>运行时详情</summary>
           <code>{status.helper_path}</code>
         </details>
       ) : null}

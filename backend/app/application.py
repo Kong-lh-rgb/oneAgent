@@ -22,6 +22,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from app.agent.budget import RunBudgetConfig
 from app.agent.events import AgentEventHandler
 from app.agent.post_run_processor import PostRunProcessor
 from app.agent.runtime import AgentRuntime
@@ -203,6 +204,7 @@ class Application:
         max_steps: int = 10,
         max_tool_rounds: int = 15,
         max_output_tokens: int | None = None,
+        run_budget_config: RunBudgetConfig | None = None,
         settings: ModelSettings | None = None,
         registry: ModelAdapterRegistry | None = None,
         shared_event_handler: AgentEventHandler | None = None,
@@ -235,6 +237,7 @@ class Application:
         self.max_steps = max_steps
         self.max_tool_rounds = max_tool_rounds
         self.max_output_tokens = max_output_tokens
+        self._run_budget_config = run_budget_config
         self._memory_reflection_config = memory_reflection_config
         self._memory_maintenance_config = memory_maintenance_config
         self._skill_learning_settings = skill_learning_settings
@@ -497,6 +500,7 @@ class Application:
             skill_context_provider=skill_context_provider,
             tool_hooks=computer_hooks,
             post_run_submit=self.post_run_processor.submit,
+            run_budget_config=self._run_budget_config,
         )
 
         run_store = SQLiteRunStore(database)

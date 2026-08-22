@@ -1,5 +1,53 @@
 # Vesta Desktop 学习记录
 
+## 2026-08-22：持久化事实不能只依赖组件局部状态
+
+`lastRunId` 适合作为当前页面的交互缓存，但不是Run是否存在的权威来源。
+React组件在页面切换时会卸载，局部状态随之丢失；Run本身已经持久化在
+Host SQLite中，因此正确的恢复路径是：
+
+```text
+App层保留当前conversation_id
+  ↓ Chat重新挂载
+Host listRuns(conversation_id)
+  ↓ 按created_at选择最新Run
+Run Inspector恢复可查看对象
+```
+
+关键边界：
+
+1. App层只跨页保留“用户正在看哪个会话”，不复制Run数据。
+2. SQLite Run列表是恢复事实源；Renderer实时事件只负责降低运行中延迟。
+3. 当前存在实时Run时应优先展示它；没有实时Run时才回退到持久化的最新Run。
+4. Run Detail到Conversation的跳转由`conversation_id`完成，它是导航关系，不需要新的后端状态。
+
+## 2026-08-22：浮窗负责态势感知，详情页负责分析
+
+同一份Run事实可以有不同的信息密度，但不能复制成两套事实：
+
+```text
+Run Inspector浮窗
+  当前状态 + 必要动作 + 少量Usage/Context/Trace信号
+
+Run Detail
+  完整Usage + 每步Context + 全量Trace与原始证据
+```
+
+关键边界：
+
+1. 浮窗首先回答“现在做到哪里、是否需要我操作、有没有失败”，而不是把所有可用
+   指标平铺出来。
+2. Usage摘要保留Main total、预算计入量和calls；cache读写、Provider Total及
+   Reflection细目属于完整详情。
+3. Context摘要只展示最近一次模型请求，因为它最接近当前决策；历史Step对比继续
+   留在Run Detail。
+4. Trace摘要展示最近少量人类可读动作，而不是原始事件JSON；审批和错误不能因截断
+   被隐藏，正常活动则可以只保留最近证据。
+5. `budgeted tokens`是治理口径，不是账单金额。界面不能使用`charged`暗示缓存命中
+   完全免费或等同Provider计费。
+6. Progressive disclosure不是删除诊断能力，而是让高频界面保持安静，把低频深度
+   分析放到明确的详情入口。
+
 ## 2026-08-22：Usage不是一个Total数字
 
 一次Run的真实Provider处理量来自多条相互独立的数据链：
