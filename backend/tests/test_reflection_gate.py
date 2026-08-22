@@ -7,11 +7,14 @@ def test_skips_exact_smalltalk_and_ephemeral_queries() -> None:
     greeting = decide_reflection_gate("你好！")
     weather = decide_reflection_gate("搜索一下明天的天气")
     capability = decide_reflection_gate("你目前有什么 m c p？")
+    informal_capability = decide_reflection_gate("你现有的mcp工具我看看")
 
     assert greeting.should_reflect is False
     assert greeting.reason is ReflectionGateReason.SMALLTALK
     assert weather.reason is ReflectionGateReason.EPHEMERAL_LOOKUP
     assert capability.reason is ReflectionGateReason.CAPABILITY_QUERY
+    assert informal_capability.should_reflect is False
+    assert informal_capability.reason is ReflectionGateReason.CAPABILITY_QUERY
 
 
 def test_durable_or_uncertain_signal_keeps_model_authority() -> None:

@@ -65,7 +65,8 @@ from app.mcp import (
     DEFAULT_MCP_CONFIG_PATH,
     MCPClientManager,
     MCPConfigurationError,
-    load_mcp_settings,
+    MCPConfigurationStore,
+    MCPStatusTool,
 )
 from app.memory import (
     DEFAULT_MEMORY_DIR,
@@ -220,6 +221,7 @@ class Application:
         self.tasks_dir = Path(tasks_dir).expanduser().resolve()
         self.workspace_root = workspace_root_path(workspace_root)
         self.mcp_config = Path(mcp_config).expanduser().resolve()
+        self.mcp_config_store = MCPConfigurationStore(self.mcp_config)
         self.memory_dir = (
             Path(memory_dir).expanduser().resolve() if memory_dir is not None else None
         )
@@ -461,12 +463,16 @@ class Application:
         mcp_statuses: tuple[Any, ...] = ()
         mcp_error: str | None = None
         try:
-            mcp_settings = await load_mcp_settings(self.mcp_config)
+            mcp_settings = await self.mcp_config_store.load()
             mcp_manager = MCPClientManager(mcp_settings.servers)
             mcp_statuses = await mcp_manager.start(tool_registry)
         except MCPConfigurationError as exc:
             mcp_error = f"{type(exc).__name__}: {exc}"
             logger.warning("MCP disabled: %s", mcp_error)
+        # 管理查询只读取当前 Manager 快照，不启动 Server，也不暴露全部 MCP Schema。
+        tool_registry.register(
+            MCPStatusTool(mcp_manager, configuration_error=mcp_error)
+        )
 
         runtime = AgentRuntime(
             self.registry,

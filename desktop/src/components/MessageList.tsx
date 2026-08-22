@@ -2,7 +2,6 @@ import { memo } from 'react'
 import type { Message } from '../api/types'
 import { EmptyState } from './ui'
 import { AssistantContent } from './AssistantContent'
-import AssistantReasoning from './AssistantReasoning'
 
 export { AssistantContent }
 
@@ -14,7 +13,6 @@ interface RenderedTurn {
   /** 是否显示作者行（头像）。组内第一条为 true，后续连续 assistant 为 false。 */
   author: boolean
   content: string
-  reasoning?: string
 }
 
 function buildThread(messages: Message[]): RenderedTurn[] {
@@ -45,17 +43,16 @@ function buildThread(messages: Message[]): RenderedTurn[] {
         if (message.tool_calls && message.tool_calls.length > 0) {
           return
         }
-        // 2) 无正文且无思考的空消息：同样跳过，让一次回复到最后只有一个头像。
+        // 2) 无正文的空消息：同样跳过，让一次回复到最后只有一个头像。
+        // Provider 原始 reasoning 属于内部推理，历史数据即使包含也不展示。
         const content = message.content ?? ''
-        const reasoning = message.reasoning ?? ''
-        if (!content && !reasoning) return
+        if (!content) return
 
         out.push({
           key: index,
           role: 'assistant',
           author: !assistantOpen,
           content,
-          reasoning,
         })
         assistantOpen = true
         return
@@ -101,7 +98,6 @@ export default memo(function MessageList({
               key={turn.key}
               className="message-assistant message-assistant--continuation"
             >
-              <AssistantReasoning text={turn.reasoning ?? ''} />
               <AssistantContent content={turn.content} />
             </div>
           )
@@ -111,7 +107,6 @@ export default memo(function MessageList({
             <div className="message-assistant__author">
               <span className="message-assistant__avatar" aria-hidden="true" />
               Vesta
-              <AssistantReasoning text={turn.reasoning ?? ''} />
             </div>
             <AssistantContent content={turn.content} />
           </div>

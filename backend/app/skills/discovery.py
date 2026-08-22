@@ -86,6 +86,10 @@ class SkillDiscovery:
             if not child.is_dir():
                 continue
             name = child.name
+            # 管理层使用隐藏目录保存停用 Skill 和安装临时目录；它们不属于 Catalog，
+            # 也不应作为坏 Skill 产生诊断噪声。
+            if name.startswith("."):
+                continue
             try:
                 validate_skill_name(name)
             except ValueError as exc:

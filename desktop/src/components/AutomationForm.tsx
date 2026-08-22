@@ -8,7 +8,10 @@ interface Props {
   onCancel: () => void
 }
 
-export default function AutomationForm({ onSubmit, onCancel }: Props): React.JSX.Element {
+export default function AutomationForm({
+  onSubmit,
+  onCancel,
+}: Props): React.JSX.Element {
   const [title, setTitle] = useState('')
   const [prompt, setPrompt] = useState('')
   const [kind, setKind] = useState<AutomationKind>('once')
@@ -22,7 +25,7 @@ export default function AutomationForm({ onSubmit, onCancel }: Props): React.JSX
   const submit = async (): Promise<void> => {
     setError(null)
     if (!title.trim() || !prompt.trim()) {
-      setError('title 和 prompt 必填。')
+      setError('请填写标题和执行指令。')
       return
     }
     const input: CreateAutomationInput = {
@@ -64,61 +67,74 @@ export default function AutomationForm({ onSubmit, onCancel }: Props): React.JSX
   }
 
   return (
-    <div className="automation-form">
-      <div className="automation-form__title">新建自动化</div>
-      <div className="automation-form__grid">
-        <input placeholder="标题" value={title} onChange={(e) => setTitle(e.target.value)} />
-        <select value={kind} onChange={(e) => setKind(e.target.value as AutomationKind)}>
-          <option value="once">单次执行</option>
-          <option value="interval">固定间隔</option>
-          <option value="cron">Cron 计划</option>
-        </select>
-      </div>
-      <textarea
-        placeholder="触发时希望 Vesta 做什么？"
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        rows={2}
-        className="automation-form__prompt"
-      />
-      {kind === 'once' && (
-        <div className="automation-form__grid automation-form__conditional">
-          <input
-            type="datetime-local"
-            value={runAt}
-            onChange={(e) => setRunAt(e.target.value)}
-          />
-          <input placeholder="时区（Asia/Shanghai）" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
+    <section className="automation-form">
+      <header className="automation-form__header">
+        <div>
+          <span className="automation-form__eyebrow">新建自动化</span>
+          <h2>让 Vesta 按时完成工作</h2>
+          <p>设置执行内容和触发时间，保存后会由 Host 持续调度。</p>
         </div>
+      </header>
+
+      <div className="automation-form__section">
+        <label className="automation-form__field">
+          <span>名称</span>
+          <input placeholder="例如：每日项目进展汇总" value={title} onChange={(e) => setTitle(e.target.value)} />
+        </label>
+        <label className="automation-form__field">
+          <span>执行指令</span>
+          <textarea
+            placeholder="详细描述触发时希望 Vesta 完成的任务…"
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            rows={4}
+          />
+        </label>
+      </div>
+
+      <div className="automation-form__section">
+        <span className="automation-form__label">触发方式</span>
+        <div className="automation-kind-picker">
+          {([
+            ['once', '单次执行', '在指定时间执行一次'],
+            ['interval', '固定间隔', '按秒、分钟或小时循环'],
+            ['cron', 'Cron 计划', '适合精确的日历调度'],
+          ] as const).map(([value, label, hint]) => (
+            <button
+              key={value}
+              type="button"
+              className={kind === value ? 'active' : ''}
+              onClick={() => setKind(value)}
+            >
+              <strong>{label}</strong><small>{hint}</small>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="automation-form__section automation-form__schedule">
+      {kind === 'once' && (
+        <label className="automation-form__field"><span>执行时间</span><input type="datetime-local" value={runAt} onChange={(e) => setRunAt(e.target.value)} /></label>
       )}
       {kind === 'interval' && (
-        <div className="automation-form__grid automation-form__conditional">
-          <input
-            type="number"
-            min="1"
-            placeholder="间隔秒数"
-            value={intervalSeconds}
-            onChange={(e) => setIntervalSeconds(e.target.value)}
-          />
-          <input placeholder="时区" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
-        </div>
+        <label className="automation-form__field"><span>间隔秒数</span><input type="number" min="1" placeholder="3600" value={intervalSeconds} onChange={(e) => setIntervalSeconds(e.target.value)} /></label>
       )}
       {kind === 'cron' && (
-        <div className="automation-form__grid automation-form__conditional">
-          <input placeholder='Cron 表达式，例如“0 9 * * *”' value={cronExpr} onChange={(e) => setCronExpr(e.target.value)} />
-          <input placeholder="时区" value={timezone} onChange={(e) => setTimezone(e.target.value)} />
-        </div>
+        <label className="automation-form__field"><span>Cron 表达式</span><input placeholder="0 9 * * *" value={cronExpr} onChange={(e) => setCronExpr(e.target.value)} /></label>
       )}
+        <label className="automation-form__field"><span>时区</span><input placeholder="Asia/Shanghai" value={timezone} onChange={(e) => setTimezone(e.target.value)} /></label>
+      </div>
       {error && <div className="error-text automation-form__error">{error}</div>}
       <div className="automation-form__actions">
         <button className="btn btn-primary" onClick={() => void submit()} disabled={busy}>
-          {busy ? '正在创建…' : '创建'}
+          {busy ? '正在创建…' : '创建自动化'}
         </button>
         <button className="btn" onClick={onCancel}>取消</button>
       </div>
-    </div>
+    </section>
   )
 }
+
 
 function toIsoWithOffset(localValue: string): string | null {
   if (!localValue) return null

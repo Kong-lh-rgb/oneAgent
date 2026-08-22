@@ -33,6 +33,15 @@ export const RpcMethods = {
   computerStatus: 'computer.status',
   computerRequestPermission: 'computer.request_permission',
   computerLatestObservation: 'computer.latest_observation',
+  extensionList: 'extension.list',
+  extensionImportPreview: 'extension.import.preview',
+  extensionImportApply: 'extension.import.apply',
+  skillInstall: 'skill.install',
+  skillSetEnabled: 'skill.set_enabled',
+  skillDelete: 'skill.delete',
+  mcpAdd: 'mcp.add',
+  mcpSetEnabled: 'mcp.set_enabled',
+  mcpDelete: 'mcp.delete',
 } as const
 
 export type RpcMethodName = (typeof RpcMethods)[keyof typeof RpcMethods]

@@ -12,6 +12,7 @@ import {
 import AutomationForm from '../components/AutomationForm'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { EmptyState, ErrorState, LoadingState } from '../components/PageStates'
+import { Icon } from '../components/Icon'
 import { PageShell } from '../components/PageShell'
 import { toast } from '../stores/toasts'
 
@@ -34,7 +35,7 @@ function scheduleText(schedule: {
     if (seconds % 60 === 0) return `每 ${seconds / 60} 分钟`
     return `每 ${seconds} 秒`
   }
-  return `定时计划 · ${schedule.timezone}`
+  return `${schedule.cron_expr ?? 'Cron'} · ${schedule.timezone}`
 }
 
 function formatTime(iso: string | null): string {
@@ -136,24 +137,43 @@ export default function AutomationsPage(): React.JSX.Element {
       ) : (
         <div className="automation-list">
           {automations.map((automation) => (
-            <article key={automation.id} className={`automation-row automation-row--${automation.status}`}>
-              <div className="automation-row__main">
-                <div className="automation-row__heading">
-                  <strong>{automation.title}</strong>
-                  <span className={`automation-state automation-state--${automation.status}`}>{automationStatusLabel(automation.status)}</span>
+            <article key={automation.id} className={`automation-card automation-card--${automation.status}`}>
+              <header className="automation-card__header">
+                <div className="automation-card__identity">
+                  <span className="automation-card__icon"><Icon name="automations" size={16} /></span>
+                  <div>
+                    <strong>{automation.title}</strong>
+                    <span className="mono">{automation.id.slice(0, 8)}</span>
+                  </div>
                 </div>
-                <p>{automation.prompt}</p>
-                <div className="automation-row__schedule">{scheduleText(automation.schedule)}</div>
+                <span className={`automation-state automation-state--${automation.status}`}>{automationStatusLabel(automation.status)}</span>
+              </header>
+
+              <p className="automation-card__prompt">{automation.prompt}</p>
+
+              <div className="automation-card__schedule">
+                <span>调度计划</span>
+                <strong>{scheduleText(automation.schedule)}</strong>
               </div>
-              <dl className="automation-row__timing">
+
+              <dl className="automation-card__timing">
                 <div><dt>下次执行</dt><dd>{formatTime(automation.next_run_at)}</dd></div>
                 <div><dt>上次执行</dt><dd>{formatTime(automation.last_run_at)}</dd></div>
               </dl>
-              <details className="automation-row__details">
-                <summary>计划详情</summary>
-                <code>{automation.schedule.cron_expr ?? automation.schedule.kind} · {automation.schedule.timezone}</code>
+
+              <details className="automation-card__details">
+                <summary><span>查看计划详情</span><Icon name="chevronDown" size={14} /></summary>
+                <dl>
+                  <div><dt>类型</dt><dd>{automation.schedule.kind === 'once' ? '单次' : automation.schedule.kind === 'interval' ? '固定间隔' : 'Cron'}</dd></div>
+                  <div><dt>时区</dt><dd>{automation.schedule.timezone}</dd></div>
+                  <div><dt>调度值</dt><dd className="mono">{automation.schedule.cron_expr ?? automation.schedule.interval_seconds ?? automation.schedule.run_at ?? '—'}</dd></div>
+                  <div><dt>最近 Run</dt><dd className="mono">{automation.last_run_id?.slice(0, 8) ?? '—'}</dd></div>
+                </dl>
               </details>
-              <div className="automation-row__actions">
+
+              <footer className="automation-card__footer">
+                <span className="automation-card__updated">更新于 {formatTime(automation.updated_at)}</span>
+                <div className="automation-row__actions">
                     <button
                       className="btn btn-sm"
                       disabled={automation.status !== 'active'}
@@ -175,7 +195,8 @@ export default function AutomationsPage(): React.JSX.Element {
                     >
                       取消
                     </button>
-              </div>
+                </div>
+              </footer>
             </article>
           ))}
         </div>

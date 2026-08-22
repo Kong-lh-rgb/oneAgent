@@ -7,6 +7,7 @@ import json
 import re
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import suppress
+from dataclasses import dataclass, replace
 from typing import Any
 from uuid import uuid4
 
@@ -36,6 +37,7 @@ from app.models.types import (
     ModelRequest,
     ModelUsage,
     ToolCall,
+    ToolDefinition,
     ToolResult,
     add_model_usage,
 )
@@ -117,6 +119,34 @@ _RUN_BUDGET_WARNING_MESSAGE = (
     "本 Run 的累计 Main Agent 用量已进入预警区。请减少不必要的重复调查和工具"
     "调用，优先完成当前目标；仍可在确有必要时继续使用工具。"
 )
+
+
+@dataclass(frozen=True)
+class _RequestPrefixState:
+    """保存当前 Run 最近一次已发送请求的稳定前缀。"""
+
+    source_messages: tuple[Message, ...]
+    context_messages: tuple[Message, ...]
+    tools: tuple[ToolDefinition, ...]
+    sent_messages: tuple[Message, ...]
+
+    def extend(
+        self,
+        *,
+        source_messages: tuple[Message, ...],
+        context_messages: tuple[Message, ...],
+        tools: tuple[ToolDefinition, ...],
+    ) -> tuple[Message, ...] | None:
+        """上下文形状未变时，只把新产生的消息追加到已发送前缀。"""
+
+        if context_messages != self.context_messages or tools != self.tools:
+            return None
+        previous_count = len(self.source_messages)
+        if len(source_messages) < previous_count:
+            return None
+        if source_messages[:previous_count] != self.source_messages:
+            return None
+        return (*self.sent_messages, *source_messages[previous_count:])
 
 
 class AgentRuntime:
@@ -355,6 +385,7 @@ class AgentRuntime:
         computer_halted = False
         budget_warning_emitted = False
         budget_finalization_attempted = False
+        request_prefix_state: _RequestPrefixState | None = None
 
         await emitter.emit(
             AgentEventType.AGENT_STARTED,
@@ -452,9 +483,10 @@ class AgentRuntime:
                 )
             )
             # 原始历史保持不变；模型请求视图会移除旧版持久提示词中的固定日期。
-            request_messages = tuple(
+            source_messages = tuple(
                 _without_legacy_fixed_date(message) for message in messages
             )
+            request_messages = source_messages
             request_tools = (
                 ()
                 if force_final_answer
@@ -548,10 +580,11 @@ class AgentRuntime:
                             content=_RUN_BUDGET_WARNING_MESSAGE,
                         )
                     )
-                if ephemeral_messages:
+                context_messages = tuple(ephemeral_messages)
+                if context_messages:
                     request_messages = (
                         *request_messages[:historical_message_count],
-                        *ephemeral_messages,
+                        *context_messages,
                         *request_messages[historical_message_count:],
                     )
                 if force_final_answer:
@@ -584,15 +617,37 @@ class AgentRuntime:
                     step=step,
                 )
 
+            continuation_messages = (
+                request_prefix_state.extend(
+                    source_messages=source_messages,
+                    context_messages=context_messages,
+                    tools=request_tools,
+                )
+                if request_prefix_state is not None and not force_final_answer
+                else None
+            )
+            cache_prefix_reused = continuation_messages is not None
+            cache_prefix_message_count = (
+                len(request_prefix_state.sent_messages)
+                if cache_prefix_reused and request_prefix_state is not None
+                else 0
+            )
+            context_input_messages = continuation_messages or request_messages
+            context_history_count = (
+                0 if continuation_messages is not None else historical_message_count
+            )
+            context_summary_state = (
+                None if continuation_messages is not None else current_summary_state
+            )
             try:
                 context_decision = await self._context_manager.prepare(
-                    request_messages,
+                    context_input_messages,
                     tools=request_tools,
                     model=resolved_model,
                     provider=resolved_provider,
                     max_output_tokens=effective_max_output_tokens,
-                    history_count=historical_message_count,
-                    summary_state=current_summary_state,
+                    history_count=context_history_count,
+                    summary_state=context_summary_state,
                 )
             except Exception as exc:
                 return await stop_with_error(
@@ -600,6 +655,21 @@ class AgentRuntime:
                     AgentStopReason.CONTEXT_ERROR,
                     step=step,
                 )
+
+            if continuation_messages is not None:
+                # continuation 输入已经包含上一轮生成的滚动摘要。这里保留其对应
+                # 的持久化水位，避免一次“无需重建”的 Step 把 Summary State 清空。
+                context_decision = replace(
+                    context_decision,
+                    summary_state=current_summary_state,
+                )
+                previous_prefix = request_prefix_state.sent_messages
+                cache_prefix_reused = (
+                    context_decision.messages[: len(previous_prefix)]
+                    == previous_prefix
+                )
+                if not cache_prefix_reused:
+                    cache_prefix_message_count = 0
 
             current_summary_state = context_decision.summary_state
             usage = _add_usage(usage, context_decision.summary_usage)
@@ -636,6 +706,7 @@ class AgentRuntime:
                     **_run_budget_event_fields(budget_decision, budget_config),
                 )
             if budget_decision.should_warn and not budget_warning_in_request:
+                warning_appended_after_prepare = True
                 request_messages = (
                     *request_messages,
                     Message(
@@ -643,6 +714,8 @@ class AgentRuntime:
                         content=_RUN_BUDGET_WARNING_MESSAGE,
                     ),
                 )
+            else:
+                warning_appended_after_prepare = False
             if budget_decision.should_finalize and not budget_forces_final:
                 budget_forces_final = True
                 force_final_answer = True
@@ -664,6 +737,14 @@ class AgentRuntime:
                     step=step,
                     **_run_budget_event_fields(budget_decision, budget_config),
                 )
+            if (
+                request_prefix_state is not None
+                and request_tools != request_prefix_state.tools
+            ):
+                # 工具集合变化会改变 Provider 请求前缀，不能把消息前缀相同误报为
+                # 完整缓存前缀复用。
+                cache_prefix_reused = False
+                cache_prefix_message_count = 0
             await emitter.emit(
                 AgentEventType.MODEL_STARTED,
                 step=step,
@@ -722,6 +803,8 @@ class AgentRuntime:
                 ),
                 summary_usage=context_decision.summary_usage,
                 summary_error=context_decision.summary_error,
+                cache_prefix_reused=cache_prefix_reused,
+                cache_prefix_message_count=cache_prefix_message_count,
                 available_skill_count=(
                     len(catalog_metadata)
                     if self._skill_context_provider is not None
@@ -755,6 +838,16 @@ class AgentRuntime:
                     step=step,
                 )
 
+            if not force_final_answer and not warning_appended_after_prepare:
+                request_prefix_state = _RequestPrefixState(
+                    source_messages=source_messages,
+                    context_messages=context_messages,
+                    tools=request_tools,
+                    sent_messages=request_messages,
+                )
+            else:
+                request_prefix_state = None
+
             try:
                 async def emit_text_delta(delta: str) -> None:
                     if not delta:
@@ -767,17 +860,6 @@ class AgentRuntime:
                         delta=delta,
                     )
 
-                async def emit_reasoning_delta(delta: str) -> None:
-                    if not delta:
-                        return
-                    await emitter.emit(
-                        AgentEventType.MODEL_REASONING_DELTA,
-                        step=step,
-                        provider=resolved_provider,
-                        model=resolved_model,
-                        reasoning_delta=delta,
-                    )
-
                 response = await adapter.complete_stream(
                     ModelRequest(
                         messages=request_messages,
@@ -786,7 +868,9 @@ class AgentRuntime:
                         max_output_tokens=effective_max_output_tokens,
                     ),
                     on_text_delta=emit_text_delta,
-                    on_reasoning_delta=emit_reasoning_delta,
+                    # Provider 原始 reasoning 属于内部推理，不进入聊天、Trace 或
+                    # Desktop 事件流；可观察执行过程只使用结构化 AgentEvent。
+                    on_reasoning_delta=None,
                 )
             except Exception as exc:
                 return await stop_with_error(
@@ -798,7 +882,9 @@ class AgentRuntime:
             usage = _add_usage(usage, response.usage)
             main_model_calls += max(1, response.usage.model_calls)
             budget_chargeable_tokens += chargeable_tokens(response.usage)
-            assistant_message = response.message
+            assistant_message = response.message.model_copy(
+                update={"reasoning": None}
+            )
             messages.append(assistant_message)
             await emitter.emit(
                 AgentEventType.MODEL_COMPLETED,

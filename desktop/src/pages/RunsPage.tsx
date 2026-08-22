@@ -77,12 +77,14 @@ export default function RunsPage({
                         <RunBadge status={run.status} />
                         <span className="mono">{run.id.slice(0, 8)}</span>
                       </header>
-                      <strong className="run-card__title">{run.user_message || '未命名执行'}</strong>
+                      <div className="run-card__content">
+                        <strong className="run-card__title">{run.user_message || '未命名执行'}</strong>
+                        {reason ? <small className="run-card__error">{reason.message}</small> : null}
+                      </div>
                       <div className="run-card__meta">
                         <span>{run.mode === 'plan' ? '计划模式' : '普通模式'}</span>
                         <span>{run.source === 'automation' ? '自动化触发' : '会话触发'}</span>
                       </div>
-                      {reason ? <small className="run-card__error">{reason.message}</small> : null}
                       <footer className="run-card__footer">
                         <time>{relativeTime(run.created_at)}</time>
                         <span>{run.status === 'interrupted' ? '查看恢复' : '查看详情'} <Icon name="chevronDown" size={14} /></span>

@@ -7,6 +7,154 @@
 ---
 ## 2026-08-22
 
+### 完成：消息底部展示缓存命中率
+
+#### Bad Case
+- [x] 消息底部只展示输入、输出Token，用户必须进入Run详情才能判断重复上下文是否实际命中Provider缓存
+- [x] Provider未上报缓存细分时，若直接按零计算会把“未知”错误展示为“0%命中”
+
+#### 实现结果
+- [x] 消息用量行增加“缓存命中率”，与输入、输出、步骤、操作数和耗时放在一起
+- [x] 命中率按 `cached_input_tokens / input_tokens` 计算，百分比最多保留一位小数
+- [x] 运行中多次模型调用只有在每次都上报缓存字段时才聚合；任一步未知则显示“缓存暂无”
+- [x] 终态优先使用AgentResult聚合Usage，保证消息底部与Run主用量口径一致
+- [x] 新增已知缓存、混合未知缓存和最终聚合用量测试；定向32 tests与Desktop typecheck通过
+
+### 完成：Run 内模型请求缓存前缀稳定化
+
+#### Bad Case
+- [x] Runtime 每个 Step 都从完整原始历史重新执行工具清理和滚动摘要；随着新工具结果加入，旧历史可能多删除一轮或更新摘要，使前一请求不再是后一请求的精确前缀
+- [x] 工具定义按注册顺序输出；MCP启动顺序或装配顺序变化时，即使能力完全相同也可能改变 Provider 请求中的工具排列
+- [x] Run Trace 只能看到 Provider 最终上报的缓存命中量，无法判断 Harness 本轮是否保持了可复用的消息前缀
+
+#### 实现结果
+- [x] Runtime保存最近一次实际发送的请求前缀；系统上下文与工具集合未变化时，下一 Step 只在尾部追加新的 Assistant / Tool消息
+- [x] 第一次历史压缩或滚动摘要形成当前 Run 基线，后续 Step 不再无条件回到完整原始历史重复投影；候选上下文再次越线时仍由 ContextManager执行正式压缩
+- [x] Task、Active Skill、工具激活、Plan/预算终态等上下文形状变化会确定性放弃旧基线并安全重建，不缓存过期状态
+- [x] 面向模型的工具定义按名称稳定排序；普通管理接口继续保留既有注册语义
+- [x] `model_started` 增加 `cache_prefix_reused` 与 `cache_prefix_message_count`，可以区分Harness前缀稳定性与Provider实际缓存命中
+- [x] 新增注册顺序、三步工具循环和“滚动摘要后继续工具调用”的离线回归；Backend 943 tests、Ruff、compileall通过，Desktop typecheck通过
+
+### 完成：聊天执行时间线视觉修复
+
+#### Bad Case
+- [x] 时间线容器使用 `overflow: hidden`，圆形状态标记却通过负坐标放在容器外，导致勾选图标只显示一半
+- [x] 左侧边线、负定位和额外缩进叠加，动作文字与 Vesta 标题及最终回复明显错位
+
+#### 实现结果
+- [x] 状态标记改为行内网格布局，完整保留成功、失败和进行中视觉
+- [x] 连接线只绘制在相邻动作之间，不再从列表边界穿出或裁切圆点
+- [x] 收紧动作间距和字号层级，使执行过程与最终回答保持同一正文起点
+- [x] 为时间线增加“执行过程”语义标签，不改变 Agent Runtime、事件协议或工具状态
+
+### 完成：用户可见执行过程中文化
+
+#### Bad Case
+- [x] 隔离 Provider 原始推理后，运行区域仍混用 `Thinking`、`Working`、`Step`、`actions`、`in/out` 等英文调试字段
+- [x] 审批、电脑操作验证和失败终态使用英文提示，用户难以快速区分 Agent 当前处于分析、执行、等待确认还是验证阶段
+
+#### 实现结果
+- [x] 将用户可见阶段统一为“正在分析、正在执行、等待确认、正在验证、已完成、已停止、已中断、已取消”
+- [x] 工具时间线统一使用中文审批与验证提示，不展示 Provider 原始 reasoning
+- [x] 步骤、操作数、输入/输出用量、目标应用、失败原因和恢复操作全部改为结构化中文字段
+- [x] 电脑操作上下文中的验证状态同步中文化；定向组件测试 36 项通过，TypeScript 类型检查通过
+
+### 完成：MCP 运行目录工具与 Provider 推理隔离
+
+#### Bad Case
+- [x] 用户询问“现有 MCP 工具”时，Agent 只能按关键词搜索最多 5 个延迟工具，无法读取 Server 状态和完整清单
+- [x] Desktop 已有 `extension.list`，但它只是管理 RPC；模型不可见，因此 Run `71804946` 用 7 次模型请求、4 次 Shell 审批和临时脚本重新启动 Server 做 `list_tools`
+- [x] DeepSeek/Qwen 的 `reasoning_content` 被 Runtime 作为 `model_reasoning_delta` 发到 Desktop并随 Assistant Message 持久化，导致模型原始内部推理出现在“思考过程”
+- [x] “你现有的mcp工具我看看”没有命中能力查询 Reflection Gate，Run 完成后又消耗 4,528 tokens 得到 `none`
+
+#### 实现结果
+- [x] 新增常驻只读 `mcp_status`：直接读取当前 `MCPClientManager.statuses()`，支持按 Server 筛选和隐藏工具名，返回连接状态、错误、工具数量与已注册名称
+- [x] `mcp_status` 不启动、不重连、不调用 MCP Server，不经过 Shell或人工审批；MCP 完整 Schema仍保持 deferred，不因目录查询重新变成每 Step 常驻
+- [x] Runtime 不再传递 `on_reasoning_delta`，并在 `MODEL_COMPLETED`、AgentResult和消息持久化前清除 Provider reasoning
+- [x] Desktop 不再渲染实时或历史 Assistant reasoning；用户可见执行过程只来自结构化 AgentEvent，完整诊断继续进入 Run Detail / Trace
+- [x] 保留旧事件字段和数据库列用于向后兼容，不破坏旧 Trace 解析；不对用户已有数据库做破坏性清理
+- [x] Reflection Gate 增加“看看 / 看一下 / 看下”能力查询表达，类似 MCP/Skill 清单请求直接跳过无价值 Reflection
+- [x] Backend 941 tests、Ruff、compileall 通过；Desktop 230 tests、typecheck、production build 通过
+
+### 完成：统一扩展导入（GitHub Skill / 外部 MCP JSON）
+
+#### Bad Case
+- [x] 用户把 `npx skills add owner/repo` 放进 `mcpServers` 后，Host 会把一次性 Skill 安装命令误当作长驻 MCP 进程，最终握手失败
+- [x] 外部客户端常用 `mcpServers` 对象，而 Vesta 使用 `servers` 数组；用户必须手工理解并转换两套 Schema
+- [x] 仅有手动 Skill/MCP 表单，无法直接导入 GitHub URL、`owner/repo` 或复制来的配置
+- [x] 如果粘贴后立即执行任意命令，会把不可信文本直接升级为宿主机代码执行权限
+
+#### 实现结果
+- [x] 扩展能力页增加“统一导入”，支持 GitHub URL、`owner/repo`、`npx skills add` 命令、外部 `mcpServers` 与 Vesta `servers` JSON
+- [x] Preview RPC 只做本地解析，自动区分 Skill 安装命令与 MCP Server，规范化 MCP 名称并展示实际动作；预览阶段不联网、不写文件、不启动命令
+- [x] Apply RPC 要求 `confirmed=true` 且 SHA-256 指纹与预览一致；输入、作用域或默认权限变化后必须重新预览
+- [x] GitHub Skill 确认后只下载官方 GitHub ZIP 归档，不执行 `npx`、`git`、package scripts 或仓库代码；只安装通过正式 Parser 校验的 `SKILL.md` 和 scripts/references/assets
+- [x] 下载限制 20MB、Skill 文件限制 10MB，并拒绝 ZIP 路径穿越、忽略符号链接；Skill 仍使用受控目录原子落盘
+- [x] 外部 MCP 自动转换为正式 `MCPServerConfig`，环境变量预览只展示名称；批量写入整体验重并原子更新 `mcp.json`，仍需重启 Host 才启动
+- [x] Backend 938 tests 通过；新增导入安全测试后为 939 tests，Ruff/compileall 通过；Desktop 233 tests、typecheck、production build 通过
+
+### 完成：设置页左侧导航与通用界面视觉收口
+
+#### Bad Case
+- [x] “通用 / 扩展能力”位于页面顶部，占用标题操作区，设置分类与具体操作混在同一层
+- [x] 通用页直接使用数据表格，像后台调试面板，英文标签、状态色和弱层级影响日常阅读
+- [x] Host、Computer、Desktop 缺少各自的用途说明，关键值与低频技术信息没有形成稳定阅读顺序
+
+#### 实现结果
+- [x] 设置页改为左侧分类栏与右侧内容区；通用、扩展能力不再占用顶部操作区
+- [x] 通用页按 Vesta Host、电脑操作、桌面客户端分组，使用轻量分隔线和键值行替代表格卡片
+- [x] 主标题和关键值统一为简约黑色字体，灰色只承担标签、说明和路径等次级信息
+- [x] Host 与权限提示完成中文化，并保留错误重试、权限申请和运行时详情功能
+- [x] 增加 1180px / 860px 双栏响应式收窄；Desktop 全量 231 tests、typecheck 与 production build 通过
+
+### 完成：Desktop Skill / MCP 扩展管理入口
+
+#### Bad Case
+- [x] Skill 和 MCP 运行时已经存在，但 Desktop 没有安装入口，用户必须理解内部目录与 JSON Schema
+- [x] 直接让用户编辑 `mcp.json` 容易产生参数引号、数组格式、重复名称和密钥误提交问题
+- [x] 让模型直接写正式 Skill 或执行任意 MCP 安装命令会绕过人类确认与 Host 安全边界
+- [x] 初版只能新增，错误或过期配置无法从 Desktop 停用、恢复或删除；旧 filesystem 仍指向 oneAgent 路径而启动失败
+
+#### 实现结果
+- [x] 设置页新增“扩展能力”，提供 Skills / MCP Servers 两个管理 Tab 与已安装状态列表
+- [x] Skill 表单用 name、description、scope、Markdown instructions 生成 `SKILL.md`，复用正式 Parser 校验并以目录原子安装
+- [x] MCP 表单将参数按行、环境变量按 `KEY=VALUE` 解析，实时预览标准 JSON，由 Host 合并现有 servers 并原子写入
+- [x] MCP 名称重复、Schema 非法或原配置损坏时失败不改文件；列表只返回环境变量名，不向 Renderer 暴露 secret 值
+- [x] 新 MCP 明确标记“等待重启”，保存只写配置，不在 mutation RPC 内执行任意 Server 命令
+- [x] Skill 支持可逆停用/启用：目录在作用域内 `.disabled` 隔离，停用立即退出 Catalog；删除前二次确认并精确绑定 name、scope、当前状态
+- [x] MCP 支持 enabled 切换与删除 JSON 条目；配置变更持续显示“等待重启”，提醒当前进程里的旧连接可能仍存在
+- [x] 修正 filesystem MCP 的 command/workspace 为当前 `/Users/linghang/agent/vesta`，并验证可执行文件与目录存在
+- [x] 新增 `extension.list`、`skill.install/set_enabled/delete`、`mcp.add/set_enabled/delete` RPC；Backend 全量 934 tests、ruff、compileall 通过，Desktop 全量 231 tests、typecheck、production build 通过
+
+### 完成：执行历史与长期记忆页面展示收口
+
+#### Bad Case
+- [x] 执行历史使用自适应方块网格，同一 Run 的状态、标题、来源和时间被拉成多层卡片，不利于纵向快速扫描
+- [x] 长期记忆只显示 Core 文本框和普通卡片，没有直观表达常驻记忆、按需检索、容量及归档之间的关系
+- [x] 普通记忆卡片等宽分栏会让更新时间和摘要在窄宽度下拥挤，归档状态也缺少视觉区分
+
+#### 实现结果
+- [x] 执行历史恢复为单列条状布局，状态、Run ID、用户指令、触发来源、时间和详情入口保持固定阅读顺序
+- [x] 运行中、中断和失败用克制的左侧状态线区分，保留筛选与原有详情跳转行为
+- [x] 长期记忆新增系统概览，明确“少量常驻、按需回忆”，集中展示使用中、容量与归档数量
+- [x] Core Memory 独立为常驻上下文区域；普通/归档记忆改为横向可扫描条目并保留完整内容展开能力
+- [x] 增加窄窗口响应式布局，不修改 Memory Store、Reflection 或 Run 语义
+
+### 完成：自动化页面视觉收口
+
+#### Bad Case
+- [x] 旧自动化条目是横向数据行，标题、Prompt、时间和操作挤在同一层，阅读层级不清晰
+- [x] 计划详情只展示一行原始值，无法快速分辨类型、时区、调度值和最近Run
+- [x] 新建表单只是平铺输入框，三种调度类型的区别和当前选择不直观
+- [x] 用户取消“打开编辑”需求后，不应保留无需求支撑的Automation Update协议
+
+#### 实现结果
+- [x] 每个自动化改为独立圆角卡片，按身份、指令、调度、执行时间、详情和操作分层
+- [x] 可展开详情结构化展示调度类型、时区、原始调度值和最近Run
+- [x] 新建表单重构为圆角分区，单次、间隔、Cron使用可视化选择卡，只显示当前类型所需字段
+- [x] 未增加编辑入口，已撤回临时Automation Update领域、RPC与客户端代码
+- [x] Desktop 39个测试文件/224 tests、typecheck和production build通过
+
 ### 完成：Run浮窗恢复与会话回跳
 
 #### Bad Case

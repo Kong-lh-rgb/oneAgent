@@ -57,11 +57,11 @@ describe('MessageList', () => {
     expect(html).toContain('帮我总结仓库')
   })
 
-  it('助手消息带 reasoning 时展示思考过程', () => {
+  it('历史消息中的 Provider reasoning 不进入聊天展示', () => {
     const html = renderToStaticMarkup(<MessageList messages={[reasoningMsg]} />)
-    expect(html).toContain('Thinking')
-    expect(html).toContain('先拆解需求，再核对仓库文件')
-    expect(html).toContain('assistant-reasoning')
+    expect(html).toContain('结论')
+    expect(html).not.toContain('先拆解需求，再核对仓库文件')
+    expect(html).not.toContain('assistant-reasoning')
   })
 
   it('连续 assistant 消息合并成一条回复，只显示一个头像', () => {

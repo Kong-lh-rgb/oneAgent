@@ -87,6 +87,18 @@ def test_duplicate_tool_registration_is_rejected() -> None:
         registry.register(EchoTool())
 
 
+def test_model_definitions_are_stable_across_registration_order() -> None:
+    first = ToolRegistry()
+    first.register(StubDefinitionTool(ToolDefinition(name="zeta")))
+    first.register(StubDefinitionTool(ToolDefinition(name="alpha")))
+    second = ToolRegistry()
+    second.register(StubDefinitionTool(ToolDefinition(name="alpha")))
+    second.register(StubDefinitionTool(ToolDefinition(name="zeta")))
+
+    assert first.model_definitions() == second.model_definitions()
+    assert [item.name for item in first.model_definitions()] == ["alpha", "zeta"]
+
+
 def test_tool_catalog_tracks_deferred_registry_changes_automatically() -> None:
     registry = ToolRegistry()
     weather = StubDefinitionTool(

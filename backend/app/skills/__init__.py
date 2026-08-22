@@ -37,7 +37,7 @@ from .models import (
     validate_skill_name,
 )
 from .parser import ParsedSkill, SkillParseError, parse_skill_document
-from .store import SkillStore
+from .store import ManagedSkillEntry, SkillStore
 from .tools import (
     SKILL_READ_TOOL_NAME,
     SKILL_RESOURCE_READ_TOOL_NAME,
@@ -61,6 +61,7 @@ __all__ = [
     "SkillDiagnostic",
     "SkillDiscovery",
     "SkillMetadata",
+    "ManagedSkillEntry",
     "SkillParseError",
     "SkillReadTool",
     "SkillResourceReadTool",

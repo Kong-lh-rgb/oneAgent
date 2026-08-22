@@ -16,6 +16,7 @@ from app.mcp import (
     MCPRemoteTool,
     MCPServerConfig,
     MCPServerState,
+    MCPStatusTool,
     MCPToolCallError,
     StdioMCPClient,
     load_mcp_settings,
@@ -287,6 +288,61 @@ async def test_one_failed_server_does_not_block_other_servers() -> None:
     assert "无法启动" in (statuses[0].error or "")
     assert statuses[1].state is MCPServerState.RUNNING
     assert registry.names() == ("mcp__healthy__echo_text",)
+    await manager.close(registry)
+
+
+@pytest.mark.asyncio
+async def test_mcp_status_tool_reads_live_manager_without_starting_servers() -> None:
+    configs = (
+        MCPServerConfig(name="broken", command="unused"),
+        MCPServerConfig(name="healthy", command="unused"),
+    )
+    clients: list[FakeMCPClient] = []
+
+    def factory(config: MCPServerConfig) -> FakeMCPClient:
+        client = FakeMCPClient(
+            config,
+            fail_start=config.name == "broken",
+        )
+        clients.append(client)
+        return client
+
+    registry = ToolRegistry()
+    manager = MCPClientManager(configs, client_factory=factory)
+    await manager.start(registry)
+    starts_before = [client.started for client in clients]
+    tool = MCPStatusTool(manager)
+
+    result = await tool.execute({})
+
+    assert result["server_count"] == 2
+    assert result["running_count"] == 1
+    assert result["servers"][0]["state"] == "failed"
+    assert result["servers"][1]["tools"] == ["mcp__healthy__echo_text"]
+    assert [client.started for client in clients] == starts_before
+    assert tool.definition.permission is ToolPermission.ALLOWED
+    await manager.close(registry)
+
+
+@pytest.mark.asyncio
+async def test_mcp_status_tool_filters_server_and_can_hide_tool_names() -> None:
+    config = MCPServerConfig(name="demo", command="unused")
+    registry = ToolRegistry()
+    manager = MCPClientManager(
+        (config,),
+        client_factory=lambda value: FakeMCPClient(value),
+    )
+    await manager.start(registry)
+
+    result = await MCPStatusTool(manager).execute(
+        {"server": "demo", "include_tools": False}
+    )
+
+    assert result["servers"] == [
+        {"name": "demo", "state": "running", "tool_count": 1}
+    ]
+    with pytest.raises(ValueError, match="不存在"):
+        await MCPStatusTool(manager).execute({"server": "missing"})
     await manager.close(registry)
 
 

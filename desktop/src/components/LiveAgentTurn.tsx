@@ -3,24 +3,24 @@
 import type { AgentEvent } from '../api/types'
 import {
   buildTurnView,
+  formatCacheHitRate,
   formatDuration,
   formatTokens,
   type ToolStepVM,
 } from '../agent/turnPresentation'
 import { useEventsStore } from '../stores/events'
 import { AssistantContent } from './AssistantContent'
-import AssistantReasoning from './AssistantReasoning'
 import { Icon } from './Icon'
 
 const STATUS = {
-  thinking: { label: 'Thinking', tone: 'working' },
-  working: { label: 'Working', tone: 'working' },
-  waiting_approval: { label: 'Approval required', tone: 'waiting' },
-  verifying: { label: 'Verifying', tone: 'waiting' },
-  completed: { label: 'Completed', tone: 'completed' },
-  failed: { label: 'Stopped', tone: 'failed' },
-  interrupted: { label: 'Interrupted', tone: 'failed' },
-  cancelled: { label: 'Cancelled', tone: 'cancelled' },
+  thinking: { label: '正在分析', tone: 'working' },
+  working: { label: '正在执行', tone: 'working' },
+  waiting_approval: { label: '等待确认', tone: 'waiting' },
+  verifying: { label: '正在验证', tone: 'waiting' },
+  completed: { label: '已完成', tone: 'completed' },
+  failed: { label: '已停止', tone: 'failed' },
+  interrupted: { label: '已中断', tone: 'failed' },
+  cancelled: { label: '已取消', tone: 'cancelled' },
 } as const
 
 function markerFor(tool: ToolStepVM): React.JSX.Element | string {
@@ -40,15 +40,15 @@ function ToolRow({ tool }: { tool: ToolStepVM }): React.JSX.Element {
         {tool.approval === 'pending' ? (
           <span className="agent-action__state">
             {tool.isComputer
-              ? 'Waiting for desktop approval'
-              : 'Waiting for approval'}
+              ? '等待电脑操作确认'
+              : '等待你的确认'}
           </span>
         ) : tool.verification === 'unverified' ? (
           <span className="agent-action__state agent-action__state--warning">
-            Action sent · waiting for verification
+            操作已发送 · 等待验证
           </span>
         ) : tool.verification === 'verified' ? (
-          <span className="agent-action__state">Verified</span>
+          <span className="agent-action__state">已验证</span>
         ) : null}
       </div>
     </li>
@@ -61,7 +61,6 @@ export default function LiveAgentTurn({
   events,
   settling = false,
   streamText,
-  reasoning,
   onRecover,
   onInspect,
 }: {
@@ -70,7 +69,6 @@ export default function LiveAgentTurn({
   events: AgentEvent[]
   settling?: boolean
   streamText?: string
-  reasoning?: string
   onRecover?: () => void
   onInspect?: () => void
 }): React.JSX.Element {
@@ -79,40 +77,14 @@ export default function LiveAgentTurn({
       ? (state.streamTextByRun[runId]?.[step] ?? '')
       : '',
   )
-  const liveReasoning = useEventsStore((state) =>
-    runId && step !== null && step !== undefined
-      ? (state.reasoningByRun[runId]?.[step] ?? '')
-      : '',
-  )
   const view = buildTurnView(events, { now: Date.now() })
   const status = STATUS[view.status]
   const terminal = ['completed', 'failed', 'interrupted', 'cancelled'].includes(
     view.status,
   )
   const text = streamText !== undefined ? streamText : liveText || view.finalText
-  const completedReasoning = [...events]
-    .reverse()
-    .find((event) => event.type === 'model_completed')?.message?.reasoning ?? ''
-  const reasoningText = reasoning !== undefined
-    ? reasoning
-    : liveReasoning || completedReasoning
-
-  let thinkingDuration: number | null = null
-  for (let i = events.length - 1; i >= 0; i -= 1) {
-    if (events[i].type !== 'model_started') continue
-    const start = Date.parse(events[i].event_time)
-    const completed = events.slice(i).find((event) => event.type === 'model_completed')
-    if (completed) {
-      const end = Date.parse(completed.event_time)
-      if (!Number.isNaN(start) && !Number.isNaN(end)) {
-        thinkingDuration = Math.max(0, end - start)
-      }
-    }
-    break
-  }
-
   const timeline = view.tools.length > 0 ? (
-    <ol className="agent-turn__timeline turn-timeline">
+    <ol className="agent-turn__timeline turn-timeline" aria-label="执行过程">
       {view.tools.map((tool) => <ToolRow key={tool.id} tool={tool} />)}
     </ol>
   ) : null
@@ -131,12 +103,6 @@ export default function LiveAgentTurn({
             aria-hidden="true"
           />
           Vesta
-          <AssistantReasoning
-            text={reasoningText}
-            autoExpand={!terminal}
-            busy={!terminal && !text && Boolean(reasoningText)}
-            durationMs={terminal || text ? thinkingDuration : null}
-          />
         </div>
         {view.status !== 'completed' ? (
           <span className={`agent-turn__status agent-turn__status--${status.tone}`}>
@@ -156,11 +122,11 @@ export default function LiveAgentTurn({
           <div className="agent-turn__error-actions">
             {view.status === 'interrupted' && onRecover ? (
               <button className="btn btn-primary btn-sm" onClick={onRecover}>
-                Recover
+                恢复执行
               </button>
             ) : null}
             {onInspect ? (
-              <button className="btn btn-sm" onClick={onInspect}>Inspect</button>
+              <button className="btn btn-sm" onClick={onInspect}>查看详情</button>
             ) : null}
           </div>
         </div>
@@ -169,7 +135,7 @@ export default function LiveAgentTurn({
           <AssistantContent content={text} streaming={!terminal} />
           {!terminal ? <span className="stream-cursor" aria-hidden="true" /> : null}
         </div>
-      ) : !reasoningText && view.tools.length === 0 ? (
+      ) : view.tools.length === 0 ? (
         <div className="live-turn__waiting">
           <span className="live-turn__waiting-spinner" aria-hidden="true" />
           正在执行…
@@ -178,16 +144,17 @@ export default function LiveAgentTurn({
 
       {view.steps > 0 || view.toolCount > 0 || view.usage || view.durationMs !== null ? (
         <footer className="turn-usage agent-turn__footer">
-          {view.steps} step{view.steps === 1 ? '' : 's'}
-          {' · '}{view.toolCount} action{view.toolCount === 1 ? '' : 's'}
+          第 {view.steps} 步
+          {' · '}{view.toolCount} 次操作
           {view.usage ? (
             <>
-              {' · '}{formatTokens(view.usage.inputTokens)} in
-              {' · '}{formatTokens(view.usage.outputTokens)} out
+              {' · '}输入 {formatTokens(view.usage.inputTokens)}
+              {' · '}输出 {formatTokens(view.usage.outputTokens)}
+              {' · '}缓存 {formatCacheHitRate(view.usage.cacheHitRate)}
             </>
           ) : null}
           {view.durationMs !== null ? ` · ${formatDuration(view.durationMs)}` : ''}
-          {view.targetApp ? ` · ${view.targetApp}` : ''}
+          {view.targetApp ? ` · 目标 ${view.targetApp}` : ''}
         </footer>
       ) : null}
     </section>

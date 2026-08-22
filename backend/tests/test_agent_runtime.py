@@ -247,6 +247,7 @@ def model_response(
     content: str | None = None,
     tool_calls: tuple[ToolCall, ...] = (),
     usage: ModelUsage | None = None,
+    reasoning: str | None = None,
 ) -> ModelResponse:
     return ModelResponse(
         id="fake-response",
@@ -256,6 +257,7 @@ def model_response(
             role=MessageRole.ASSISTANT,
             content=content,
             tool_calls=tool_calls,
+            reasoning=reasoning,
         ),
         usage=usage or ModelUsage(),
     )
@@ -309,19 +311,22 @@ async def test_runtime_emits_model_text_deltas_before_completed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runtime_emits_model_reasoning_deltas_before_completed() -> None:
+async def test_runtime_does_not_expose_provider_reasoning() -> None:
     config = ProviderConfig(
         provider="streaming-fake",
         model="streaming-model",
         api_key=SecretStr("offline-test-key"),
         api_style=ApiStyle.CHAT_COMPLETIONS,
     )
-    adapter = StreamingFakeModelAdapter(config, [model_response(content="完成")])
+    adapter = StreamingFakeModelAdapter(
+        config,
+        [model_response(content="完成", reasoning="内部完整推理")],
+    )
     registry = ModelAdapterRegistry(ModelSettings(_env_file=None))
     registry.register("streaming-fake", lambda _: adapter, config=config)
     handler = InMemoryEventHandler()
 
-    await AgentRuntime(
+    result = await AgentRuntime(
         registry,
         ToolRegistry(),
         provider="streaming-fake",
@@ -332,11 +337,15 @@ async def test_runtime_emits_model_reasoning_deltas_before_completed() -> None:
         for event in handler.events
         if event.type is AgentEventType.MODEL_REASONING_DELTA
     ]
-    assert reasoning_deltas == ["先分析需求"]
-    event_types = [event.type for event in handler.events]
-    assert event_types.index(AgentEventType.MODEL_STARTED) < event_types.index(
-        AgentEventType.MODEL_REASONING_DELTA
-    ) < event_types.index(AgentEventType.MODEL_COMPLETED)
+    assert reasoning_deltas == []
+    completed = next(
+        event
+        for event in handler.events
+        if event.type is AgentEventType.MODEL_COMPLETED
+    )
+    assert completed.message is not None
+    assert completed.message.reasoning is None
+    assert all(message.reasoning is None for message in result.messages)
 
 
 @pytest.mark.asyncio
@@ -499,6 +508,26 @@ async def test_runtime_reads_then_writes_and_returns_final_text(tmp_path) -> Non
         "read_file",
         "write_file",
     }
+    for previous, current in zip(adapter.requests, adapter.requests[1:]):
+        assert current.tools == previous.tools
+        assert current.messages[: len(previous.messages)] == previous.messages
+
+    model_started = [
+        event
+        for event in events
+        if event.type is AgentEventType.MODEL_STARTED
+    ]
+    assert [event.cache_prefix_reused for event in model_started] == [
+        False,
+        True,
+        True,
+    ]
+    assert model_started[1].cache_prefix_message_count == len(
+        adapter.requests[0].messages
+    )
+    assert model_started[2].cache_prefix_message_count == len(
+        adapter.requests[1].messages
+    )
 
     read_result_message = adapter.requests[1].messages[-1]
     assert read_result_message.role == MessageRole.TOOL
@@ -729,6 +758,80 @@ async def test_runtime_uses_rolling_summary_but_returns_complete_history() -> No
         message.content and "旧问题 0" in message.content
         for message in request.messages
     )
+
+
+@pytest.mark.asyncio
+async def test_runtime_extends_compacted_prefix_without_rebuilding_next_step() -> None:
+    history_messages = [Message(role=MessageRole.SYSTEM, content="系统提示")]
+    for index in range(8):
+        history_messages.extend(
+            (
+                Message(
+                    role=MessageRole.USER,
+                    content=f"旧问题 {index} " + "问" * 150,
+                ),
+                Message(
+                    role=MessageRole.ASSISTANT,
+                    content=f"旧回答 {index} " + "答" * 150,
+                ),
+            )
+        )
+    tool_call = ToolCall(
+        id="count-after-summary",
+        name="count",
+        arguments={"value": 1},
+    )
+    registry, adapter = fake_registry(
+        [
+            model_response(tool_calls=(tool_call,)),
+            model_response(content="最终回答"),
+        ]
+    )
+    capability_registry = ModelCapabilityRegistry()
+    capability_registry.register_override(
+        "fake",
+        "fake-model",
+        context_window=2_000,
+        max_output_tokens=100,
+    )
+    context_manager = ContextManager(
+        registry=capability_registry,
+        budget_policy=ContextBudgetPolicy(safety_margin_tokens=0),
+        conversation_reducer=ConversationReducer(
+            FixedContextSummarizer(),
+            keep_recent_conversation_blocks=2,
+            keep_recent_tool_rounds=0,
+        ),
+    )
+    tools = ToolRegistry()
+    tools.register(CountingTool())
+    events = InMemoryEventHandler()
+
+    result = await AgentRuntime(
+        registry,
+        tools,
+        provider="fake",
+        max_output_tokens=100,
+        context_manager=context_manager,
+    ).run(
+        "当前问题",
+        history=tuple(history_messages),
+        event_handler=events,
+    )
+
+    assert result.ok is True
+    first, second = adapter.requests
+    assert second.messages[: len(first.messages)] == first.messages
+    assert second.messages[-2].tool_calls == (tool_call,)
+    assert second.messages[-1].tool_call_id == tool_call.id
+    started = [
+        event
+        for event in events.events
+        if event.type is AgentEventType.MODEL_STARTED
+    ]
+    assert [event.summary_updated for event in started] == [True, False]
+    assert [event.cache_prefix_reused for event in started] == [False, True]
+    assert result.summary_state is not None
 
 
 @pytest.mark.asyncio

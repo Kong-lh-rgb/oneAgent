@@ -14,14 +14,14 @@ const base = {
 }
 
 describe('RunStatusBar', () => {
-  it('无 Run 时显示 Ready 与标题', () => {
+  it('无 Run 时显示就绪与标题', () => {
     const html = renderToStaticMarkup(<RunStatusBar {...base} />)
-    expect(html).toContain('Ready')
+    expect(html).toContain('就绪')
     expect(html).toContain('打开备忘录输入你好')
     expect(html).toContain('详情')
   })
 
-  it('运行中显示 Working、Step/tools/tokens/duration 与 Stop', () => {
+  it('运行中使用中文字段展示阶段、步骤、操作、用量和耗时', () => {
     const html = renderToStaticMarkup(
       <RunStatusBar
         {...base}
@@ -33,16 +33,16 @@ describe('RunStatusBar', () => {
         currentAction="Typing in Notes"
       />,
     )
-    expect(html).toContain('Working')
-    expect(html).toContain('Step 4')
-    expect(html).toContain('3 tools')
-    expect(html).toContain('8.4k tokens')
+    expect(html).toContain('正在执行')
+    expect(html).toContain('第 4 步')
+    expect(html).toContain('3 次操作')
+    expect(html).toContain('用量 8.4k Token')
     expect(html).toContain('7.2s')
     expect(html).toContain('Typing in Notes')
-    expect(html).toContain('>Stop</button>')
+    expect(html).toContain('>停止</button>')
   })
 
-  it('完成时显示 Completed 且无 Stop', () => {
+  it('完成时显示已完成且无停止按钮', () => {
     const html = renderToStaticMarkup(
       <RunStatusBar
         {...base}
@@ -52,12 +52,12 @@ describe('RunStatusBar', () => {
         totalTokens={21400}
       />,
     )
-    expect(html).toContain('Completed')
+    expect(html).toContain('已完成')
     expect(html).toContain('10')
-    expect(html).not.toContain('>Stop</button>')
+    expect(html).not.toContain('>停止</button>')
   })
 
-  it('失败显示 Stopped + reason + 统计 + Activity', () => {
+  it('失败显示中文原因和统计', () => {
     const html = renderToStaticMarkup(
       <RunStatusBar
         {...base}
@@ -68,26 +68,26 @@ describe('RunStatusBar', () => {
         stopReason="max_steps"
       />,
     )
-    expect(html).toContain('Stopped')
-    expect(html).toContain('Maximum step limit reached')
-    expect(html).toContain('10 steps')
-    expect(html).toContain('8 tools')
-    expect(html).toContain('24.1k tokens')
+    expect(html).toContain('已停止')
+    expect(html).toContain('已达到最大执行步数')
+    expect(html).toContain('10 步')
+    expect(html).toContain('8 次操作')
+    expect(html).toContain('用量 24.1k Token')
     expect(html).toContain('详情')
   })
 
-  it('interrupted 提供 Recover 动作', () => {
+  it('中断后提供恢复动作', () => {
     const html = renderToStaticMarkup(
       <RunStatusBar {...base} runStatus="interrupted" onRecover={() => {}} />,
     )
-    expect(html).toContain('Stopped')
-    expect(html).toContain('Recover')
+    expect(html).toContain('已中断')
+    expect(html).toContain('恢复')
   })
 
-  it('Plan 模式显示 Plan 标识', () => {
+  it('Plan 模式显示中文规划标识', () => {
     const html = renderToStaticMarkup(
       <RunStatusBar {...base} mode="plan" runStatus="running" />,
     )
-    expect(html).toContain('Plan')
+    expect(html).toContain('规划模式')
   })
 })

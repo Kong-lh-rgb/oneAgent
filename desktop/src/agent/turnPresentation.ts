@@ -1,8 +1,8 @@
-/** Turn 展示层：把 AgentEvent[] 转成 Thinking / Tool / Approval / Verification / Usage 的 ViewModel。
+/** 单轮展示层：把 AgentEvent[] 转成分析、工具、审批、验证和用量视图模型。
 
 - 纯逻辑、无 React；事件解析集中在 presentation 层，组件只负责渲染。
-- 不做任何协议解析：不把 reasoning 文本当作 Tool Call 执行，也不解析 DSML/<tool_calls>/<invoke>。
-- 参数摘要仅用于人类可读 label；原始 arguments 放 details（Show technical details）。
+- 不展示或解析 Provider 原始 reasoning；用户可见过程只来自结构化 AgentEvent。
+- 参数摘要仅用于生成可读标签；原始参数只放在技术详情中。
 */
 
 import type { AgentEvent, ModelUsage } from '../api/types'
@@ -13,7 +13,7 @@ export type ToolState = 'active' | 'done' | 'failed' | 'waiting'
 export interface ToolStepVM {
   id: string
   name: string
-  /** 人类可读动作（进行态/完成态），如 “Typing “测试”” / “Typed text”。 */
+  /** 人类可读动作（进行态或完成态），例如“输入‘测试’”或“已输入文本”。 */
   label: string
   state: ToolState
   /** 技术细节（原始 arguments 摘要），主界面不 dump。 */
@@ -30,6 +30,8 @@ export interface UsageVM {
   inputTokens: number
   outputTokens: number
   totalTokens: number
+  cachedInputTokens: number | null
+  cacheHitRate: number | null
 }
 
 export interface TurnView {
@@ -60,7 +62,7 @@ export interface ComputerContextVM {
   target: string | null
   window: string | null
   lastAction: string | null
-  verification: 'Verified' | 'Waiting for verification' | null
+  verification: '已验证' | '等待验证' | null
   executionMode: string | null
   recentActions: ToolStepVM[]
 }
@@ -137,6 +139,7 @@ export function toolActiveLabel(name: string, args: unknown): string {
     case 'task_update': return '更新计划'
     case 'task_get': return '查看计划'
     case 'task_list': return '查看任务'
+    case 'mcp_status': return '查看 MCP 工具'
     case 'run_shell_command': return '运行命令'
     case 'web_search': {
       const query = argValue(args, 'query')
@@ -183,6 +186,7 @@ export function toolDoneLabel(name: string, args: unknown, ok: boolean): string 
     case 'task_update': return '已更新计划'
     case 'task_get': return '已查看计划'
     case 'task_list': return '已查看任务'
+    case 'mcp_status': return '已读取 MCP 工具清单'
     case 'run_shell_command': return '命令已执行'
     case 'web_search': return '已完成搜索'
     default: return `完成 ${humanizeToolName(name)}`
@@ -245,18 +249,18 @@ export function humanizeRunError(
   rawError: string | null = null,
 ): { title: string; message: string; technical: string | null } {
   const known: Record<string, string> = {
-    max_steps: 'Vesta reached the step limit before it could finish.',
-    repeated_tool_call: 'Vesta repeated the same strategy without making progress.',
-    stale_observation: 'The desktop changed before the action could be verified.',
-    stale_snapshot: 'The desktop changed before the action could be verified.',
-    permission_denied: 'The requested action was not approved.',
-    model_error: 'The model could not continue this run.',
-    context_error: 'The conversation exceeded the available context window.',
-    interrupted: 'The run was interrupted and can be recovered.',
+    max_steps: 'Vesta 在完成前达到了最大执行步数。',
+    repeated_tool_call: 'Vesta 重复了相同策略，但没有取得进展。',
+    stale_observation: '电脑画面已变化，无法安全验证这次操作。',
+    stale_snapshot: '电脑画面已变化，无法安全验证这次操作。',
+    permission_denied: '请求的操作没有获得批准。',
+    model_error: '模型无法继续本轮执行。',
+    context_error: '当前对话超过了可用上下文窗口。',
+    interrupted: '本轮执行已中断，可以从恢复点继续。',
   }
   return {
-    title: stopReason === 'interrupted' ? 'Interrupted' : 'Stopped',
-    message: known[stopReason ?? ''] ?? 'Vesta could not complete this run.',
+    title: stopReason === 'interrupted' ? '执行已中断' : '执行已停止',
+    message: known[stopReason ?? ''] ?? 'Vesta 未能完成本轮执行。',
     technical: rawError || stopReason || null,
   }
 }
@@ -436,19 +440,32 @@ export function buildTurnView(
     }
   }
 
-  // usage：优先 agent_completed/failed 的最终 usage；否则累计各 model_completed usage。
+  // 用量优先采用终态聚合；运行中则累计每次模型调用，并保留缓存字段的未知语义。
   let usage: UsageVM | null = null
   if (finalUsage) {
+    const cachedInputTokens = finalUsage.cached_input_tokens ?? null
     usage = {
       inputTokens: finalUsage.input_tokens,
       outputTokens: finalUsage.output_tokens,
       totalTokens: finalUsage.total_tokens,
+      cachedInputTokens,
+      cacheHitRate: cacheHitRate(
+        cachedInputTokens,
+        finalUsage.input_tokens,
+      ),
     }
   } else if (usageParts.length > 0) {
+    const cachedInputTokens = sumOptionalUsage(
+      usageParts,
+      'cached_input_tokens',
+    )
+    const inputTokens = usageParts.reduce((sum, u) => sum + u.input_tokens, 0)
     usage = {
-      inputTokens: usageParts.reduce((sum, u) => sum + u.input_tokens, 0),
+      inputTokens,
       outputTokens: usageParts.reduce((sum, u) => sum + u.output_tokens, 0),
       totalTokens: usageParts.reduce((sum, u) => sum + u.total_tokens, 0),
+      cachedInputTokens,
+      cacheHitRate: cacheHitRate(cachedInputTokens, inputTokens),
     }
   }
 
@@ -510,6 +527,28 @@ export function buildTurnView(
   }
 }
 
+function sumOptionalUsage(
+  usages: ModelUsage[],
+  field: 'cached_input_tokens',
+): number | null {
+  if (usages.some((usage) => usage[field] === null || usage[field] === undefined)) {
+    return null
+  }
+  return usages.reduce((sum, usage) => sum + (usage[field] ?? 0), 0)
+}
+
+function cacheHitRate(cachedInputTokens: number | null, inputTokens: number): number | null {
+  if (cachedInputTokens === null || inputTokens <= 0) return null
+  return Math.min(100, Math.max(0, (cachedInputTokens / inputTokens) * 100))
+}
+
+/** 缓存命中率显示：整数不保留小数，其余保留一位。 */
+export function formatCacheHitRate(rate: number | null): string {
+  if (rate === null) return '暂无'
+  const rounded = Math.round(rate * 10) / 10
+  return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)}%`
+}
+
 export function buildComputerContext(
   events: AgentEvent[],
   observation: ComputerObservation | null,
@@ -527,9 +566,9 @@ export function buildComputerContext(
     window: observation?.active_window?.title || null,
     lastAction: last?.label ?? null,
     verification: last?.verification === 'verified'
-      ? 'Verified'
+      ? '已验证'
       : last?.verification === 'unverified'
-        ? 'Waiting for verification'
+        ? '等待验证'
         : null,
     executionMode: typeof mode === 'string' ? mode.replaceAll('_', ' ') : null,
     recentActions: computerActions.slice(-6),

@@ -55,8 +55,8 @@ class Message(BaseModel):
     name: str | None = None
     tool_call_id: str | None = None
     tool_calls: tuple[ToolCall, ...] = ()
-    # 模型思考/推理内容（如 DeepSeek/Qwen 的 reasoning_content、Anthropic thinking）。
-    # 只用于展示与留存，不随请求回传给模型（请求构造器不序列化该字段）。
+    # Provider Adapter 可临时承载推理内容；AgentRuntime 会在事件与持久化前清除，
+    # 不向用户展示，也不随后续请求回传给模型。
     reasoning: str | None = None
 
 

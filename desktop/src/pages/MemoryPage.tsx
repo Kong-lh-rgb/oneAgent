@@ -18,12 +18,17 @@ function formatTime(value: string): string {
 export function MemoryCard({ memory }: { memory: LongTermMemory }): React.JSX.Element {
   return (
     <article className={`memory-card memory-card--${memory.status}`}>
-      <header className="memory-card__header">
-        <span className="mono">{memory.id}</span>
-        <span>{memory.status === 'active' ? '使用中' : '已归档'}</span>
-      </header>
-      <h3>{memory.title}</h3>
-      <p>{memory.summary}</p>
+      <div className="memory-card__identity">
+        <span className="memory-card__mark" aria-hidden="true" />
+        <div>
+          <header className="memory-card__header">
+            <span className="mono">{memory.id}</span>
+            <span>{memory.status === 'active' ? '可检索' : '已归档'}</span>
+          </header>
+          <h3>{memory.title}</h3>
+          <p>{memory.summary}</p>
+        </div>
+      </div>
       <dl className="memory-card__meta">
         <div><dt>版本</dt><dd>r{memory.revision}</dd></div>
         <div><dt>读取</dt><dd>{memory.access_count} 次</dd></div>
@@ -69,10 +74,23 @@ export default function MemoryPage(): React.JSX.Element {
         : query.isError ? <ErrorState message={String(query.error)} onRetry={() => void query.refetch()} />
           : data ? (
             <div className="memory-page">
+              <section className="memory-overview" aria-label="长期记忆概览">
+                <div className="memory-overview__intro">
+                  <span className="memory-overview__eyebrow">Memory system</span>
+                  <strong>少量常驻，按需回忆</strong>
+                  <p>核心记忆随每次运行进入上下文；普通记忆只提供索引，由模型在需要时读取。</p>
+                </div>
+                <dl className="memory-overview__stats">
+                  <div><dt>使用中</dt><dd>{data.active_count}</dd></div>
+                  <div><dt>容量</dt><dd>{data.max_active || '—'}</dd></div>
+                  <div><dt>已归档</dt><dd>{data.archived.length}</dd></div>
+                </dl>
+              </section>
+
               <section className="memory-core">
                 <div className="section-heading">
-                  <div><h2>核心记忆</h2><p>每次运行都会携带的少量长期信息</p></div>
-                  <span>{data.active_count} / {data.max_active || '—'} 条普通记忆</span>
+                  <div><h2>核心记忆</h2><p>稳定偏好与长期约束，每次运行都会携带</p></div>
+                  <span className="memory-core__badge">常驻上下文</span>
                 </div>
                 {data.core.trim() ? (
                   <div className="memory-core__content">{data.core}</div>
@@ -85,7 +103,7 @@ export default function MemoryPage(): React.JSX.Element {
                 <div className="section-heading">
                   <div>
                     <h2>{view === 'active' ? '普通记忆' : '归档记忆'}</h2>
-                    <p>{view === 'active' ? '模型可通过索引按需读取' : '不再进入索引，但仍然完整保留'}</p>
+                    <p>{view === 'active' ? `${memories.length} 条可通过索引按需读取` : `${memories.length} 条已退出索引但仍完整保留`}</p>
                   </div>
                 </div>
                 {memories.length === 0 ? (

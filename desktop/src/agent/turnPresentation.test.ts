@@ -178,14 +178,26 @@ describe('buildTurnView: usage / steps / duration', () => {
   it('running 时累计 model_completed usage', () => {
     const view = buildTurnView([
       event({ type: 'model_started', step: 1 }),
-      event({ type: 'model_completed', step: 1, usage: { input_tokens: 500, output_tokens: 300, total_tokens: 800 } }),
+      event({ type: 'model_completed', step: 1, usage: { input_tokens: 500, output_tokens: 300, total_tokens: 800, cached_input_tokens: 400 } }),
       event({ type: 'model_started', step: 2 }),
-      event({ type: 'model_completed', step: 2, usage: { input_tokens: 600, output_tokens: 320, total_tokens: 920 } }),
+      event({ type: 'model_completed', step: 2, usage: { input_tokens: 600, output_tokens: 320, total_tokens: 920, cached_input_tokens: 500 } }),
     ])
     expect(view.steps).toBe(2)
     expect(view.usage?.inputTokens).toBe(1100)
     expect(view.usage?.outputTokens).toBe(620)
     expect(view.usage?.totalTokens).toBe(1720)
+    expect(view.usage?.cachedInputTokens).toBe(900)
+    expect(view.usage?.cacheHitRate).toBeCloseTo(81.8, 1)
+  })
+
+  it('任一模型调用未报告缓存时保持命中率未知', () => {
+    const view = buildTurnView([
+      event({ type: 'model_completed', step: 1, usage: { input_tokens: 500, output_tokens: 20, total_tokens: 520, cached_input_tokens: 400 } }),
+      event({ type: 'model_completed', step: 2, usage: { input_tokens: 600, output_tokens: 20, total_tokens: 620 } }),
+    ])
+
+    expect(view.usage?.cachedInputTokens).toBeNull()
+    expect(view.usage?.cacheHitRate).toBeNull()
   })
 
   it('agent_completed result.usage 优先', () => {
@@ -199,7 +211,7 @@ describe('buildTurnView: usage / steps / duration', () => {
           messages: [],
           steps: 4,
           stop_reason: 'final_answer',
-          usage: { input_tokens: 9800, output_tokens: 620, total_tokens: 10420 },
+          usage: { input_tokens: 9800, output_tokens: 620, total_tokens: 10420, cached_input_tokens: 7840 },
           error: null,
           plan_task_id: null,
         },
@@ -207,6 +219,7 @@ describe('buildTurnView: usage / steps / duration', () => {
     ])
     expect(view.usage?.inputTokens).toBe(9800)
     expect(view.usage?.outputTokens).toBe(620)
+    expect(view.usage?.cacheHitRate).toBe(80)
     expect(view.steps).toBe(4)
     expect(view.status).toBe('completed')
   })
@@ -221,9 +234,7 @@ describe('buildTurnView: usage / steps / duration', () => {
 })
 
 describe('reasoning 协议不展示 / 不解析', () => {
-  it('buildTurnView 不解析 reasoning 文本，只保留事件结构', () => {
-    // model_reasoning_delta 不进 events 数组（前端单独累积），
-    // 即使进来也只按 delta 处理，不执行任何 tool call。
+  it('buildTurnView 忽略历史 reasoning 事件，只保留结构化过程', () => {
     const view = buildTurnView([
       event({ type: 'model_reasoning_delta', step: 1, reasoning_delta: '<tool_calls>' }),
       event({ type: 'model_started', step: 1 }),
@@ -297,7 +308,7 @@ describe('buildComputerContext', () => {
     expect(context.target).toBe('TextEdit')
     expect(context.window).toBe('Untitled')
     expect(context.lastAction).toBe('已输入 “ Vesta”')
-    expect(context.verification).toBe('Verified')
+    expect(context.verification).toBe('已验证')
     expect(context.executionMode).toBe('background ax')
   })
 

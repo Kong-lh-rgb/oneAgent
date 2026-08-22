@@ -188,7 +188,7 @@ export interface AgentEvent {
   provider: string | null
   model: string | null
   delta?: string | null
-  /** 流式思考增量（DeepSeek/Qwen reasoning_content delta）。 */
+  /** 旧 Trace 兼容字段；新 Runtime 不再发送 Provider 原始推理。 */
   reasoning_delta?: string | null
   message: Message | null
   tool_call: ToolCall | null
@@ -231,6 +231,8 @@ export interface AgentEvent {
   summarized_conversation_blocks?: number | null
   summary_error?: string | null
   summary_usage?: ModelUsage | null
+  cache_prefix_reused?: boolean | null
+  cache_prefix_message_count?: number | null
   available_skill_count?: number | null
   skill_catalog_tokens?: number | null
   active_skill_names?: string[]

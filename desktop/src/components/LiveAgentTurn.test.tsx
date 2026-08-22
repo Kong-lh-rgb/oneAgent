@@ -57,59 +57,25 @@ describe('LiveAgentTurn', () => {
     expect(html).toContain('stream-cursor')
   })
 
-  it('回答问题中思考过程默认展开（正文已在生成）', () => {
+  it('不展示 Provider 原始 reasoning，只展示正文和结构化过程', () => {
     const html = renderToStaticMarkup(
       <LiveAgentTurn
         runId="run-1"
         step={1}
-        events={[event({ type: 'model_completed' })]}
+        events={[event({
+          type: 'model_completed',
+          message: {
+            role: 'assistant',
+            content: '回复',
+            reasoning: '内部完整推理',
+            tool_calls: [],
+          },
+        })]}
         streamText="回复"
-        reasoning="先分析问题，再规划步骤"
       />,
     )
-    expect(html).toContain('assistant-reasoning__toggle')
-    expect(html).toContain('assistant-reasoning__chevron')
-    expect(html).toContain('先分析问题，再规划步骤')
-    expect(html).toContain('assistant-reasoning--open')
-  })
-
-  it('思考进行中思考过程默认展开', () => {
-    const html = renderToStaticMarkup(
-      <LiveAgentTurn
-        runId="run-1"
-        step={1}
-        events={[event({ type: 'model_started' })]}
-        streamText=""
-        reasoning="正在分析需求…"
-      />,
-    )
-    expect(html).toContain('assistant-reasoning__toggle')
-    expect(html).toContain('assistant-reasoning__chevron')
-    expect(html).toContain('assistant-reasoning--open')
-    expect(html).toContain('assistant-reasoning__spinner')
-  })
-
-  it('完成后思考过程默认收起（仍可点击展开）', () => {
-    const html = renderToStaticMarkup(
-      <LiveAgentTurn
-        runId="run-1"
-        step={1}
-        events={[
-          event({ type: 'agent_started' }),
-          event({ type: 'agent_completed', stop_reason: 'final_answer' }),
-        ]}
-        reasoning="先分析问题，再规划步骤"
-      />,
-    )
-    expect(html).toContain('assistant-reasoning__toggle')
-    expect(html).toContain('先分析问题，再规划步骤')
-    expect(html).not.toContain('assistant-reasoning--open')
-  })
-
-  it('无 reasoning 时不渲染思考块', () => {
-    const html = renderToStaticMarkup(
-      <LiveAgentTurn runId="run-1" step={1} events={[event({ type: 'model_completed' })]} streamText="回复" />,
-    )
+    expect(html).toContain('回复')
+    expect(html).not.toContain('内部完整推理')
     expect(html).not.toContain('assistant-reasoning')
   })
 
@@ -143,7 +109,7 @@ describe('LiveAgentTurn', () => {
     expect(html).toContain('已输入 “测试”')
   })
 
-  it('sandbox 审批等待显示 Waiting for approval', () => {
+  it('sandbox 审批等待显示中文确认提示', () => {
     const html = renderToStaticMarkup(
       <LiveAgentTurn
         runId="run-1"
@@ -161,10 +127,10 @@ describe('LiveAgentTurn', () => {
       />,
     )
     expect(html).toContain('agent-action--waiting')
-    expect(html).toContain('Waiting for approval')
+    expect(html).toContain('等待你的确认')
   })
 
-  it('desktop 审批等待显示 Waiting for desktop approval', () => {
+  it('desktop 审批等待显示中文电脑操作提示', () => {
     const html = renderToStaticMarkup(
       <LiveAgentTurn
         runId="run-1"
@@ -181,10 +147,10 @@ describe('LiveAgentTurn', () => {
         ]}
       />,
     )
-    expect(html).toContain('Waiting for desktop approval')
+    expect(html).toContain('等待电脑操作确认')
   })
 
-  it('computer 操作未验证时显示 not yet verified', () => {
+  it('computer 操作未验证时显示中文验证状态', () => {
     const html = renderToStaticMarkup(
       <LiveAgentTurn
         runId="run-1"
@@ -209,10 +175,10 @@ describe('LiveAgentTurn', () => {
         ]}
       />,
     )
-    expect(html).toContain('Action sent · waiting for verification')
+    expect(html).toContain('操作已发送 · 等待验证')
   })
 
-  it('usage footer 显示 steps / tools / tokens / duration', () => {
+  it('usage footer 使用中文字段显示步骤、操作、用量和耗时', () => {
     const html = renderToStaticMarkup(
       <LiveAgentTurn
         runId="run-1"
@@ -223,20 +189,45 @@ describe('LiveAgentTurn', () => {
           event({
             type: 'model_completed',
             step: 1,
-            usage: { input_tokens: 500, output_tokens: 300, total_tokens: 800 },
+            usage: {
+              input_tokens: 500,
+              output_tokens: 300,
+              total_tokens: 800,
+              cached_input_tokens: 400,
+            },
           }),
           event({ type: 'agent_completed', event_time: '2026-08-20T00:00:10+00:00' }),
         ]}
       />,
     )
     expect(html).toContain('turn-usage')
-    expect(html).toContain('1 step')
-    expect(html).toContain('500 in')
-    expect(html).toContain('300 out')
+    expect(html).toContain('第 1 步')
+    expect(html).toContain('0 次操作')
+    expect(html).toContain('输入 500')
+    expect(html).toContain('输出 300')
+    expect(html).toContain('缓存 80%')
     expect(html).toContain('10.0s')
   })
 
-  it('完成后不显示右侧 Completed 状态（仅保留 data-status）', () => {
+  it('Provider 未报告缓存细分时明确显示暂无', () => {
+    const html = renderToStaticMarkup(
+      <LiveAgentTurn
+        runId="run-1"
+        step={1}
+        events={[
+          event({
+            type: 'model_completed',
+            step: 1,
+            usage: { input_tokens: 500, output_tokens: 20, total_tokens: 520 },
+          }),
+        ]}
+      />,
+    )
+
+    expect(html).toContain('缓存 暂无')
+  })
+
+  it('完成后不重复显示右侧完成状态（仅保留 data-status）', () => {
     const html = renderToStaticMarkup(
       <LiveAgentTurn
         runId="run-1"
@@ -252,12 +243,12 @@ describe('LiveAgentTurn', () => {
     )
     expect(html).toContain('data-status="completed"')
     expect(html).not.toContain('agent-turn__status')
-    expect(html).not.toContain('Completed')
+    expect(html).not.toContain('已完成')
   })
 
   it.each([
-    ['failed', 'agent_failed', 'Stopped'],
-    ['interrupted', 'agent_failed', 'Interrupted'],
+    ['failed', 'agent_failed', '执行已停止'],
+    ['interrupted', 'agent_failed', '执行已中断'],
   ] as const)('持久展示 %s 终态', (status, type, label) => {
     const html = renderToStaticMarkup(
       <LiveAgentTurn

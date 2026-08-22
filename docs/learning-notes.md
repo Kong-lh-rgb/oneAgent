@@ -18,8 +18,8 @@ Vesta 当前是一个运行在本地终端中的 Tool-Calling Agent，已经具�
 - Sparse, Model-Directed 长期记忆（Markdown 文件，模型自主 Recall）；
 - 结构化 AgentResult 和 AgentEvent。
 
-Subagent、MCP、Scheduler、FastAPI 和前端仍未实现；这些能力不应该提前把职责
-塞进 Runtime。
+Subagent 仍未实现；MCP、Scheduler、Host transport 与 Desktop 已在后续阶段完成，
+并继续保持在 Runtime 外围的应用编排或基础设施层。
 
 ## 2. 总体分层
 
@@ -1991,3 +1991,181 @@ Run Budget：一个Agent Loop累计请求了多少模型计算
    `agent_completed`。
 7. 50K/75K/100K与8/10/12是可调的初始治理基线，不是从Context Window推导出的
    固定真理；后续应根据真实Run成功率、cache结构和成本分布校准。
+
+## 48. 扩展安装是 Host 管理能力，不是 Agent Tool（2026-08-22）
+
+模型“使用扩展”和用户“安装扩展”是两条不同的数据链：
+
+```text
+使用：Skill Catalog / Tool Registry → AgentRuntime 按需激活或调用
+安装：Desktop 表单 → JSON-RPC → Host 校验 → 原子写入配置
+```
+
+关键细节：
+
+1. Skill 安装输入是结构化 name、description、scope 和 instructions。Host 生成 YAML
+   Front Matter，并复用正式 Skill Parser 校验，避免 UI 与 Runtime 各维护一套格式。
+2. MCP 参数不能用一条 shell 字符串猜测拆词；界面按“一行一个参数”收集，最终明确写成
+   JSON `args` 数组。环境变量同理解析为 object，并鼓励用 `${ENV_NAME}` 引用密钥。
+3. Renderer 不直接写文件。Host 对重复名称、路径、Schema 和已有配置负责，并通过临时
+   文件加 replace 原子提交；失败时不得损坏原配置。
+4. 添加 MCP 配置不等于启动 MCP Server。V1 Manager 没有动态重载，因此 mutation 只写
+   JSON并返回 `restart_required`，重启 Host 后才执行命令、握手和注册工具。
+5. 扩展安装具有供应链风险，必须由用户在设置页明确发起。模型可以使用已经安装的 Skill
+   和 MCP 工具，但不能把一句自然语言请求自动升级为宿主机代码安装权限。
+6. 配置读取接口只返回环境变量名称，不返回值。即使是本地应用，也不应让 Renderer 获得
+   无需展示的长期密钥。
+7. “停用”必须可逆且不能伪装成删除。Skill 通过同作用域 `.disabled/<name>` 目录隔离，
+   因而立即退出 Catalog、资源仍完整保留；重新启用只是安全地移回正式目录。
+8. 管理视图不能复用 Runtime Catalog 的 project-overrides-user 合并结果，否则同名 user
+   Skill 会从设置页消失、无法管理。管理清单必须保留 `(scope, name)` 精确身份。
+9. MCP 配置变更和当前进程状态是两份事实。删除 JSON 条目不会瞬间终止已经启动的子进程，
+   所以 Host 必须持续暴露全局 `restart_required`，直到进程重启重新加载配置。
+10. 删除属于不可逆管理操作：Desktop 二次确认，Host 再按受控根目录、合法 name、scope
+    和 enabled 状态解析精确目标，不能接受 Renderer 直接传任意文件路径。
+
+## 49. 外部扩展导入必须是“翻译计划”，不能是“粘贴即执行”（2026-08-22）
+
+外部生态把安装方式混在同一个文本入口里：GitHub 仓库、Skill CLI 命令、Claude
+风格 `mcpServers` 和 Vesta `servers` 都可能被用户复制进来。Host 应先把它们翻译成
+统一计划，再由人确认，而不是猜一段 shell 命令并立即运行：
+
+```text
+外部文本
+  → 本地 Parse / Normalize（零副作用）
+  → Import Plan + SHA-256 fingerprint
+  → 用户查看来源、目标、命令和警告
+  → Confirm
+  → 重新解析并核对 fingerprint
+  → 静态 Skill 下载 / MCP 配置原子写入
+```
+
+关键细节：
+
+1. `npx skills add owner/repo` 是一次性 Skill 安装语义，不是 stdio MCP Server；若把它
+   交给 MCP Manager，进程安装后退出，Initialize 必然失败。
+2. Preview 不能联网或执行任何命令，否则“看一下会发生什么”本身已经产生供应链副作用。
+3. Confirm 不能只信 Renderer 传回的结构化 Plan。Host 必须用原始输入重新解析，并核对
+   输入、scope、permission 共同生成的 SHA-256 指纹，防止预览后内容变化。
+4. GitHub Skill 导入不需要执行仓库代码。下载受限大小的 ZIP 后，只提取通过正式 Parser
+   的 `SKILL.md` 和受支持资源目录；拒绝路径穿越与符号链接，再走 SkillStore 原子安装。
+5. 外部 MCP JSON 只是配置翻译：`mcpServers` object 转成 Vesta `servers` model，非法名称
+   确定性规范化，env 在预览中只暴露变量名；实际进程仍到 Host 重启后才启动。
+6. “用户确认下载”与“用户批准 MCP 每次工具调用”是两个不同 Gate：前者治理供应链安装，
+   后者治理运行时副作用，不能因为安装时确认过就默认授予工具永久权限。
+
+## 50. 能调用 MCP 不等于能审视 MCP；原始推理也不等于 Trace（2026-08-22）
+
+MCP 延迟加载解决的是“按任务找到并调用某个外部工具”，不是“列出宿主当前连接的所有
+Server和工具”。这两类问题必须有不同入口：
+
+```text
+业务调用：tool_search → 激活相关 MCP Schema → ToolExecutor
+运行审视：mcp_status → MCPClientManager.statuses() → 紧凑只读快照
+```
+
+关键细节：
+
+1. 不应为了回答管理问题把全部 MCP Schema常驻注入模型；一个小型 `mcp_status` 可以直接
+   读取 Manager 的权威内存状态，并保留 MCP 工具本身的 progressive disclosure。
+2. 状态查询必须观察现有连接，不能重新启动 Server。重新创建 Client 不仅慢，还会产生
+   重复子进程、额外日志和与当前 Host 不一致的瞬时状态。
+3. Desktop RPC 与 Agent Tool 是两个消费边界。`extension.list` 面向管理页面；模型需要
+   独立、收窄、只读的 Tool，而不是获得调用任意 Host RPC 的能力。
+4. Provider `reasoning_content` 是模型原始内部推理，可能包含试探路径、错误猜测和协议
+   细节。它不是 Vesta Trace，不应流向聊天、持久消息或面向用户的实时面板。
+5. Vesta Trace 应由 Harness 的结构化事实构成：model started/completed、tool started/result、
+   approval、compaction、usage 和终态。它可审计且可复现，不依赖展示模型思维链。
+6. 推理隔离要双层生效：Runtime 在事件与持久化前清除；Desktop 对旧数据库中的历史
+   reasoning 也忽略。这样无需破坏性迁移已有数据，同时新数据不再继续积累。
+7. Reflection Gate 的能力查询语言必须覆盖自然口语，如“我看看、看一下、看下”，否则
+   一个纯状态查询会在 Run 结束后再次调用模型，产生明确无价值的 Post-Run 成本。
+
+## 51. 用户可见“思考”应是结构化运行状态，不是模型思维链（2026-08-22）
+
+用户真正需要知道的是 Agent 当前在做什么、是否需要自己介入，以及执行是否取得了可验证
+的结果，而不是 Provider 生成的逐字推理。合适的数据流是：
+
+```text
+AgentEvent 事实
+  → 展示层 ViewModel
+  → 中文阶段 + 动作时间线 + 用量统计
+```
+
+关键细节：
+
+1. “正在分析、正在执行、等待确认、正在验证”是稳定的产品阶段；它们来自模型、工具、
+   审批和验证事件，而不是从自然语言 reasoning 中猜测。
+2. 当前动作应使用工具名和结构化参数生成，例如“读取文件”“输入文本”“查看 MCP 工具”，
+   不能直接展示协议字段或原始 JSON。
+3. 一轮执行的辅助信息只保留有决策价值的字段：步骤、操作次数、输入/输出用量、耗时和
+   目标应用。详细参数仍进入详情与 Trace，不挤占主聊天界面。
+4. `approval resolved` 只代表用户作出决定，电脑动作投递也不代表界面效果成立；因此
+   “等待确认”和“正在验证”必须是两个不同状态。
+5. 中文化应发生在展示边界。底层事件类型和 Provider 协议继续保持稳定，避免为了改文案
+   破坏持久化数据与跨端接口。
+
+## 52. 时间线标记与裁切边界不能相互冲突（2026-08-22）
+
+时间线常见的实现方式是让圆形标记跨在容器左边框上，但如果同一容器还承担高度动画并设置
+`overflow: hidden`，负坐标标记就会被裁掉。更稳定的实现是：
+
+1. 标记作为网格第一列正常参与布局，始终位于容器边界内。
+2. 连接线由每个非末尾条目的伪元素绘制，只连接相邻节点，不使用贯穿整个列表的边框。
+3. 高度折叠和裁切继续由列表容器负责，节点无需依赖越界定位，因此动画与静态布局不会互相
+   破坏。
+4. 动作文字、最终回复和作者标题应共享同一内容起点；层级主要通过图标、字号和颜色表达，
+   不应依赖不断叠加的左边距。
+
+## 53. 压缩更小不等于缓存更好：Run 内应冻结已准备前缀（2026-08-22）
+
+Prompt Cache依赖确定性前缀。若每个Step都从完整原始历史重新计算“应该删掉哪些旧工具轮”，
+即使最终请求长度都在目标范围内，删除边界也可能随新结果增长而前移，从而让整个历史前缀
+发生变化。
+
+Vesta现在采用以下续接规则：
+
+```text
+Step 1：原始历史 + 稳定系统上下文
+  → ContextManager压缩/摘要
+  → 保存实际发送前缀 P1
+
+Step 2：若系统上下文和工具集合未变化
+  → P1 + 新Assistant消息 + 新ToolResult
+  → 仅在再次越线时执行下一次压缩
+```
+
+关键细节：
+
+1. 缓存基线必须保存“实际发送给Provider的消息”，不能保存原始数据库历史；否则下一步仍会
+   重做已经完成的压缩投影。
+2. 原始历史仍是持久化权威源。稳定前缀只属于当前Run的模型请求视图，不能写回聊天数据库。
+3. Task修订、Skill激活、延迟工具激活或工具集合变化都属于真实语义变化，必须主动重建请求；
+   缓存不能凌驾于状态正确性。
+4. 工具Schema除了内容稳定，还必须顺序稳定。模型可见定义按工具名排序，使不同注册时序产生
+   相同请求结构。
+5. Harness只能保证“具备缓存命中的前提”，不能承诺Provider一定命中。Trace因此同时记录
+   `cache_prefix_reused`和Provider返回的`cached_input_tokens`，两者分别回答“请求是否稳定”和
+   “服务端是否实际复用”。
+6. 当已续接候选再次超过工具结果或上下文预算时，ContextManager仍可裁剪并建立新基线；这次
+   缓存断点是有价值的治理动作，而不是每Step无意义漂移。
+
+## 54. 缓存命中率必须保留“未知”语义（2026-08-22）
+
+消息底部的缓存命中率使用以下口径：
+
+```text
+cache hit rate = cached_input_tokens / input_tokens
+```
+
+这里的`input_tokens`包含缓存与未缓存输入，因而百分比表达Provider处理的输入中有多少复用了
+缓存。实现时必须注意：
+
+1. `cached_input_tokens = 0`表示Provider明确报告未命中；字段为`null/undefined`则表示Provider
+   没有提供该维度，两者不能混为一谈。
+2. 多Step聚合时，只要有一次调用缺少缓存字段，整轮缓存率就应保持未知；把已知部分相加再除
+   以全部输入会系统性低估命中率。
+3. Run终态应优先使用Harness已经聚合的AgentResult Usage，运行中才临时累计各个
+   `model_completed`事件，避免两种口径在同一条消息上跳变。
+4. 缓存命中率描述的是处理结构，不等于费用折扣比例；不同Provider对缓存读取、缓存写入和
+   普通输入有不同价格。

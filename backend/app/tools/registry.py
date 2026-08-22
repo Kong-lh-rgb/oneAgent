@@ -72,9 +72,9 @@ class ToolRegistry:
         return tuple(self._tools)
 
     def deferred_names(self) -> tuple[str, ...]:
-        """返回按注册顺序排列的延迟加载工具名。"""
+        """返回按名称稳定排序的延迟加载工具名。"""
 
-        return tuple(name for name in self._tools if name in self._deferred_names)
+        return tuple(sorted(self._deferred_names))
 
     def is_deferred(self, name: str) -> bool:
         return name in self._deferred_names
@@ -88,9 +88,9 @@ class ToolRegistry:
 
         activated = set(activated_names)
         return tuple(
-            tool.definition
-            for name, tool in self._tools.items()
-            if tool.definition.permission.model_visible()
+            self._tools[name].definition
+            for name in sorted(self._tools)
+            if self._tools[name].definition.permission.model_visible()
             and (name not in self._deferred_names or name in activated)
         )
 
@@ -121,10 +121,10 @@ class ToolRegistry:
         allowed = self.allowed_names_for_mode(mode)
         activated = set(activated_names)
         return tuple(
-            tool.definition
-            for name, tool in self._tools.items()
+            self._tools[name].definition
+            for name in sorted(self._tools)
             if name in allowed
-            and tool.definition.permission.model_visible()
+            and self._tools[name].definition.permission.model_visible()
             and (name not in self._deferred_names or name in activated)
         )
 

@@ -106,6 +106,8 @@ class AgentEvent(BaseModel):
     summarized_conversation_blocks: int | None = Field(default=None, ge=0)
     summary_usage: ModelUsage | None = None
     summary_error: str | None = None
+    cache_prefix_reused: bool | None = None
+    cache_prefix_message_count: int | None = Field(default=None, ge=0)
     reflection_triggered: bool | None = None
     reflection_action: str | None = None
     reflection_duration_ms: float | None = Field(default=None, ge=0.0)
