@@ -9,13 +9,14 @@ import {
   listConversations,
   sendMessage,
 } from '../api/conversations'
-import { cancelRun, listRuns, recoverRun } from '../api/runs'
+import { cancelRun, interruptRun, listRuns, recoverRun } from '../api/runs'
 import { getTask, planAccept, planReject } from '../api/tasks'
 import type { AgentMode, Message, Task } from '../api/types'
 import { buildTurnView } from '../agent/turnPresentation'
 import { chatShouldShowApproval } from '../approval/computerApproval'
 import ApprovalCard from '../components/ApprovalCard'
 import ChatEmptyState from '../components/ChatEmptyState'
+import ChatSidePanel from '../components/ChatSidePanel'
 import RunStatusBar from '../components/RunStatusBar'
 import Composer from '../components/Composer'
 import type { ComposerCommand } from '../components/Composer'
@@ -38,12 +39,21 @@ export default function ChatPage({
   const queryClient = useQueryClient()
   const eventsByRun = useEventsStore((state) => state.eventsByRun)
   const runStatuses = useEventsStore((state) => state.runStatuses)
+  const connected = useEventsStore((state) => state.connected)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [lastRunId, setLastRunId] = useState<string | null>(null)
   const [mode, setMode] = useState<AgentMode>('normal')
   const [draft, setDraft] = useState('')
   const [conversationSidebarOpen, setConversationSidebarOpen] = useState(true)
-  const [activityOpen, setActivityOpen] = useState(false)
+  // 右侧面板点击顺序：先点击的排前面（竖向排列时在上方），后点击的追加到下面。
+  const [panelOrder, setPanelOrder] = useState<('panel' | 'activity')[]>(['panel'])
+  const togglePanel = (which: 'panel' | 'activity'): void => {
+    setPanelOrder((prev) =>
+      prev.includes(which)
+        ? prev.filter((p) => p !== which)
+        : [...prev, which],
+    )
+  }
   const [planTask, setPlanTask] = useState<Task | null>(null)
   const [planResolved, setPlanResolved] = useState<string | null>(null)
   const [optimisticMessage, setOptimisticMessage] = useState<{
@@ -89,6 +99,8 @@ export default function ChatPage({
   }, [eventsByRun, runStatuses, selectedId])
   const activeRunId = liveRunId ?? lastRunId
   const activeRunStatus = activeRunId ? runStatuses[activeRunId] : undefined
+  const isRunning = Boolean(activeRunId) &&
+    (activeRunStatus === 'running' || activeRunStatus === 'pending')
 
   // 实时 Run 一旦出现就记住 id；终态通知可能早于 conversation.send 返回，
   // 不能因 running → completed 让 Persistent AgentTurn 短暂丢失事件。
@@ -96,8 +108,9 @@ export default function ChatPage({
     if (liveRunId) setLastRunId(liveRunId)
   }, [liveRunId])
 
-  // 后端 SQLite 是权威：会话切换/挂载时同步该会话 runs 的真实状态，避免历史
-  // run 因错过实时事件而长期停留在 running（例如取消广播丢失）。
+  // 后端 SQLite 是权威：会话切换/挂载/断线重连（后端重启）时同步该会话 runs 的
+  // 真实状态，避免历史 run 因错过实时事件而长期停留在 running/pending（暂停
+  // 按钮、LiveAgentTurn 卡住的根源）；重连后同时刷新会话数据。
   useEffect(() => {
     if (!selectedId) return
     let cancelled = false
@@ -111,10 +124,15 @@ export default function ChatPage({
       .catch(() => {
         /* 同步失败不影响 UI；实时事件仍会工作 */
       })
+    if (connected) {
+      void queryClient.invalidateQueries({ queryKey: ['conversation', selectedId] })
+      void queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      void queryClient.invalidateQueries({ queryKey: ['runs'] })
+    }
     return () => {
       cancelled = true
     }
-  }, [selectedId])
+  }, [selectedId, connected, queryClient])
 
   // conversation → 最近 run 状态（让会话列表呈现 Agent workspace 状态）。
   const { conversationStatus, conversationActivity } = useMemo(() => {
@@ -215,6 +233,18 @@ export default function ChatPage({
     onSettled: () => setOptimisticMessage(null),
   })
 
+  // 断线重连兜底：若发送请求在断线期间未 settle（异常路径，正常断线 rpcClient
+  // 会 reject 挂起请求），连接恢复时重置，避免 Composer 输入框被 sending 锁死。
+  const prevConnectedRef = useRef(connected)
+  useEffect(() => {
+    const reconnected = !prevConnectedRef.current && connected
+    prevConnectedRef.current = connected
+    if (reconnected && sendMutation.isPending) {
+      setOptimisticMessage(null)
+      sendMutation.reset()
+    }
+  }, [connected, sendMutation])
+
   const resolvePlanMutation = useMutation({
     mutationFn: (action: { taskId: string; decision: 'accept' | 'reject' }) =>
       action.decision === 'accept'
@@ -241,7 +271,17 @@ export default function ChatPage({
       void queryClient.invalidateQueries({ queryKey: ['runs'] })
       void queryClient.invalidateQueries({ queryKey: ['conversation', selectedId] })
     } catch (error) {
-      setSendError(error instanceof Error ? error.message : String(error))
+      const message = error instanceof Error ? error.message : String(error)
+      const stateMatch = /cannot cancel run in state (\w+)/.exec(message)
+      if (activeRunId && stateMatch) {
+        // run 已进入终态（状态广播延迟导致暂停按钮仍可点）：修正本地状态，
+        // 这是用户点暂停的正常收敛路径，不当作错误提示。
+        useEventsStore.getState().syncRunStatuses({ [activeRunId]: stateMatch[1] })
+        void queryClient.invalidateQueries({ queryKey: ['runs'] })
+        void queryClient.invalidateQueries({ queryKey: ['conversation', selectedId] })
+      } else {
+        setSendError(message)
+      }
     }
   }
 
@@ -254,6 +294,31 @@ export default function ChatPage({
       void queryClient.invalidateQueries({ queryKey: ['conversation', selectedId] })
     } catch (error) {
       setSendError(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  /** 暂停（中断）Run：保留 Checkpoint，可从断点继续（Recover）。 */
+  const pauseRun = async (): Promise<void> => {
+    if (!activeRunId) return
+    try {
+      const updated = await interruptRun(activeRunId)
+      // 即使 run.status 广播错过，也立即用 RPC 响应里的权威状态覆盖 store。
+      useEventsStore
+        .getState()
+        .syncRunStatuses({ [activeRunId]: updated.status })
+      void queryClient.invalidateQueries({ queryKey: ['runs'] })
+      void queryClient.invalidateQueries({ queryKey: ['conversation', selectedId] })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const stateMatch = /cannot interrupt run in state (\w+)/.exec(message)
+      if (activeRunId && stateMatch) {
+        // run 已进入终态（状态广播延迟）：修正本地状态，不当作错误提示。
+        useEventsStore.getState().syncRunStatuses({ [activeRunId]: stateMatch[1] })
+        void queryClient.invalidateQueries({ queryKey: ['runs'] })
+        void queryClient.invalidateQueries({ queryKey: ['conversation', selectedId] })
+      } else {
+        setSendError(message)
+      }
     }
   }
 
@@ -383,14 +448,14 @@ export default function ChatPage({
             setLastRunId(null)
             setPlanTask(null)
             setPlanResolved(null)
-            setActivityOpen(false)
+            setPanelOrder((prev) => prev.filter((p) => p !== 'activity'))
             setLiveTurnActive(false)
           }}
           onNew={() => newConversationMutation.mutate()}
         />
       </aside>
 
-      <main className="conversation-main">
+      <div className="chat-right">
         <RunStatusBar
           title={selectedConversation?.title || 'New conversation'}
           conversationSidebarOpen={conversationSidebarOpen}
@@ -405,14 +470,17 @@ export default function ChatPage({
           stopReason={stopReason}
           mode={mode}
           turnState={activeEvents.length > 0 ? turnView.status : undefined}
-          activityOpen={activityOpen}
-          onToggleActivity={() => setActivityOpen((open) => !open)}
+          activityOpen={panelOrder.includes('activity')}
+          onToggleActivity={() => togglePanel('activity')}
+          panelOpen={panelOrder.includes('panel')}
+          onTogglePanel={() => togglePanel('panel')}
           onStop={() => void stopRun()}
           onRecover={() => void recoverRunAction()}
         />
-
-        <div
-          ref={conversationScrollRef}
+        <div className="chat-right__body">
+          <main className="conversation-main">
+            <div
+              ref={conversationScrollRef}
           onScroll={handleConversationScroll}
           className={`conversation-scroll ${showNewConversationHome ? 'conversation-scroll--empty' : ''}`}
         >
@@ -443,7 +511,11 @@ export default function ChatPage({
                 step={latestModelStep ?? null}
                 events={activeEvents}
                 onRecover={() => void recoverRunAction()}
-                onInspect={() => setActivityOpen(true)}
+                onInspect={() =>
+                  setPanelOrder((prev) =>
+                    prev.includes('activity') ? prev : [...prev, 'activity'],
+                  )
+                }
               />
             ) : null}
 
@@ -490,20 +562,13 @@ export default function ChatPage({
         <Composer
           disabled={selectedId === null}
           sending={sendMutation.isPending}
+          running={isRunning}
+          onStop={() => void pauseRun()}
           mode={mode}
           onModeChange={setMode}
           value={draft}
           onValueChange={setDraft}
           commands={composerCommands}
-          contextHint={
-            pendingApproval
-              ? 'Approval required'
-              : turnView.capability
-                ? `${turnView.capability}${turnView.targetApp ? ` · ${turnView.targetApp}` : ''}`
-                : mode === 'plan'
-                  ? 'Plan · Read-only investigation'
-                  : null
-          }
           onSend={async (content) => {
             if (!selectedId) return
             setSendError(null)
@@ -524,14 +589,21 @@ export default function ChatPage({
               sendMode: mode,
             })
           }}
-        />
-      </main>
-
-      {activityOpen ? (
-        <div className="activity-drawer">
-          <RunActivity runId={activeRunId} onClose={() => setActivityOpen(false)} />
+          />
+          </main>
+          <div className="chat-panels">
+        {panelOrder.map((which) =>
+          which === 'panel' ? (
+            <ChatSidePanel key="panel" />
+          ) : (
+            <div key="activity" className="activity-drawer">
+              <RunActivity runId={activeRunId} onClose={() => togglePanel('activity')} />
+            </div>
+          ),
+        )}
         </div>
-      ) : null}
+      </div>
+      </div>
     </div>
   )
 }

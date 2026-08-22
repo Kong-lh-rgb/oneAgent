@@ -33,6 +33,14 @@ export async function cancelRun(runId: string): Promise<Run> {
   return data.run
 }
 
+/** 暂停（中断）Run：保留 Checkpoint，可从断点恢复。 */
+export async function interruptRun(runId: string): Promise<Run> {
+  const data = await rpcClient.call<{ run: Run }>(RpcMethods.runInterrupt, {
+    run_id: runId,
+  })
+  return data.run
+}
+
 export async function recoverRun(
   runId: string,
 ): Promise<{ recovered_from_run_id: string; run: Run; result: AgentResult | null }> {

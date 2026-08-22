@@ -565,8 +565,10 @@ def test_run_cancel_terminal_conflict(make_app) -> None:
                     {"conversation_id": conversation_id, "content": "运行"},
                 )[0]
             )["run"]["id"]
+            # run 已 completed：取消是幂等 no-op，返回当前终态，不再报 INVALID_STATE。
             message, _ = _rpc_call(websocket, 3, "run.cancel", {"run_id": run_id})
-            assert message["error"]["code"] == -32001
+            result = _require_result(message)
+            assert result["run"]["status"] == "completed"
 
 
 def test_run_recover_keeps_old_interrupted(make_app) -> None:

@@ -178,6 +178,13 @@ func handleRequest(_ payload: [String: Any]) {
 }
 
 // 主循环：逐行读 stdin，处理 JSON。
+//
+// 命令行进程必须显式初始化 CoreGraphics 会话：否则 ScreenCaptureKit 的
+// SCContentFilter(desktopIndependentWindow:) 会触发
+// “Assertion failed: (did_initialize), CGS_REQUIRE_INIT” 断言导致进程 abort。
+// CGMainDisplayID() 会建立到 WindowServer 的 CGS 连接；失败时返回 0 但不崩溃。
+_ = CGMainDisplayID()
+
 while let raw = readLine(strippingNewline: true) {
     let trimmed = raw.trimmingCharacters(in: .whitespaces)
     if trimmed.isEmpty { continue }

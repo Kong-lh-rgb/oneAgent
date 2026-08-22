@@ -24,29 +24,29 @@ export interface ActivityEntry {
 export function describeActivity(event: AgentEvent): string {
   switch (event.type) {
     case 'agent_started':
-      return 'Started working'
+      return '开始执行'
     case 'model_started':
-      return 'Thinking'
+      return '思考中'
     case 'model_completed':
-      return event.message?.tool_calls?.length ? 'Choosing the next action' : 'Writing a response'
+      return event.message?.tool_calls?.length ? '选择下一步动作' : '生成回复'
     case 'tool_started':
-      return `Running ${event.tool_call?.name ?? 'tool'}`
+      return `运行 ${event.tool_call?.name ?? '工具'}`
     case 'tool_completed':
       return event.tool_result?.success
-        ? `Completed ${event.tool_result.tool_name}`
-        : `Failed ${event.tool_result?.tool_name ?? 'tool'}`
+        ? `完成 ${event.tool_result.tool_name}`
+        : `失败 ${event.tool_result?.tool_name ?? '工具'}`
     case 'tool_approval_required':
-      return `Waiting for approval`
+      return '等待审批'
     case 'tool_approval_completed':
-      return 'Approval received'
+      return '已批准'
     case 'memory_reflection_started':
-      return 'Saving useful context'
+      return '保存有用上下文'
     case 'memory_reflection_completed':
-      return 'Context saved'
+      return '上下文已保存'
     case 'agent_completed':
-      return 'Finished'
+      return '执行完成'
     case 'agent_failed':
-      return 'Run failed'
+      return '执行失败'
     default:
       return event.type.replaceAll('_', ' ')
   }
@@ -96,7 +96,7 @@ export function buildActivityEntries(events: AgentEvent[]): ActivityEntry[] {
     if (event.type === 'tool_approval_required') {
       entries.push({
         id: event.event_id,
-        label: 'Waiting for your approval',
+        label: '等待你的审批',
         meta: event.tool_call?.name,
         state: 'waiting',
         time: formatEventTime(event.event_time),
@@ -108,7 +108,7 @@ export function buildActivityEntries(events: AgentEvent[]): ActivityEntry[] {
     if (event.type === 'model_started') {
       const entry: ActivityEntry = {
         id: event.event_id,
-        label: 'Thinking through the next step',
+        label: '思考下一步',
         state: 'active',
         time: formatEventTime(event.event_time),
       }
@@ -121,7 +121,7 @@ export function buildActivityEntries(events: AgentEvent[]): ActivityEntry[] {
       const hasTools = (event.message?.tool_calls?.length ?? 0) > 0
       entries[lastThinkingIndex] = {
         ...entries[lastThinkingIndex],
-        label: hasTools ? 'Selected the next action' : 'Prepared the response',
+        label: hasTools ? '已选择下一步动作' : '已生成回复',
         state: 'done',
       }
       continue
@@ -130,7 +130,7 @@ export function buildActivityEntries(events: AgentEvent[]): ActivityEntry[] {
     if (event.type === 'memory_reflection_started') {
       entries.push({
         id: event.event_id,
-        label: 'Saving useful context',
+        label: '保存有用上下文',
         state: 'active',
         time: formatEventTime(event.event_time),
       })
@@ -140,7 +140,7 @@ export function buildActivityEntries(events: AgentEvent[]): ActivityEntry[] {
     if (event.type === 'agent_completed' || event.type === 'agent_failed') {
       entries.push({
         id: event.event_id,
-        label: event.type === 'agent_completed' ? 'Finished the run' : 'Run failed',
+        label: event.type === 'agent_completed' ? '执行完成' : '执行失败',
         state: event.type === 'agent_completed' ? 'done' : 'failed',
         time: formatEventTime(event.event_time),
       })
@@ -173,10 +173,10 @@ export function ActivityTechnicalDetails({
   const providerEvent = events.find((event) => event.provider || event.model)
   return (
     <details className="activity-details activity-section">
-      <summary>Technical details</summary>
+      <summary>技术详情</summary>
       <dl className="activity-technical-meta">
-        <div><dt>Provider</dt><dd>{providerEvent?.provider ?? '—'}</dd></div>
-        <div><dt>Model</dt><dd>{providerEvent?.model ?? '—'}</dd></div>
+        <div><dt>提供方</dt><dd>{providerEvent?.provider ?? '—'}</dd></div>
+        <div><dt>模型</dt><dd>{providerEvent?.model ?? '—'}</dd></div>
       </dl>
       <div className="activity-details__list">
         {events.map((event) => (
@@ -193,7 +193,7 @@ export function ActivityTechnicalDetails({
 export function ActivityItems({ events }: { events: AgentEvent[] }): React.JSX.Element {
   const entries = buildActivityEntries(events)
   if (entries.length === 0) {
-    return <EmptyState title="No activity yet" hint="Run progress will appear here." />
+    return <EmptyState title="暂无活动" hint="运行进度会显示在这里。" />
   }
   return (
     <ol className="activity-list">
@@ -238,8 +238,8 @@ export default function RunActivity({
     <aside className="activity" aria-label="Run activity">
       <div className="activity__header">
         <div>
-          <strong>Activity</strong>
-          <span>What Vesta is doing</span>
+          <strong>活动</strong>
+          <span>Vesta 正在做什么</span>
         </div>
         <div className="activity__header-actions">
           {status ? <StatusDot tone={STATUS_TONE[status] ?? 'offline'} /> : null}
@@ -253,21 +253,21 @@ export default function RunActivity({
       <div className="activity__body">
         {runId ? (
           <section className="activity-section">
-            <h3>Overview</h3>
+            <h3>概览</h3>
             <dl className="activity-overview">
-              <div><dt>Status</dt><dd>{status ?? view.status}</dd></div>
-              <div><dt>Run</dt><dd className="mono">{runId.slice(0, 8)}</dd></div>
-              <div><dt>Steps</dt><dd>{view.steps}</dd></div>
-              <div><dt>Actions</dt><dd>{view.toolCount}</dd></div>
-              <div><dt>Duration</dt><dd>{formatDuration(view.durationMs) || '—'}</dd></div>
-              <div><dt>Tokens</dt><dd>{view.usage ? formatTokens(view.usage.totalTokens) : '—'}</dd></div>
-              {view.capability ? <div><dt>Capability</dt><dd>{view.capability}</dd></div> : null}
-              {view.targetApp ? <div><dt>Target</dt><dd>{view.targetApp}</dd></div> : null}
+              <div><dt>状态</dt><dd>{status ?? view.status}</dd></div>
+              <div><dt>运行</dt><dd className="mono">{runId.slice(0, 8)}</dd></div>
+              <div><dt>步骤</dt><dd>{view.steps}</dd></div>
+              <div><dt>动作</dt><dd>{view.toolCount}</dd></div>
+              <div><dt>耗时</dt><dd>{formatDuration(view.durationMs) || '—'}</dd></div>
+              <div><dt>Token</dt><dd>{view.usage ? formatTokens(view.usage.totalTokens) : '—'}</dd></div>
+              {view.capability ? <div><dt>能力</dt><dd>{view.capability}</dd></div> : null}
+              {view.targetApp ? <div><dt>目标</dt><dd>{view.targetApp}</dd></div> : null}
             </dl>
           </section>
         ) : null}
         <section className="activity-section">
-          <h3>Execution</h3>
+          <h3>执行</h3>
           <ActivityItems events={events} />
         </section>
         <ActivityTechnicalDetails events={events} />

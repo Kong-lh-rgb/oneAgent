@@ -22,6 +22,8 @@ class AgentStopReason(StrEnum):
     MODEL_ERROR = "model_error"
     REPEATED_TOOL_CALL = "repeated_tool_call"
     MAX_STEPS = "max_steps"
+    CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
 
 
 class AgentError(BaseModel):

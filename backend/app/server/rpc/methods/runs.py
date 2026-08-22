@@ -70,6 +70,26 @@ async def run_cancel(params: dict[str, Any], ctx: RpcContext) -> dict[str, Any]:
     return {"run": updated}
 
 
+async def run_interrupt(params: dict[str, Any], ctx: RpcContext) -> dict[str, Any]:
+    """暂停（中断）Run：终态 INTERRUPTED，保留 Checkpoint，可被 recover 恢复。"""
+
+    run_id = _require_str(params, "run_id")
+    application = ctx.application
+    run = await application.run_manager.get_run(run_id)
+    if run is None:
+        raise JsonRpcError(RESOURCE_NOT_FOUND, "run not found")
+    try:
+        updated = await application.run_manager.interrupt(run.id)
+    except ValueError as exc:
+        raise JsonRpcError(INVALID_STATE, str(exc)) from exc
+    # interrupt 没有对应 AgentEvent，这里显式广播 run.status。
+    await ctx.connection.hub.broadcast(
+        "run.status",
+        {"run_id": run_id, "status": updated.status.value},
+    )
+    return {"run": updated}
+
+
 async def run_recover(params: dict[str, Any], ctx: RpcContext) -> dict[str, Any]:
     run_id = _require_str(params, "run_id")
     application = ctx.application
@@ -111,4 +131,5 @@ def register(dispatcher: RpcDispatcher) -> None:
     dispatcher.register("run.list", run_list)
     dispatcher.register("run.get", run_get)
     dispatcher.register("run.cancel", run_cancel)
+    dispatcher.register("run.interrupt", run_interrupt)
     dispatcher.register("run.recover", run_recover)

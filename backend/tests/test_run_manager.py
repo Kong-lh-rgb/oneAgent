@@ -354,7 +354,40 @@ async def test_cancel_running_run_during_tool_execution(manager_factory) -> None
     assert checkpoint.completed_tool_results == ()
 
 
-async def test_completed_run_cannot_be_cancelled(manager_factory) -> None:
+async def test_interrupt_running_run_preserves_checkpoint(manager_factory) -> None:
+    build_manager = manager_factory
+    config = ProviderConfig(
+        provider="blocking",
+        model="blocking-model",
+        api_key=SecretStr("offline-test-key"),
+        api_style=ApiStyle.CHAT_COMPLETIONS,
+    )
+    adapter = BlockingModelAdapter(config)
+    registry = ModelAdapterRegistry(ModelSettings(_env_file=None))
+    registry.register("blocking", lambda _: adapter, config=config)
+
+    manager, _, checkpoint_store = await build_manager(
+        registry, provider="blocking"
+    )
+
+    run_id, _ = await manager.start("你好", conversation_id="conv-1")
+    await adapter.started.wait()
+
+    interrupted = await manager.interrupt(run_id)
+
+    assert interrupted.status is RunStatus.INTERRUPTED
+    assert interrupted.completed_at is not None
+    assert adapter.cancelled is True
+    # Checkpoint 保留中断边界（可恢复）。
+    checkpoint = await checkpoint_store.get(run_id)
+    assert checkpoint is not None
+    assert checkpoint.status is CheckpointStatus.INTERRUPTED
+    # 幂等：再次 interrupt 返回当前状态，不报错。
+    again = await manager.interrupt(run_id)
+    assert again.status is RunStatus.INTERRUPTED
+
+
+async def test_terminal_run_cancel_is_idempotent(manager_factory) -> None:
     build_manager = manager_factory
     registry, _ = fake_registry([model_response(content="完成")])
     manager, _, _ = await build_manager(registry)
@@ -363,8 +396,9 @@ async def test_completed_run_cannot_be_cancelled(manager_factory) -> None:
     run = await manager.wait(run_id)
     assert run.status is RunStatus.COMPLETED
 
-    with pytest.raises(ValueError, match="cannot cancel"):
-        await manager.cancel(run_id)
+    # 已终态 Run 的 cancel 是幂等 no-op，不再抛错（前端可能重复点击暂停）。
+    again = await manager.cancel(run_id)
+    assert again.status is RunStatus.COMPLETED
 
 
 # ---------------------------------------------------------------------------
@@ -686,7 +720,7 @@ async def test_invalid_state_transitions_rejected(tmp_path) -> None:
     with pytest.raises(ValueError, match="invalid run transition"):
         await store.mark_cancelled(run2.id)
 
-    # 终态 Run 在 Manager 层也不能 cancel。
+    # 终态 Run 在 Manager 层的 cancel 是幂等 no-op（不抛错）。
     manager_runtime_registry, _ = fake_registry([model_response(content="完成")])
     checkpoint_store = SQLiteCheckpointStore(tmp_path / "vesta.db")
     await checkpoint_store.initialize()
@@ -700,8 +734,8 @@ async def test_invalid_state_transitions_rejected(tmp_path) -> None:
             checkpoint_store=checkpoint_store,
         ),
     )
-    with pytest.raises(ValueError, match="cannot cancel"):
-        await manager.cancel(run.id)
+    again = await manager.cancel(run.id)
+    assert again.status is RunStatus.COMPLETED
 
 
 # ---------------------------------------------------------------------------

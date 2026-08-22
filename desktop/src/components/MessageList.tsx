@@ -1,6 +1,5 @@
 import { memo } from 'react'
 import type { Message } from '../api/types'
-import { Icon } from './Icon'
 import { EmptyState } from './ui'
 import { AssistantContent } from './AssistantContent'
 import AssistantReasoning from './AssistantReasoning'
@@ -110,10 +109,10 @@ export default memo(function MessageList({
         return (
           <div key={turn.key} className="message-assistant">
             <div className="message-assistant__author">
-              <span className="message-assistant__avatar"><Icon name="agent" size={13} /></span>
+              <span className="message-assistant__avatar" aria-hidden="true" />
               Vesta
+              <AssistantReasoning text={turn.reasoning ?? ''} />
             </div>
-            <AssistantReasoning text={turn.reasoning ?? ''} />
             <AssistantContent content={turn.content} />
           </div>
         )

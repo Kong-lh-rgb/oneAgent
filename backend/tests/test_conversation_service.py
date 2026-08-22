@@ -30,6 +30,7 @@ from app.conversation import (
 from app.conversation.service import ConversationService
 from app.models.types import Message, MessageRole, ModelUsage
 from app.run import SQLiteRunStore
+from app.run.models import RunStatus
 from app.trace import SQLiteTraceStore
 
 
@@ -47,6 +48,10 @@ class StubRunManager:
         self.run_status = "completed"
         self.conversation_id: str | None = "conv-stub"
         self.missing_run = False
+        # 取消场景：result() 返回 None，wait() 返回 RunStatus.CANCELLED。
+        self.cancelled = False
+        # 暂停（中断）场景：result() 返回 None，wait() 返回 RunStatus.INTERRUPTED。
+        self.interrupted = False
 
     async def start(
         self,
@@ -98,14 +103,22 @@ class StubRunManager:
         return "run-2", None
 
     async def wait(self, run_id: str):
+        if self.cancelled:
+            status = RunStatus.CANCELLED
+        elif self.interrupted:
+            status = RunStatus.INTERRUPTED
+        else:
+            status = SimpleNamespace(value=self.run_status)
         return SimpleNamespace(
             id=run_id,
             stop_reason="final_answer",
-            status=SimpleNamespace(value=self.run_status),
+            status=status,
         )
 
-    def result(self, run_id: str) -> AgentResult:
+    def result(self, run_id: str) -> AgentResult | None:
         # RunManager.result 是同步方法（返回本进程最近结果）。
+        if self.cancelled or self.interrupted:
+            return None
         return self._agent_result
 
     async def get_run(self, run_id: str):
@@ -332,6 +345,77 @@ async def test_is_run_running(service_factory) -> None:
     assert await service.is_run_running("run-1") is True
     manager.run_status = "completed"
     assert await service.is_run_running("run-1") is False
+
+
+# ---------------------------------------------------------------------------
+# 7. 用户取消：Run 无 result 时合成终态结果并落库 + emit agent_cancelled
+# ---------------------------------------------------------------------------
+
+
+async def test_dispatch_cancelled_run_synthesizes_result(service_factory) -> None:
+    service, conversation_store, _, trace_store, manager = await service_factory(
+        _result_with(
+            (
+                _message(MessageRole.USER, "A"),
+                _message(MessageRole.ASSISTANT, "B"),
+            )
+        )
+    )
+    manager.cancelled = True
+    conversation = await conversation_store.create(
+        messages=(_message(MessageRole.USER, "A"),)
+    )
+
+    dispatch = await service.dispatch(
+        conversation_id=conversation.id,
+        content="C",
+        trigger=TriggerContext(source=ConversationSource.MANUAL),
+    )
+
+    # 落库：历史 A + 本次 user C + 中断说明 assistant（不再丢消息 / 不再报错）。
+    persisted = await conversation_store.load_messages(conversation.id)
+    assert [m.content for m in persisted] == [
+        "A",
+        "C",
+        "Run cancelled：已停止，未生成最终回复。（本轮未完成的内容不会显示）",
+    ]
+    assert dispatch.result.stop_reason is AgentStopReason.CANCELLED
+    # Trace 记录 agent_cancelled 终态事件。
+    trace = await trace_store.get("run-1")
+    assert trace is not None
+
+
+async def test_dispatch_interrupted_run_synthesizes_result(service_factory) -> None:
+    service, conversation_store, _, trace_store, manager = await service_factory(
+        _result_with(
+            (
+                _message(MessageRole.USER, "A"),
+                _message(MessageRole.ASSISTANT, "B"),
+            )
+        )
+    )
+    manager.interrupted = True
+    conversation = await conversation_store.create(
+        messages=(_message(MessageRole.USER, "A"),)
+    )
+
+    dispatch = await service.dispatch(
+        conversation_id=conversation.id,
+        content="C",
+        trigger=TriggerContext(source=ConversationSource.MANUAL),
+    )
+
+    # 落库：历史 A + 本次 user C + 中断说明（可恢复语义），不再抛错。
+    persisted = await conversation_store.load_messages(conversation.id)
+    assert [m.content for m in persisted] == [
+        "A",
+        "C",
+        "Run interrupted：已暂停，可从断点继续。（点击 Recover 从保存的中断点恢复）",
+    ]
+    assert dispatch.result.stop_reason is AgentStopReason.INTERRUPTED
+    # Trace 记录 agent_failed(interrupted) 终态事件。
+    trace = await trace_store.get("run-1")
+    assert trace is not None
 
 
 # ---------------------------------------------------------------------------

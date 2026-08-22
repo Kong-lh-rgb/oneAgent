@@ -59,7 +59,7 @@ describe('buildTurnView: tool timeline', () => {
     ])
     expect(view.tools).toHaveLength(1)
     expect(view.tools[0].state).toBe('done')
-    expect(view.tools[0].label).toBe('Typed “测试”')
+    expect(view.tools[0].label).toBe('已输入 “测试”')
     expect(view.toolCount).toBe(1)
     expect(view.durationMs).toBe(10_000)
   })
@@ -74,7 +74,7 @@ describe('buildTurnView: tool timeline', () => {
       }),
     ])
     expect(view.tools[0].state).toBe('failed')
-    expect(view.tools[0].label).toBe('Click failed')
+    expect(view.tools[0].label).toBe('点击失败')
   })
 
   it('toolCount 按 tool_call_id 去重', () => {
@@ -240,15 +240,15 @@ describe('label helpers', () => {
   })
 
   it('toolActiveLabel 带参数摘要', () => {
-    expect(toolActiveLabel('computer_type', { text: '测试' })).toBe('Typing “测试”')
-    expect(toolActiveLabel('read_file', { path: '/tmp/a.md' })).toBe('Reading /tmp/a.md')
-    expect(toolActiveLabel('computer_key', { key: 'n', modifiers: 'command' })).toBe('Pressing ⌘ N')
-    expect(toolActiveLabel('unknown_tool', {})).toBe('Running unknown tool')
+    expect(toolActiveLabel('computer_type', { text: '测试' })).toBe('输入 “测试”')
+    expect(toolActiveLabel('read_file', { path: '/tmp/a.md' })).toBe('读取 /tmp/a.md')
+    expect(toolActiveLabel('computer_key', { key: 'n', modifiers: 'command' })).toBe('按键 ⌘ N')
+    expect(toolActiveLabel('unknown_tool', {})).toBe('运行 unknown tool')
   })
 
   it('toolDoneLabel 完成/失败', () => {
-    expect(toolDoneLabel('computer_type', { text: 'x' }, true)).toBe('Typed “x”')
-    expect(toolDoneLabel('computer_type', { text: 'x' }, false)).toBe('Typing failed')
+    expect(toolDoneLabel('computer_type', { text: 'x' }, true)).toBe('已输入 “x”')
+    expect(toolDoneLabel('computer_type', { text: 'x' }, false)).toBe('输入失败')
   })
 })
 
@@ -296,7 +296,7 @@ describe('buildComputerContext', () => {
     })
     expect(context.target).toBe('TextEdit')
     expect(context.window).toBe('Untitled')
-    expect(context.lastAction).toBe('Typed “ Vesta”')
+    expect(context.lastAction).toBe('已输入 “ Vesta”')
     expect(context.verification).toBe('Verified')
     expect(context.executionMode).toBe('background ax')
   })

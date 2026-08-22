@@ -9,6 +9,7 @@ export const RpcMethods = {
   runList: 'run.list',
   runGet: 'run.get',
   runCancel: 'run.cancel',
+  runInterrupt: 'run.interrupt',
   runRecover: 'run.recover',
   traceGet: 'trace.get',
   automationList: 'automation.list',

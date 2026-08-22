@@ -16,6 +16,7 @@ import {
   Monitor,
   PanelLeftClose,
   PanelLeftOpen,
+  Pause,
   Plus,
   Send,
   Settings,
@@ -47,6 +48,7 @@ export type IconName =
   | 'panelOpen'
   | 'file'
   | 'close'
+  | 'pause'
   | 'agent'
 
 const ICONS: Record<IconName, LucideIcon> = {
@@ -69,6 +71,7 @@ const ICONS: Record<IconName, LucideIcon> = {
   panelOpen: PanelLeftOpen,
   file: FileText,
   close: X,
+  pause: Pause,
   agent: Bot,
 }
 

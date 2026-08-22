@@ -28,7 +28,7 @@ from app.models.types import AgentMode
 if TYPE_CHECKING:  # 仅类型引用，避免运行时耦合
     from app.approval import SQLiteApprovalStore
 
-from .models import Run, RunStatus
+from .models import TERMINAL_STATUSES, Run, RunStatus
 from .store import SQLiteRunStore
 
 _STALE_RUN_ERROR = "process restarted; run did not reach a terminal state"
@@ -248,6 +248,10 @@ class RunManager:
         """
 
         run = await self._run_store.require(run_id)
+        if run.status in TERMINAL_STATUSES:
+            # 幂等：run 已进入终态，取消是 no-op。前端暂停/停止按钮可能因
+            # run.status 广播延迟而仍可点击，此时应无副作用地返回当前状态。
+            return run
         if run.status is not RunStatus.RUNNING:
             raise ValueError(
                 f"cannot cancel run in state {run.status.value}"
@@ -268,6 +272,39 @@ class RunManager:
             await task
         except asyncio.CancelledError:
             pass
+        updated = await self._run_store.require(run_id)
+        await self._cancel_pending_approvals(run_id)
+        return updated
+
+    async def interrupt(self, run_id: str) -> Run:
+        """暂停（中断）正在执行的 Run，保留可恢复 Checkpoint。
+
+        与 ``cancel`` 的区别：终态是 INTERRUPTED（可被 ``recover`` 从断点继续），
+        而不是 CANCELLED（终止）。AgentRuntime 收到取消信号时会在安全边界把
+        Checkpoint 转 INTERRUPTED（保留 pending_tool_calls / completed_tool_results
+        与 phase）；这里先标 Run 为 INTERRUPTED，再发取消信号，_execute 的取消
+        分支看到已中断则不再覆盖为 CANCELLED。
+        """
+
+        run = await self._run_store.require(run_id)
+        if run.status in TERMINAL_STATUSES:
+            # 幂等：已终态，返回当前状态。
+            return run
+        if run.status is not RunStatus.RUNNING:
+            raise ValueError(
+                f"cannot interrupt run in state {run.status.value}"
+            )
+        await self._run_store.mark_interrupted(
+            run_id,
+            error="interrupted by user",
+        )
+        task = self._active_tasks.get(run_id)
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         updated = await self._run_store.require(run_id)
         await self._cancel_pending_approvals(run_id)
         return updated
@@ -371,10 +408,14 @@ class RunManager:
                     if event.result is not None:
                         result = event.result
             except asyncio.CancelledError:
-                await self._run_store.mark_cancelled(
-                    run_id,
-                    error="cancelled by user",
-                )
+                # cancel（终止）：RUNNING → CANCELLED；
+                # interrupt（暂停）：已先标为 INTERRUPTED，保持可恢复，不覆盖。
+                current = await self._run_store.get(run_id)
+                if current is None or current.status is RunStatus.RUNNING:
+                    await self._run_store.mark_cancelled(
+                        run_id,
+                        error="cancelled by user",
+                    )
                 raise
             except BaseException as exc:  # noqa: BLE001
                 await self._run_store.mark_failed(

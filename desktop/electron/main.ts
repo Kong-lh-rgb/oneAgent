@@ -127,9 +127,9 @@ function setApprovalVisible(visible: boolean): void {
 
 function createWindow(): void {
   const win = new BrowserWindow({
-    width: 1360,
+    width: 1520,
     height: 860,
-    minWidth: 980,
+    minWidth: 1100,
     minHeight: 640,
     title: 'Vesta',
     webPreferences: {

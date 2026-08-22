@@ -126,30 +126,28 @@ export default function LiveAgentTurn({
     >
       <header className="agent-turn__header">
         <div className="message-assistant__author">
-          <span className="message-assistant__avatar">
-            <Icon name="agent" size={13} />
-          </span>
+          <span
+            className={`message-assistant__avatar${!terminal ? ' message-assistant__avatar--busy' : ''}`}
+            aria-hidden="true"
+          />
           Vesta
+          <AssistantReasoning
+            text={reasoningText}
+            autoExpand={!terminal}
+            busy={!terminal && !text && Boolean(reasoningText)}
+            durationMs={terminal || text ? thinkingDuration : null}
+          />
         </div>
-        <span className={`agent-turn__status agent-turn__status--${status.tone}`}>
-          {!terminal ? <span className="live-turn__pulse" aria-hidden="true" /> : null}
-          {status.label}
-        </span>
+        {view.status !== 'completed' ? (
+          <span className={`agent-turn__status agent-turn__status--${status.tone}`}>
+            {!terminal ? <span className="live-turn__pulse" aria-hidden="true" /> : null}
+            {status.label}
+          </span>
+        ) : null}
       </header>
 
-      <AssistantReasoning
-        text={reasoningText}
-        autoExpand={!terminal && !text && view.tools.length === 0}
-        busy={!terminal && !text && Boolean(reasoningText)}
-        durationMs={terminal || text ? thinkingDuration : null}
-      />
-
-      {timeline && terminal ? (
-        <details className="agent-turn__work">
-          <summary>Show work <span>{view.toolCount} actions</span></summary>
-          {timeline}
-        </details>
-      ) : timeline}
+      {/* 动作时间线：仅运行中展示；聊天结束后不再显示（含 Show work 折叠块）。 */}
+      {!terminal ? timeline : null}
 
       {view.error ? (
         <div className="agent-turn__error">

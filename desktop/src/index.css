@@ -588,20 +588,31 @@ summary:focus-visible {
   display: flex;
   align-items: center;
   gap: 7px;
+  flex-wrap: wrap;
   margin-bottom: 9px;
   color: var(--text-secondary);
   font-size: 11.5px;
-  font-weight: 620;
+  font-weight: 700;
 }
 
+/* 头像：纯黑色圆圈（无机器人图标）。回复/思考进行中（--busy）时颜色在
+   黑↔灰之间深浅脉动，模拟“正在思考”的效果。 */
 .message-assistant__avatar {
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--border-subtle);
-  border-radius: 7px;
-  background: var(--bg-surface);
+  width: 20px;
+  height: 20px;
+  display: block;
+  flex: none;
+  border-radius: 50%;
+  background: #141414;
+}
+
+.message-assistant__avatar--busy {
+  animation: avatar-thinking 1.15s ease-in-out infinite;
+}
+
+@keyframes avatar-thinking {
+  0%, 100% { background-color: #141414; }
+  50% { background-color: #7b7b76; }
 }
 
 .message-assistant__body {
@@ -793,44 +804,45 @@ summary:focus-visible {
   font-variant-ligatures: none;
 }
 
-/* 模型思考过程：可折叠下拉栏，独立容器与最终答案分开，展开/收起平滑过渡 */
+/* 模型思考过程：头像行内的「下拉尖」toggle，点击展开/收起；思考内容与最终
+   答案彻底分开，思考中不占正文位置。assistant-reasoning 用 display:contents
+   融入 author 行：toggle 与头像平行，wrap 换行显示到下方。 */
 .assistant-reasoning {
-  margin: 2px 0 14px;
+  display: contents;
 }
 
 .assistant-reasoning__toggle {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 3px 8px 3px 6px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 999px;
-  background: var(--bg-surface-raised);
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
   color: var(--text-tertiary);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
   cursor: pointer;
   user-select: none;
-  transition: color 150ms ease, border-color 150ms ease;
+  transition: color 150ms ease, background 150ms ease;
 }
 
 .assistant-reasoning__toggle:hover {
   color: var(--text-secondary);
-  border-color: var(--border-strong);
+  background: var(--surface-hover);
 }
 
 .assistant-reasoning__chevron {
   width: 0;
   height: 0;
-  border-left: 4px solid currentColor;
-  border-top: 3px solid transparent;
-  border-bottom: 3px solid transparent;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
   transition: transform 180ms ease;
 }
 
 .assistant-reasoning--open .assistant-reasoning__chevron {
-  transform: rotate(90deg);
+  transform: rotate(180deg);
 }
 
 .assistant-reasoning__spinner {
@@ -848,6 +860,8 @@ summary:focus-visible {
 
 /* grid 0fr→1fr 高度过渡：展开/收起丝滑，无需 JS 测高 */
 .assistant-reasoning__wrap {
+  flex-basis: 100%;
+  min-width: 0;
   display: grid;
   grid-template-rows: 0fr;
   opacity: 0;
@@ -870,7 +884,7 @@ summary:focus-visible {
   border-left: 2px solid var(--accent);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   background: var(--surface);
-  color: var(--text-secondary);
+  color: #a2a49e;
   font-size: 12px;
   line-height: 1.6;
   white-space: pre-wrap;
@@ -885,7 +899,7 @@ summary:focus-visible {
 }
 
 .composer {
-  width: min(100%, 860px);
+  width: min(100%, 780px);
   min-height: 104px;
   margin: 0 auto;
   padding: 13px 13px 10px;
@@ -993,18 +1007,106 @@ summary:focus-visible {
   cursor: default;
 }
 
+/* 执行中：发送按钮转暂停键，用 danger 色提示“停止”。 */
+.composer__stop {
+  background: var(--danger);
+}
+.composer__stop:hover:not(:disabled) {
+  background: var(--danger);
+}
+
 /* Activity drawer and timeline */
-.activity-drawer {
+/* 右侧区域：顶栏横跨，下方为聊天区 + 右侧面板列 */
+.chat-right {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-right__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  min-width: 0;
+}
+
+/* 右侧面板列：Panel / Activity 竖向排列（先点击的在上）。
+   聊天区保持不动、宽度不变；浮窗从右侧滑出覆盖。面板展开时聊天区内容右侧
+   让出 320px，文字不被浮窗掩盖，且自然与浮窗挨着、左侧保留边距。 */
+.chat-right__body {
+  position: relative;
+}
+
+.chat-panels {
   position: absolute;
-  z-index: 25;
   top: 0;
   right: 0;
   bottom: 0;
-  width: min(350px, calc(100% - 32px));
-  border-left: 1px solid var(--border-subtle);
-  background: #12151a;
-  box-shadow: var(--shadow-drawer);
-  animation: drawer-in var(--transition-layout) both;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 14px 14px 0;
+}
+
+.chat-right__body:has(.chat-panels > *) .conversation-main {
+  padding-right: 320px;
+}
+
+/* 面板共用：毛玻璃、圆角、二分之一高度、进入动效 */
+.chat-side-panel,
+.activity-drawer {
+  flex: 0 1 50%;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  background: rgba(255, 255, 255, 0.46);
+  -webkit-backdrop-filter: blur(28px) saturate(160%);
+  backdrop-filter: blur(28px) saturate(160%);
+  box-shadow:
+    -8px 8px 28px rgba(61, 78, 102, 0.14),
+    0 14px 44px rgba(61, 78, 102, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  overflow: hidden;
+  animation: panel-in 240ms ease both;
+}
+
+@keyframes panel-in {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.chat-side-panel__header {
+  flex: 0 0 52px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px 0 16px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 16px 16px 0 0;
+}
+
+.chat-side-panel__header strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 680;
+}
+
+.chat-side-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px 16px;
+}
+
+.chat-side-panel__empty {
+  color: var(--text-tertiary);
+  font-size: 12px;
 }
 
 @keyframes drawer-in {
@@ -1672,11 +1774,6 @@ textarea,
   color: #fff;
 }
 
-.activity-drawer {
-  background: rgba(250, 252, 255, 0.72);
-  border-left-color: rgba(255, 255, 255, 0.86);
-}
-
 .activity-item__marker {
   border-color: rgba(78, 92, 112, 0.25);
   background: rgba(255, 255, 255, 0.78);
@@ -1778,8 +1875,8 @@ textarea,
 
 .live-turn__response {
   position: relative;
-  margin: 4px 0 0;
-  padding-top: 2px;
+  margin: 2px 0 0;
+  padding-top: 0;
 }
 
 .stream-cursor {
@@ -2527,6 +2624,7 @@ body.approval-app #root {
 /* ============ Agent Command Workspace：Run Status Bar ============ */
 
 .run-status-bar {
+  position: relative;
   flex: 0 0 auto;
   display: flex;
   flex-wrap: wrap;
@@ -2538,7 +2636,7 @@ body.approval-app #root {
 }
 
 .run-status-bar__identity {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   display: flex;
   align-items: center;
@@ -2570,7 +2668,9 @@ body.approval-app #root {
 }
 
 .run-status-bar__stats {
-  flex: 0 0 auto;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -2618,6 +2718,7 @@ body.approval-app #root {
 
 .run-status-bar__actions {
   flex: 0 0 auto;
+  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -3008,7 +3109,7 @@ body::before { display: none; }
   border-radius: 12px 12px 4px 12px;
 }
 .message-assistant { margin-bottom: 30px; }
-.message-assistant__avatar { background: var(--accent); color: white; }
+.message-assistant__avatar { background: #141414; }
 
 .agent-turn {
   margin: 0 0 32px;
@@ -3021,9 +3122,11 @@ body::before { display: none; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 28px;
-  margin-bottom: 10px;
+  min-height: 20px;
+  margin-bottom: 4px;
 }
+/* live turn 内头像行自带 9px 底部 margin，这里归零，让正文紧贴头像行 */
+.agent-turn .message-assistant__author { margin-bottom: 0; }
 .agent-turn__status {
   display: inline-flex;
   align-items: center;
@@ -3079,16 +3182,7 @@ body::before { display: none; }
 .agent-action__label { color: var(--text); font-size: 12.5px; }
 .agent-action__state { color: var(--text-tertiary); font-size: 10.5px; }
 .agent-action__state--warning { color: var(--warning); }
-.agent-turn__work { margin: 9px 0 14px; }
-.agent-turn__work > summary {
-  width: fit-content;
-  cursor: pointer;
-  color: var(--text-secondary);
-  font-size: 11.5px;
-  list-style: none;
-}
-.agent-turn__work > summary span { margin-left: 6px; color: var(--text-tertiary); }
-.agent-turn__response { margin-top: 14px; }
+.agent-turn__response { margin-top: 0; }
 .agent-turn__error {
   margin: 12px 0;
   padding: 14px 15px;
@@ -3110,7 +3204,9 @@ body::before { display: none; }
 
 .composer-dock { padding: 10px 24px 16px; background: var(--surface); }
 .composer {
-  max-width: 860px;
+  /* 与 780px message-thread 扣除两侧 28px 内边距后的正文宽度对齐。 */
+  width: min(100%, 724px);
+  max-width: 724px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
   background: var(--surface-raised);
@@ -3119,6 +3215,14 @@ body::before { display: none; }
 }
 .composer:focus-within { border-color: #8ba69f; box-shadow: 0 0 0 3px #e6eeeb; }
 .composer__input { color: var(--text); }
+/* Composer 由外层容器统一表达焦点，输入框自身不再出现浏览器蓝色轮廓。 */
+.composer__input:focus,
+.composer__input:focus-visible {
+  border-color: transparent;
+  outline: none;
+  outline-offset: 0;
+  box-shadow: none;
+}
 .composer__footer { border-color: #ecece8; }
 .composer__context { color: var(--text-secondary); font-size: 10.5px; }
 .composer__send { background: var(--accent); }
@@ -3179,13 +3283,6 @@ kbd { padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; bac
 @keyframes command-layer-in { from { opacity: 0; } }
 @keyframes command-in { from { opacity: 0; transform: translateY(-5px) scale(.99); } }
 
-.activity-drawer {
-  width: min(430px, calc(100vw - 58px));
-  background: var(--surface-raised);
-  border-color: var(--border);
-  box-shadow: var(--shadow-floating);
-  backdrop-filter: none;
-}
 .activity__header { min-height: 54px; border-color: var(--border); }
 .activity__body { padding: 16px; }
 .activity-section { margin-bottom: 24px; }

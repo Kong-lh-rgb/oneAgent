@@ -110,82 +110,82 @@ export function toolActiveLabel(name: string, args: unknown): string {
   switch (name) {
     case 'computer_open_app': {
       const app = argValue(args, 'app')
-      return app ? `Opening ${app}` : 'Opening an application'
+      return app ? `打开 ${app}` : '打开应用'
     }
-    case 'computer_observe': return 'Inspecting the screen'
+    case 'computer_observe': return '检查屏幕'
     case 'computer_type': {
       const text = argValue(args, 'text')
-      return text ? `Typing “${text.slice(0, 40)}”` : 'Typing text'
+      return text ? `输入 “${text.slice(0, 40)}”` : '输入文本'
     }
-    case 'computer_click': return 'Clicking an interface element'
-    case 'computer_key': return `Pressing ${formatKeyShortcut(args)}`
-    case 'computer_scroll': return 'Scrolling the window'
-    case 'computer_focus_window': return 'Focusing the target window'
+    case 'computer_click': return '点击界面元素'
+    case 'computer_key': return `按键 ${formatKeyShortcut(args)}`
+    case 'computer_scroll': return '滚动窗口'
+    case 'computer_focus_window': return '聚焦目标窗口'
     case 'read_file': {
       const path = argValue(args, 'path')
-      return path ? `Reading ${path}` : 'Reading a file'
+      return path ? `读取 ${path}` : '读取文件'
     }
     case 'write_file': {
       const path = argValue(args, 'path')
-      return path ? `Writing ${path}` : 'Writing a file'
+      return path ? `写入 ${path}` : '写入文件'
     }
-    case 'list_files': return 'Reviewing files'
-    case 'artifact_publish': return 'Preparing a result'
-    case 'memory_get': return 'Reading memory'
-    case 'memory_search': return 'Searching memory'
-    case 'task_create': return 'Creating a plan'
-    case 'task_update': return 'Updating the plan'
-    case 'task_get': return 'Reviewing the plan'
-    case 'task_list': return 'Reviewing tasks'
-    case 'run_shell_command': return 'Running command'
+    case 'list_files': return '查看文件'
+    case 'artifact_publish': return '准备结果'
+    case 'memory_get': return '读取记忆'
+    case 'memory_search': return '搜索记忆'
+    case 'task_create': return '创建计划'
+    case 'task_update': return '更新计划'
+    case 'task_get': return '查看计划'
+    case 'task_list': return '查看任务'
+    case 'run_shell_command': return '运行命令'
     case 'web_search': {
       const query = argValue(args, 'query')
-      return query ? `Searching for “${query.slice(0, 40)}”` : 'Searching the web'
+      return query ? `搜索 “${query.slice(0, 40)}”` : '联网搜索'
     }
-    default: return `Running ${humanizeToolName(name)}`
+    default: return `运行 ${humanizeToolName(name)}`
   }
 }
 
 export function toolDoneLabel(name: string, args: unknown, ok: boolean): string {
   if (!ok) {
     switch (name) {
-      case 'computer_click': return 'Click failed'
-      case 'computer_type': return 'Typing failed'
-      case 'computer_key': return 'Key press failed'
-      case 'computer_observe': return 'Screen inspection failed'
-      case 'read_file': return 'Could not read file'
-      case 'write_file': return 'Could not write file'
-      case 'run_shell_command': return 'Command failed'
-      default: return `Failed ${humanizeToolName(name)}`
+      case 'computer_click': return '点击失败'
+      case 'computer_type': return '输入失败'
+      case 'computer_key': return '按键失败'
+      case 'computer_observe': return '检查屏幕失败'
+      case 'read_file': return '无法读取文件'
+      case 'write_file': return '无法写入文件'
+      case 'run_shell_command': return '命令失败'
+      default: return `失败 ${humanizeToolName(name)}`
     }
   }
   switch (name) {
     case 'computer_open_app': {
       const app = argValue(args, 'app')
-      return app ? `Opened ${app}` : 'Opened application'
+      return app ? `已打开 ${app}` : '已打开应用'
     }
-    case 'computer_observe': return 'Observed the target window'
+    case 'computer_observe': return '已检查目标窗口'
     case 'computer_type': {
       const text = argValue(args, 'text')
-      return text ? `Typed “${text.slice(0, 40)}”` : 'Typed text'
+      return text ? `已输入 “${text.slice(0, 40)}”` : '已输入文本'
     }
-    case 'computer_click': return 'Clicked element'
-    case 'computer_key': return `Pressed ${formatKeyShortcut(args)}`
-    case 'computer_scroll': return 'Scrolled'
-    case 'computer_focus_window': return 'Focused window'
-    case 'read_file': return 'Read file'
-    case 'write_file': return 'Wrote file'
-    case 'list_files': return 'Reviewed files'
-    case 'artifact_publish': return 'Created a result'
-    case 'memory_get': return 'Read memory'
-    case 'memory_search': return 'Searched memory'
-    case 'task_create': return 'Created a plan'
-    case 'task_update': return 'Updated the plan'
-    case 'task_get': return 'Reviewed the plan'
-    case 'task_list': return 'Reviewed tasks'
-    case 'run_shell_command': return 'Command completed'
-    case 'web_search': return 'Searched the web'
-    default: return `Completed ${humanizeToolName(name)}`
+    case 'computer_click': return '已点击元素'
+    case 'computer_key': return `已按键 ${formatKeyShortcut(args)}`
+    case 'computer_scroll': return '已滚动'
+    case 'computer_focus_window': return '已聚焦窗口'
+    case 'read_file': return '已读取文件'
+    case 'write_file': return '已写入文件'
+    case 'list_files': return '已查看文件'
+    case 'artifact_publish': return '已生成结果'
+    case 'memory_get': return '已读取记忆'
+    case 'memory_search': return '已搜索记忆'
+    case 'task_create': return '已创建计划'
+    case 'task_update': return '已更新计划'
+    case 'task_get': return '已查看计划'
+    case 'task_list': return '已查看任务'
+    case 'run_shell_command': return '命令已执行'
+    case 'web_search': return '已完成搜索'
+    default: return `完成 ${humanizeToolName(name)}`
   }
 }
 
@@ -422,7 +422,8 @@ export function buildTurnView(
         break
       }
       case 'agent_completed':
-      case 'agent_failed': {
+      case 'agent_failed':
+      case 'agent_cancelled': {
         finalUsage = event.result?.usage ?? event.usage ?? finalUsage
         if (event.result?.steps) steps = event.result.steps
         finalText = event.result?.final_message?.content ?? finalText

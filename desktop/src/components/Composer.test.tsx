@@ -41,7 +41,22 @@ describe('Composer', () => {
     expect(html).toContain('disabled=""')
   })
 
-  it('提供 commands 时渲染 ⌘K 入口（面板默认收起）', () => {
+  it('run 执行中发送按钮转为暂停按钮，点击触发 onStop', () => {
+    const html = renderToStaticMarkup(
+      <Composer
+        disabled={false}
+        running
+        onStop={() => {}}
+        onSend={async () => {}}
+      />,
+    )
+    expect(html).toContain('composer__stop')
+    expect(html).toContain('aria-label="暂停"')
+    expect(html).not.toContain('aria-label="发送"')
+    expect(html).not.toContain('composer__send" disabled')
+  })
+
+  it('输入框 footer 不渲染 ⌘K 入口（快捷键仍保留触发面板）', () => {
     const html = renderToStaticMarkup(
       <Composer
         disabled={false}
@@ -52,9 +67,8 @@ describe('Composer', () => {
         ]}
       />,
     )
-    expect(html).toContain('⌘K')
-    expect(html).toContain('aria-label="Commands"')
-    // 面板默认关闭，列表项不展开
+    expect(html).not.toContain('composer__cmd')
+    expect(html).not.toContain('⌘K')
     expect(html).not.toContain('composer-commands__item')
   })
 })

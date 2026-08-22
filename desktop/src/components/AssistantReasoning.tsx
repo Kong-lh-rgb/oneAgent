@@ -1,10 +1,10 @@
-/** 模型思考/推理过程（reasoning）展示：可折叠下拉栏，与最终答案彻底分开。
+/** 模型思考/推理过程（reasoning）展示：与最终答案彻底分开。
 
-- 下拉栏：默认收起，点击展开（grid 0fr→1fr 高度过渡，丝滑）。
-- autoExpand：思考进行中（尚无正文）时自动展开展示；正文开始流出时自动
-  平滑收起，完成“思考 → 答案”的无缝过渡。
-- 用户手动点过之后尊重用户选择（直到下一轮思考重新接管）。
-- label：思考中 “Thinking”，完成后折叠 “Thought for 1.8s”（传入 durationMs）。
+- 只渲染一个「下拉尖」toggle，内联在 Vesta 头像行（与头像平行）。
+- 点击展开/收起思考内容（grid 0fr→1fr 高度过渡，丝滑）。
+- 思考中不自动展开、不占正文位置：正文区只放最终回复，思考内容仅在被
+  点击展开时显示。
+- label（Thinking / Thought for 1.8s）作为 title/aria-label，不占可见文本。
 */
 
 import { useEffect, useRef, useState } from 'react'
@@ -21,7 +21,7 @@ export default function AssistantReasoning({
   text: string
   /** 思考仍在进行（正文尚未出现）时置 true：自动展开并跟随。 */
   autoExpand?: boolean
-  /** 思考中（显示 spinner 与 “Thinking”）。 */
+  /** 思考中（显示 spinner）。 */
   busy?: boolean
   /** 思考耗时（思考完成、折叠时显示 “Thought for 1.8s”）。 */
   durationMs?: number | null
@@ -60,16 +60,17 @@ export default function AssistantReasoning({
         type="button"
         className="assistant-reasoning__toggle"
         aria-expanded={open}
+        aria-label={open ? '收起思考过程' : '展示思考过程'}
+        title={label}
         onClick={() => {
           setUserPinned(true)
           setOpen((value) => !value)
         }}
       >
-        <span className="assistant-reasoning__chevron" aria-hidden="true" />
         {busy ? (
           <span className="assistant-reasoning__spinner" aria-hidden="true" />
         ) : null}
-        <span className="assistant-reasoning__label">{label}</span>
+        <span className="assistant-reasoning__chevron" aria-hidden="true" />
       </button>
       <div className="assistant-reasoning__wrap">
         <div className="assistant-reasoning__body">{text}</div>

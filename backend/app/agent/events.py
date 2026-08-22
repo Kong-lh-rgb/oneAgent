@@ -39,6 +39,7 @@ class AgentEventType(StrEnum):
     SKILL_ACTIVATION_FAILED = "skill_activation_failed"
     AGENT_COMPLETED = "agent_completed"
     AGENT_FAILED = "agent_failed"
+    AGENT_CANCELLED = "agent_cancelled"
 
 
 class AgentEvent(BaseModel):

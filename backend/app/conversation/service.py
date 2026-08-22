@@ -22,9 +22,15 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from app.agent.events import AgentEventHandler, CompositeEventHandler
-from app.agent.result import AgentResult
-from app.models.types import AgentMode
+from app.agent.events import (
+    AgentEvent,
+    AgentEventHandler,
+    AgentEventType,
+    CompositeEventHandler,
+)
+from app.agent.result import AgentResult, AgentStopReason
+from app.models.types import AgentMode, Message, MessageRole
+from app.run.models import RunStatus
 from app.trace import SQLiteTraceEventHandler, SQLiteTraceStore
 
 from .inputs import ConversationSource, TriggerContext
@@ -191,7 +197,76 @@ class ConversationService:
             raise
         result = self._run_manager.result(run_id)
         if result is None:
-            raise RuntimeError("RunManager 未返回最终 AgentResult")
+            # 用户取消：runtime 的 CancelledError 直接向上传播，不会产生
+            # AgentResult，conversation 因此无法落库 —— 本次 user 消息与中断
+            # 内容一并丢失，前端还会一直卡在运行态。这里为取消的 Run 合成
+            # 终态结果：落库 user 消息 + 中断说明，并 emit agent_cancelled
+            # 让前端进入 cancelled 终态（本轮部分内容不再显示）。
+            if run.status is RunStatus.CANCELLED:
+                cancelled_message = Message(
+                    role=MessageRole.ASSISTANT,
+                    content=(
+                        "Run cancelled：已停止，未生成最终回复。"
+                        "（本轮未完成的内容不会显示）"
+                    ),
+                )
+                result = AgentResult(
+                    run_id=run_id,
+                    final_message=cancelled_message,
+                    messages=(
+                        *history,
+                        Message(role=MessageRole.USER, content=content),
+                        cancelled_message,
+                    ),
+                    steps=0,
+                    stop_reason=AgentStopReason.CANCELLED,
+                )
+                await handler.emit(
+                    AgentEvent(
+                        run_id=run_id,
+                        conversation_id=conversation_id,
+                        sequence=0,
+                        type=AgentEventType.AGENT_CANCELLED,
+                        message=cancelled_message,
+                        stop_reason=AgentStopReason.CANCELLED,
+                        result=result,
+                    )
+                )
+            elif run.status is RunStatus.INTERRUPTED:
+                # 暂停（中断）：合成 INTERRUPTED 终态结果并 emit agent_failed
+                # (stop_reason=interrupted)，前端进入 interrupted 终态并展示
+                # “Recover/继续”入口，用户可从 Checkpoint 断点恢复执行。
+                interrupted_message = Message(
+                    role=MessageRole.ASSISTANT,
+                    content=(
+                        "Run interrupted：已暂停，可从断点继续。"
+                        "（点击 Recover 从保存的中断点恢复）"
+                    ),
+                )
+                result = AgentResult(
+                    run_id=run_id,
+                    final_message=interrupted_message,
+                    messages=(
+                        *history,
+                        Message(role=MessageRole.USER, content=content),
+                        interrupted_message,
+                    ),
+                    steps=0,
+                    stop_reason=AgentStopReason.INTERRUPTED,
+                )
+                await handler.emit(
+                    AgentEvent(
+                        run_id=run_id,
+                        conversation_id=conversation_id,
+                        sequence=0,
+                        type=AgentEventType.AGENT_FAILED,
+                        message=interrupted_message,
+                        stop_reason=AgentStopReason.INTERRUPTED,
+                        result=result,
+                    )
+                )
+            else:
+                raise RuntimeError("RunManager 未返回最终 AgentResult")
 
         # 4) 把新的完整 history 写回 ConversationStore（保存最新 Summary）。
         if conversation_id is not None:
