@@ -3193,6 +3193,98 @@ body::before { display: none; }
 .run-status-bar__action { color: var(--text-secondary); }
 .run-status-bar__failed { background: #fbefed; border-color: #edd2ce; }
 
+/* 当前会话 Task：独立于消息历史的持久进度条。 */
+.current-task-panel {
+  flex: 0 0 auto;
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+  background: #f8f9f7;
+}
+.current-task-panel > details > summary {
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: 30px minmax(180px, 1fr) 118px auto 18px;
+  align-items: center;
+  gap: 11px;
+  padding: 8px 16px;
+  cursor: pointer;
+  list-style: none;
+}
+.current-task-panel > details > summary::-webkit-details-marker,
+.current-task-item > summary::-webkit-details-marker { display: none; }
+.current-task-panel > details > summary > svg {
+  color: var(--text-tertiary);
+  transition: transform .16s ease;
+}
+.current-task-panel > details[open] > summary > svg { transform: rotate(180deg); }
+.current-task-panel__icon {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: #e6ece8;
+  color: #557565;
+}
+.current-task-panel__icon--paused,
+.current-task-panel__icon--pending { background: #f1ece1; color: #826d42; }
+.current-task-panel__icon--failed,
+.current-task-panel__icon--cancelled { background: #f4e8e5; color: #99655d; }
+.current-task-panel__icon--completed { background: #e8eee9; color: #668170; }
+.current-task-panel__identity { min-width: 0; display: grid; gap: 1px; }
+.current-task-panel__identity small { color: var(--text-tertiary); font-size: 8.5px; }
+.current-task-panel__identity strong,
+.current-task-panel__identity span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.current-task-panel__identity strong { color: var(--text); font-size: 11.5px; font-weight: 650; }
+.current-task-panel__identity span { color: var(--text-secondary); font-size: 9px; }
+.current-task-panel__progress { display: grid; gap: 4px; color: var(--text-tertiary); font-size: 8.5px; text-align: right; }
+.current-task-panel__progress i {
+  width: 100%;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e4e0;
+}
+.current-task-panel__progress b { display: block; height: 100%; border-radius: inherit; background: #6e9382; }
+.current-task-panel__count { color: var(--text-tertiary); font-size: 9px; white-space: nowrap; }
+.current-task-panel__body {
+  max-height: min(360px, 42vh);
+  padding: 0 16px 12px 57px;
+  overflow-y: auto;
+  border-top: 1px solid #e3e3df;
+}
+.current-task-item { border-bottom: 1px solid #e2e2de; }
+.current-task-item:last-child { border-bottom: 0; }
+.current-task-item > summary {
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 16px;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+.current-task-item > summary > div { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+.current-task-item > summary strong { overflow: hidden; color: var(--text); font-size: 10.5px; text-overflow: ellipsis; white-space: nowrap; }
+.current-task-item > summary span { color: var(--text-tertiary); font-size: 8.5px; white-space: nowrap; }
+.current-task-item > summary > svg { color: var(--text-tertiary); transition: transform .16s ease; }
+.current-task-item[open] > summary > svg { transform: rotate(180deg); }
+.current-task-item__details { padding: 0 0 13px; }
+.current-task-item__details > p { margin: 0 0 9px; color: var(--text-secondary); font-size: 10px; line-height: 1.55; }
+.current-task-item__details ol { display: grid; gap: 0; margin: 0; padding: 0; border-top: 1px solid #e5e5e1; list-style: none; }
+.current-task-step { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 7px; padding: 7px 0; border-bottom: 1px solid #e5e5e1; }
+.current-task-step > span { color: var(--text-tertiary); font-size: 10px; }
+.current-task-step--done > span { color: var(--success); }
+.current-task-step--in_progress > span { color: var(--accent); }
+.current-task-step--blocked > span { color: var(--warning); }
+.current-task-step div { display: grid; gap: 2px; }
+.current-task-step strong { color: var(--text-secondary); font-size: 9.5px; font-weight: 520; }
+.current-task-step small { color: var(--text-tertiary); font-size: 8.5px; }
+
 .conversation-scroll { background: var(--surface); }
 .message-thread { width: min(100%, 780px); padding: 30px 28px 18px; }
 .message-user { margin: 0 0 28px; }
@@ -3944,6 +4036,15 @@ kbd { padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; bac
   .run-card__button { grid-template-columns: 118px minmax(160px, 1fr) 112px 108px; gap: 12px; }
   .settings-layout { grid-template-columns: 152px minmax(0, 1fr); gap: 24px; }
   .settings-nav { padding-right: 16px; }
+}
+
+@media (max-width: 760px) {
+  .current-task-panel > details > summary {
+    grid-template-columns: 30px minmax(0, 1fr) auto 18px;
+  }
+  .current-task-panel__progress { display: none; }
+  .current-task-panel__identity span { display: none; }
+  .current-task-panel__body { padding-left: 16px; }
 }
 
 @media (max-width: 860px) {

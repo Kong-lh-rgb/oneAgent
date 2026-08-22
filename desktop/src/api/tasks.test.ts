@@ -9,7 +9,7 @@ vi.mock('../rpc', () => ({
 }))
 
 import { sendMessage } from './conversations'
-import { getTask, planAccept, planReject } from './tasks'
+import { getTask, listTasks, planAccept, planReject } from './tasks'
 
 describe('plan mode desktop api', () => {
   beforeEach(() => {
@@ -53,6 +53,16 @@ describe('plan mode desktop api', () => {
     const task = await getTask('task-1')
     expect(callMock).toHaveBeenCalledWith('task.get', { task_id: 'task-1' })
     expect(task.status).toBe('pending')
+  })
+
+  it('task.list 只查询当前会话任务', async () => {
+    callMock.mockResolvedValue({ tasks: [{ id: 'task-1', status: 'active' }] })
+    const tasks = await listTasks('conv-1', 12)
+    expect(callMock).toHaveBeenCalledWith('task.list', {
+      conversation_id: 'conv-1',
+      limit: 12,
+    })
+    expect(tasks).toHaveLength(1)
   })
 
   it('task.plan_accept 调用 accept RPC', async () => {

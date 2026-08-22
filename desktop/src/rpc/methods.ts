@@ -27,6 +27,7 @@ export const RpcMethods = {
   artifactList: 'artifact.list',
   artifactGet: 'artifact.get',
   memoryList: 'memory.list',
+  taskList: 'task.list',
   taskGet: 'task.get',
   taskPlanAccept: 'task.plan_accept',
   taskPlanReject: 'task.plan_reject',

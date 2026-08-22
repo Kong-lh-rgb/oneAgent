@@ -12,7 +12,7 @@ import {
   sendMessage,
 } from '../api/conversations'
 import { cancelRun, interruptRun, listRuns, recoverRun } from '../api/runs'
-import { getTask, planAccept, planReject } from '../api/tasks'
+import { getTask, listTasks, planAccept, planReject } from '../api/tasks'
 import type { AgentMode, Message, Task } from '../api/types'
 import { latestRunId } from '../agent/runAnalysis'
 import { buildTurnView } from '../agent/turnPresentation'
@@ -23,6 +23,7 @@ import RunStatusBar from '../components/RunStatusBar'
 import Composer from '../components/Composer'
 import type { ComposerCommand } from '../components/Composer'
 import ConversationList from '../components/ConversationList'
+import CurrentTaskPanel from '../components/CurrentTaskPanel'
 import LiveAgentTurn from '../components/LiveAgentTurn'
 import MessageList from '../components/MessageList'
 import PlanCard from '../components/PlanCard'
@@ -113,6 +114,14 @@ export default function ChatPage({
   const activeRunStatus = activeRunId ? runStatuses[activeRunId] : undefined
   const isRunning = Boolean(activeRunId) &&
     (activeRunStatus === 'running' || activeRunStatus === 'pending')
+
+  const tasksQuery = useQuery({
+    queryKey: ['tasks', selectedId],
+    queryFn: () => listTasks(selectedId!),
+    enabled: selectedId !== null,
+    refetchInterval: isRunning ? 1500 : 5000,
+  })
+  const conversationTasks = tasksQuery.data ?? []
 
   // 实时 Run 一旦出现就记住 id；终态通知可能早于 conversation.send 返回，
   // 不能因 running → completed 让 Persistent AgentTurn 短暂丢失事件。
@@ -270,6 +279,7 @@ export default function ChatPage({
         queryClient.invalidateQueries({ queryKey: ['conversations'] }),
         queryClient.invalidateQueries({ queryKey: ['runs'] }),
         queryClient.invalidateQueries({ queryKey: ['chat-artifacts'] }),
+        queryClient.invalidateQueries({ queryKey: ['tasks', selectedId] }),
       ])
     },
     onError: (error: unknown) => {
@@ -522,6 +532,7 @@ export default function ChatPage({
           onStop={() => void stopRun()}
           onRecover={() => void recoverRunAction()}
         />
+        <CurrentTaskPanel tasks={conversationTasks} />
         <div className="chat-right__body">
           <main className="conversation-main">
             <div
