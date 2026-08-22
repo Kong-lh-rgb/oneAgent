@@ -16,6 +16,9 @@ export interface ContextStepVM {
   preparedInputTokens: number
   contextWindow: number
   inputBudget: number
+  workingInputBudget: number
+  triggerTokens: number
+  targetTokens: number
   windowUsageRatio: number
   budgetUsageRatio: number
   messageTokensBefore: number
@@ -66,6 +69,7 @@ export function buildContextSteps(events: AgentEvent[]): ContextStepVM[] {
         event.original_estimated_input_tokens ?? prepared,
       )
       const contextWindow = numberOrZero(event.context_window)
+      const workingInputBudget = numberOrZero(event.working_input_budget)
       const allMessageTokens = numberOrZero(event.message_tokens_after)
       const schemas = numberOrZero(event.tool_schema_tokens)
       const toolResults = numberOrZero(event.tool_result_tokens_after)
@@ -90,10 +94,13 @@ export function buildContextSteps(events: AgentEvent[]): ContextStepVM[] {
         preparedInputTokens: prepared,
         contextWindow,
         inputBudget: numberOrZero(event.input_budget),
+        workingInputBudget,
+        triggerTokens: numberOrZero(event.trigger_tokens),
+        targetTokens: numberOrZero(event.target_tokens),
         windowUsageRatio: contextWindow > 0 ? prepared / contextWindow : 0,
-        budgetUsageRatio: event.prepared_usage_ratio
-          ?? event.usage_ratio
-          ?? 0,
+        budgetUsageRatio: workingInputBudget > 0
+          ? prepared / workingInputBudget
+          : (event.prepared_usage_ratio ?? event.usage_ratio ?? 0),
         messageTokensBefore: numberOrZero(event.message_tokens_before),
         messageTokensAfter: allMessageTokens,
         toolSchemaTokens: schemas,

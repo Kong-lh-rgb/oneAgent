@@ -171,8 +171,19 @@ def _normalize_anthropic_response(response: Any, provider: str) -> ModelResponse
                 )
             )
 
-    input_tokens = int(getattr(response.usage, "input_tokens", 0) or 0)
+    base_input_tokens = int(getattr(response.usage, "input_tokens", 0) or 0)
     output_tokens = int(getattr(response.usage, "output_tokens", 0) or 0)
+    cache_read = _optional_usage_int(response.usage, "cache_read_input_tokens")
+    cache_write = _optional_usage_int(
+        response.usage,
+        "cache_creation_input_tokens",
+    )
+    cache_reported = cache_read is not None or cache_write is not None
+    input_tokens = (
+        base_input_tokens + (cache_read or 0) + (cache_write or 0)
+        if cache_reported
+        else base_input_tokens
+    )
     return ModelResponse(
         id=response.id,
         provider=provider,
@@ -188,9 +199,25 @@ def _normalize_anthropic_response(response: Any, provider: str) -> ModelResponse
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=input_tokens + output_tokens,
+            cached_input_tokens=(cache_read or 0) if cache_reported else None,
+            uncached_input_tokens=(
+                base_input_tokens + (cache_write or 0)
+                if cache_reported
+                else None
+            ),
+            cache_read_input_tokens=(cache_read or 0) if cache_reported else None,
+            cache_write_input_tokens=cache_write,
+            model_calls=1,
         ),
         raw=_model_dump(response),
     )
+
+
+def _optional_usage_int(usage: Any, field: str) -> int | None:
+    value = getattr(usage, field, None)
+    if value is None:
+        return None
+    return max(0, int(value))
 
 
 def _arguments_dict(arguments: dict[str, Any] | str) -> dict[str, Any]:

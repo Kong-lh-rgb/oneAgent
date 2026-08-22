@@ -59,6 +59,21 @@ export interface ModelUsage {
   input_tokens: number
   output_tokens: number
   total_tokens: number
+  cached_input_tokens?: number | null
+  uncached_input_tokens?: number | null
+  cache_read_input_tokens?: number | null
+  cache_write_input_tokens?: number | null
+  model_calls?: number
+}
+
+export interface RunUsageSummary {
+  main_agent: ModelUsage
+  memory_reflection: ModelUsage
+  memory_maintenance: ModelUsage
+  provider_total: ModelUsage
+  tool_schema_tokens_estimated: number
+  memory_reflection_status: string
+  memory_reflection_skip_reason: string | null
 }
 
 export interface AgentResult {
@@ -165,6 +180,8 @@ export interface AgentEvent {
   context_window?: number | null
   input_budget?: number | null
   working_input_budget?: number | null
+  trigger_tokens?: number | null
+  target_tokens?: number | null
   usage_ratio?: number | null
   tool_result_budget_tokens?: number | null
   tool_result_tokens_before?: number | null
@@ -181,6 +198,7 @@ export interface AgentEvent {
   summary_updated?: boolean | null
   summarized_conversation_blocks?: number | null
   summary_error?: string | null
+  summary_usage?: ModelUsage | null
   available_skill_count?: number | null
   skill_catalog_tokens?: number | null
   active_skill_names?: string[]

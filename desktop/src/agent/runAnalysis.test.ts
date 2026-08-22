@@ -39,6 +39,9 @@ describe('buildContextSteps', () => {
         prepared_input_tokens: 8_100,
         context_window: 128_000,
         input_budget: 24_000,
+        working_input_budget: 16_000,
+        trigger_tokens: 12_000,
+        target_tokens: 8_000,
         prepared_usage_ratio: 0.3375,
         message_tokens_before: 8_700,
         message_tokens_after: 4_700,
@@ -56,7 +59,7 @@ describe('buildContextSteps', () => {
     expect(step.originalInputTokens).toBe(12_400)
     expect(step.preparedInputTokens).toBe(8_100)
     expect(step.windowUsageRatio).toBeCloseTo(8_100 / 128_000)
-    expect(step.budgetUsageRatio).toBe(0.3375)
+    expect(step.budgetUsageRatio).toBeCloseTo(8_100 / 16_000)
     expect(step.breakdown.find((item) => item.key === 'messages')?.tokens).toBe(1_800)
     expect(step.breakdown.reduce((sum, item) => sum + item.tokens, 0)).toBe(8_100)
     expect(step.removedToolRounds).toBe(3)

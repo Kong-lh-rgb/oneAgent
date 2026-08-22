@@ -427,6 +427,10 @@ def _responses_usage(usage: Any | None) -> ModelUsage:
         return ModelUsage()
     input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
     output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+    cached, cache_write, cache_reported = _openai_cache_usage(
+        usage,
+        details_name="input_tokens_details",
+    )
     return ModelUsage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
@@ -434,6 +438,13 @@ def _responses_usage(usage: Any | None) -> ModelUsage:
             getattr(usage, "total_tokens", input_tokens + output_tokens)
             or input_tokens + output_tokens
         ),
+        cached_input_tokens=cached if cache_reported else None,
+        uncached_input_tokens=(
+            max(0, input_tokens - cached) if cache_reported else None
+        ),
+        cache_read_input_tokens=cached if cache_reported else None,
+        cache_write_input_tokens=cache_write,
+        model_calls=1,
     )
 
 
@@ -442,6 +453,10 @@ def _chat_usage(usage: Any | None) -> ModelUsage:
         return ModelUsage()
     input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
     output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+    cached, cache_write, cache_reported = _openai_cache_usage(
+        usage,
+        details_name="prompt_tokens_details",
+    )
     return ModelUsage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
@@ -449,7 +464,48 @@ def _chat_usage(usage: Any | None) -> ModelUsage:
             getattr(usage, "total_tokens", input_tokens + output_tokens)
             or input_tokens + output_tokens
         ),
+        cached_input_tokens=cached if cache_reported else None,
+        uncached_input_tokens=(
+            _optional_int(usage, "prompt_cache_miss_tokens")
+            if _optional_int(usage, "prompt_cache_miss_tokens") is not None
+            else (max(0, input_tokens - cached) if cache_reported else None)
+        ),
+        cache_read_input_tokens=cached if cache_reported else None,
+        cache_write_input_tokens=cache_write,
+        model_calls=1,
     )
+
+
+def _openai_cache_usage(
+    usage: Any,
+    *,
+    details_name: str,
+) -> tuple[int, int | None, bool]:
+    """兼容 OpenAI/Qwen/DeepSeek 的缓存 Usage 字段。"""
+
+    deepseek_hit = _optional_int(usage, "prompt_cache_hit_tokens")
+    details = getattr(usage, details_name, None)
+    nested_cached = _optional_int(details, "cached_tokens")
+    direct_cached = _optional_int(usage, "cached_tokens")
+    cached_value = next(
+        (
+            value
+            for value in (deepseek_hit, nested_cached, direct_cached)
+            if value is not None
+        ),
+        None,
+    )
+    cache_write = _optional_int(details, "cache_creation_input_tokens")
+    return cached_value or 0, cache_write, cached_value is not None
+
+
+def _optional_int(value: Any, field: str) -> int | None:
+    if value is None:
+        return None
+    raw = value.get(field) if isinstance(value, dict) else getattr(value, field, None)
+    if raw is None:
+        return None
+    return max(0, int(raw))
 
 
 def _model_dump(value: Any) -> dict[str, Any] | None:

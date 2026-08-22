@@ -36,6 +36,11 @@ from .models import (
 )
 from .prompts import MEMORY_POLICY_PROMPT, MEMORY_WRITE_POLICY
 from .reflection import PostRunMemoryReflector
+from .reflection_gate import (
+    ReflectionGateDecision,
+    ReflectionGateReason,
+    decide_reflection_gate,
+)
 from .reflection_models import (
     MemoryReflectionConfig,
     MemoryReflectionInput,
@@ -90,8 +95,11 @@ __all__ = [
     "MemoryStore",
     "MemoryUpdateTool",
     "PostRunMemoryReflector",
+    "ReflectionGateDecision",
+    "ReflectionGateReason",
     "ReflectionAction",
     "ReflectionDecision",
+    "decide_reflection_gate",
     "next_memory_id",
     "parse_memory_markdown",
     "register_memory_tools",

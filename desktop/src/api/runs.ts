@@ -2,7 +2,13 @@
 
 import { rpcClient } from '../rpc'
 import { RpcMethods } from '../rpc/methods'
-import type { AgentEvent, AgentRunTrace, AgentResult, Run } from './types'
+import type {
+  AgentEvent,
+  AgentRunTrace,
+  AgentResult,
+  Run,
+  RunUsageSummary,
+} from './types'
 
 export interface RunListQuery {
   conversationId?: string
@@ -49,6 +55,6 @@ export async function recoverRun(
 
 export async function getRunTrace(
   runId: string,
-): Promise<{ run: AgentRunTrace; events: AgentEvent[] }> {
+): Promise<{ run: AgentRunTrace; events: AgentEvent[]; usage: RunUsageSummary }> {
   return rpcClient.call(RpcMethods.traceGet, { run_id: runId })
 }

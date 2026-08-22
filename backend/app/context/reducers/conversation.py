@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
-from app.models.types import Message, MessageRole, ModelUsage
+from app.models.types import Message, MessageRole, ModelUsage, add_model_usage
 
 from ..blocks import (
     ConversationBlock,
@@ -189,11 +189,7 @@ def _error_usage(error: Exception) -> ModelUsage:
 
 
 def _add_usage(left: ModelUsage, right: ModelUsage) -> ModelUsage:
-    return ModelUsage(
-        input_tokens=left.input_tokens + right.input_tokens,
-        output_tokens=left.output_tokens + right.output_tokens,
-        total_tokens=left.total_tokens + right.total_tokens,
-    )
+    return add_model_usage(left, right)
 
 
 def build_summary_candidate(

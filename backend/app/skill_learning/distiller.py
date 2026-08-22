@@ -20,7 +20,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.registry import ModelAdapterRegistry
-from app.models.types import ModelUsage
+from app.models.types import ModelUsage, add_model_usage
 from app.skills import Skill, SkillMetadata
 
 from ._call import ModelCallResult, call_model, parse_strict_json
@@ -457,13 +457,7 @@ def _catalog_description(
 def _merge_usage(total: ModelUsage, current: ModelUsage) -> ModelUsage:
     """聚合两次模型调用的 token 用量（保留 total 的扩展字段）。"""
 
-    return total.model_copy(
-        update={
-            "input_tokens": total.input_tokens + current.input_tokens,
-            "output_tokens": total.output_tokens + current.output_tokens,
-            "total_tokens": total.total_tokens + current.total_tokens,
-        }
-    )
+    return add_model_usage(total, current)
 
 
 __all__ = ["DistillationOutcome", "ProcedureDistiller"]

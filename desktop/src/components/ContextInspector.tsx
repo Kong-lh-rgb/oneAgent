@@ -95,7 +95,9 @@ export default function ContextInspector({
         <dl className="context-metrics">
           <div><dt>Input</dt><dd><TokenTransition before={selected.originalInputTokens} after={selected.preparedInputTokens} /></dd></div>
           <div><dt>Context window</dt><dd className="mono">{formatTokens(selected.contextWindow)}</dd></div>
-          <div><dt>Input budget</dt><dd className="mono">{formatTokens(selected.inputBudget)}</dd></div>
+          <div><dt>Working budget</dt><dd className="mono">{formatTokens(selected.workingInputBudget)}</dd></div>
+          <div><dt>Model input limit</dt><dd className="mono">{formatTokens(selected.inputBudget)}</dd></div>
+          <div><dt>Trigger / target</dt><dd className="mono">{formatTokens(selected.triggerTokens)} / {formatTokens(selected.targetTokens)}</dd></div>
           <div><dt>Window usage</dt><dd className="mono">{(selected.windowUsageRatio * 100).toFixed(1)}%</dd></div>
           <div><dt>Budget usage</dt><dd className="mono">{(selected.budgetUsageRatio * 100).toFixed(1)}%</dd></div>
           <div><dt>Tool schemas</dt><dd className="mono">{formatTokens(selected.toolSchemaTokens)}</dd></div>

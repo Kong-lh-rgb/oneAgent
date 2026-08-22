@@ -17,7 +17,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.registry import ModelAdapterRegistry
-from app.models.types import ModelUsage
+from app.models.types import ModelUsage, add_model_usage
 from app.skills import Skill, SkillScope, SkillStore
 from app.task import FileTaskStore, Task, TaskStatus
 from app.trace.store import SQLiteTraceStore
@@ -687,13 +687,7 @@ class SkillLearningService:
 def _add_usage(total: ModelUsage, current: ModelUsage) -> ModelUsage:
     """聚合两次模型调用的 token 用量（保留 total 的扩展字段）。"""
 
-    return total.model_copy(
-        update={
-            "input_tokens": total.input_tokens + current.input_tokens,
-            "output_tokens": total.output_tokens + current.output_tokens,
-            "total_tokens": total.total_tokens + current.total_tokens,
-        }
-    )
+    return add_model_usage(total, current)
 
 
 def _pending_name_exists(

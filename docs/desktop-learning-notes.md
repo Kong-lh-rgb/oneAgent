@@ -1,5 +1,33 @@
 # Vesta Desktop 学习记录
 
+## 2026-08-22：Usage不是一个Total数字
+
+一次Run的真实Provider处理量来自多条相互独立的数据链：
+
+```text
+Main Agent模型请求（含滚动摘要）
+  + Memory Reflection
+  + Memory Maintenance
+  = Provider Total
+```
+
+关键细节：
+
+1. `input_tokens`是Provider处理的输入，通常包含缓存命中；`cached_input_tokens`
+   是其中的子集，不能再加到Total上。
+2. Cache Read和Cache Write可能使用不同价格，而且并非所有Provider都返回全部字段。
+   数据缺失必须显示`Unavailable`，不能用0代替。
+3. Anthropic的processed input需要合并普通input、cache creation和cache read；OpenAI、
+   Qwen和DeepSeek的顶层input通常已经包含缓存命中，不能重复相加。
+4. `AgentResult.usage`继续只表达Main Agent，Post-Run用量从独立Reflection/Maintenance
+   事件聚合；这样领域边界不被UI需求污染。
+5. Durable AgentEvent是Usage事实来源，`RunUsageSummary`是可重建read model。
+   因此旧Run无需数据库迁移，也能回算Post-Run Token和模型调用次数。
+6. Tool Schema Token来自本地估算器，只能显示`≈`；Provider Usage是实际响应数据，
+   两者不可伪装成相同精度。
+7. 成本保护应建立在这份账本之后。没有缓存细分前，直接用processed input设硬上限
+   可能把大量低价cache read错误当成高价新输入。
+
 ## 2026-08-22：Run Inspector 与可解释 Context
 
 Run Inspector 不应该再创建一份运行事实。它只是已有事实的 read model：

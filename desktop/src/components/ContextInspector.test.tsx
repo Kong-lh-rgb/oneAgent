@@ -27,6 +27,9 @@ function contextEvent(): AgentEvent {
     prepared_input_tokens: 8_100,
     context_window: 128_000,
     input_budget: 24_000,
+    working_input_budget: 16_000,
+    trigger_tokens: 12_000,
+    target_tokens: 8_000,
     prepared_usage_ratio: 0.3375,
     message_tokens_before: 8_700,
     message_tokens_after: 4_700,
@@ -48,7 +51,9 @@ describe('ContextInspector', () => {
     expect(html).toContain('Model step')
     expect(html).toContain('128k')
     expect(html).toContain('6.3%')
-    expect(html).toContain('33.8%')
+    expect(html).toContain('50.6%')
+    expect(html).toContain('Working budget')
+    expect(html).toContain('12k / 8k')
     expect(html).toContain('4 个工具结果已压缩')
     expect(html).toContain('3 个旧工具轮已移除')
     expect(html).toContain('Conversation summary 已更新')

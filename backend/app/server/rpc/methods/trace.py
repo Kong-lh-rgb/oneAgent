@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.trace import summarize_run_usage
+
 from ..dispatcher import RpcContext, RpcDispatcher
 from ..protocol import RESOURCE_NOT_FOUND, JsonRpcError, RpcErrorCode
 
@@ -17,7 +19,11 @@ async def trace_get(params: dict[str, Any], ctx: RpcContext) -> dict[str, Any]:
     if trace is None:
         raise JsonRpcError(RESOURCE_NOT_FOUND, "run trace not found")
     events = await application.trace_store.load_events(run_id)
-    return {"run": trace, "events": events}
+    return {
+        "run": trace,
+        "events": events,
+        "usage": summarize_run_usage(events),
+    }
 
 
 def register(dispatcher: RpcDispatcher) -> None:

@@ -1943,3 +1943,23 @@ Multi-Agent / Task Graph / Planner DAG。Pattern Mining V1 完全用一次结构
 - Provider delta 继续在 Store 中短时批量提交，AgentTurn 按 run + step 细粒度订阅；ChatPage 不随每个 token 全量重渲染。
 - 流式正文直接使用真实增量，不增加假打字机；完成事件立即 flush，避免最后几个字符丢失。
 - 持久 AgentTurn 只改变展示生命周期，不改变 Runtime、RPC、审批路由或 durable SQLite 事实来源。
+## 46. Reflection Gate必须保守（2026-08-22）
+
+Reflection Gate的职责不是替代模型判断“什么值得记住”，而是过滤确定性没有长期
+价值的请求。正确边界是：
+
+```text
+明确无长期价值 → Harness跳过模型调用
+可能有长期价值 → Reflection模型自主决定none/create/update
+```
+
+关键细节：
+
+1. 寒暄、能力盘点、天气和时间查询可以用窄规则确定性跳过，但规则必须先检查
+   “以后、记住、偏好、项目决定、纠正”等耐久信号。
+2. 语义不确定时必须fail open到Reflection，而不是为了省Token直接返回none。
+3. 本轮读取过普通Memory意味着可能需要UPDATE，Gate不能切断这个闭环。
+4. skipped、none和failed是三个不同事实：skipped没有调用模型，none是模型判断
+   无记忆变化，failed是调用或解析失败。
+5. Gate跳过Reflection不等于跳过容量维护；Maintenance仍需保持原有独立语义。
+6. 每次跳过必须写入结构化reason，Usage才能解释为什么Post-Run为0。

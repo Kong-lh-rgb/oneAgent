@@ -221,6 +221,9 @@ def _print_agent_event(event: AgentEvent) -> None:
         print(f"{prefix} 长期记忆整理完成：{action}{suffix}")
     elif event.type is AgentEventType.MEMORY_REFLECTION_FAILED:
         print(f"{prefix} 长期记忆整理失败，已跳过")
+    elif event.type is AgentEventType.MEMORY_REFLECTION_SKIPPED:
+        reason = event.reflection_skip_reason or "policy"
+        print(f"{prefix} 长期记忆整理已跳过：{reason}")
     elif event.type is AgentEventType.MEMORY_MAINTENANCE_STARTED:
         print(f"{prefix} 长期记忆容量不足，正在选择可归档候选")
     elif event.type is AgentEventType.MEMORY_MAINTENANCE_COMPLETED:

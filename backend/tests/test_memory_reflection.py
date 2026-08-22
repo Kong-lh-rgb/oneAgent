@@ -451,6 +451,41 @@ async def test_runtime_final_answer_triggers_independent_reflection_model(
 
 
 @pytest.mark.asyncio
+async def test_runtime_gate_skips_obvious_smalltalk_without_calling_reflector(
+    tmp_path: Path,
+) -> None:
+    manager = await _manager(tmp_path / "memory")
+    main = FakeAdapter(
+        _config("main", "main-model"),
+        [_response("你好", provider="main", model="main-model")],
+    )
+    reflect = FakeAdapter(
+        _config("reflect", "reflection-model"),
+        [_response('{"action":"none","reason":"unused"}')],
+    )
+    registry = _registry(main=main, reflect=reflect)
+    events = InMemoryEventHandler()
+    runtime = AgentRuntime(
+        registry,
+        ToolRegistry(),
+        provider="main",
+        memory_manager=manager,
+        memory_reflector=PostRunMemoryReflector(
+            registry,
+            config=_reflection_config(),
+        ),
+    )
+
+    result = await runtime.run("你好！", event_handler=events)
+
+    assert result.ok is True
+    assert reflect.requests == []
+    skipped = events.events[-1]
+    assert skipped.type is AgentEventType.MEMORY_REFLECTION_SKIPPED
+    assert skipped.reflection_skip_reason == "gate:smalltalk"
+
+
+@pytest.mark.asyncio
 async def test_runtime_successful_memory_read_authorizes_reflection_update(
     tmp_path: Path,
 ) -> None:

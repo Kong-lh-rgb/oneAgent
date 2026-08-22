@@ -1,0 +1,138 @@
+"""从 durable AgentEvent 构建 Run 级 Usage 账本。"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+
+from app.agent.events import AgentEvent, AgentEventType
+from app.models.types import ModelUsage, add_model_usage
+
+from .models import RunUsageSummary
+
+_REFLECTION_USAGE_EVENTS = frozenset(
+    {
+        AgentEventType.MEMORY_REFLECTION_COMPLETED,
+        AgentEventType.MEMORY_REFLECTION_FAILED,
+    }
+)
+_MAINTENANCE_USAGE_EVENTS = frozenset(
+    {
+        AgentEventType.MEMORY_MAINTENANCE_COMPLETED,
+        AgentEventType.MEMORY_MAINTENANCE_FAILED,
+    }
+)
+
+
+def summarize_run_usage(events: Sequence[AgentEvent]) -> RunUsageSummary:
+    """按 Main/Post-Run 边界聚合事件中的 Provider Usage。"""
+
+    main_agent = _main_agent_usage(events)
+    reflection = _sum_event_usage(events, _REFLECTION_USAGE_EVENTS)
+    maintenance = _sum_event_usage(events, _MAINTENANCE_USAGE_EVENTS)
+    reflection_status, reflection_skip_reason = _reflection_status(events)
+    provider_total = add_model_usage(
+        add_model_usage(main_agent, reflection),
+        maintenance,
+    )
+    return RunUsageSummary(
+        main_agent=main_agent,
+        memory_reflection=reflection,
+        memory_maintenance=maintenance,
+        provider_total=provider_total,
+        tool_schema_tokens_estimated=sum(
+            event.tool_schema_tokens or 0
+            for event in events
+            if event.type is AgentEventType.MODEL_STARTED
+        ),
+        memory_reflection_status=reflection_status,
+        memory_reflection_skip_reason=reflection_skip_reason,
+    )
+
+
+def _reflection_status(events: Sequence[AgentEvent]) -> tuple[str, str | None]:
+    status = "not_run"
+    skip_reason: str | None = None
+    for event in events:
+        if event.type is AgentEventType.MEMORY_REFLECTION_STARTED:
+            status = "running"
+        elif event.type is AgentEventType.MEMORY_REFLECTION_COMPLETED:
+            status = "completed"
+            skip_reason = None
+        elif event.type is AgentEventType.MEMORY_REFLECTION_FAILED:
+            status = "failed"
+            skip_reason = None
+        elif event.type is AgentEventType.MEMORY_REFLECTION_SKIPPED:
+            status = "skipped"
+            skip_reason = event.reflection_skip_reason
+    return status, skip_reason
+
+
+def _main_agent_usage(events: Sequence[AgentEvent]) -> ModelUsage:
+    terminal_usage: ModelUsage | None = None
+    for event in events:
+        if event.type not in {
+            AgentEventType.AGENT_COMPLETED,
+            AgentEventType.AGENT_FAILED,
+            AgentEventType.AGENT_CANCELLED,
+        }:
+            continue
+        terminal_usage = event.result.usage if event.result is not None else event.usage
+
+    if terminal_usage is not None:
+        if terminal_usage.model_calls > 0:
+            return terminal_usage
+        # 旧 Trace 没有 model_calls；用持久化完成事件回算，保持历史可分析。
+        return terminal_usage.model_copy(
+            update={"model_calls": _main_model_call_count(events)}
+        )
+
+    usage = ModelUsage()
+    for event in events:
+        if event.type is AgentEventType.MODEL_COMPLETED and event.usage is not None:
+            usage = add_model_usage(usage, _with_inferred_call(event.usage))
+        if (
+            event.type is AgentEventType.MODEL_STARTED
+            and event.summary_usage is not None
+        ):
+            usage = add_model_usage(usage, _with_inferred_call(event.summary_usage))
+    return usage
+
+
+def _main_model_call_count(events: Sequence[AgentEvent]) -> int:
+    model_calls = sum(
+        event.usage.model_calls or 1
+        for event in events
+        if event.type is AgentEventType.MODEL_COMPLETED and event.usage is not None
+    )
+    summary_calls = sum(
+        event.summary_usage.model_calls or 1
+        for event in events
+        if event.type is AgentEventType.MODEL_STARTED
+        and event.summary_usage is not None
+        and _has_tokens(event.summary_usage)
+    )
+    return model_calls + summary_calls
+
+
+def _sum_event_usage(
+    events: Sequence[AgentEvent],
+    event_types: frozenset[AgentEventType],
+) -> ModelUsage:
+    usage = ModelUsage()
+    for event in events:
+        if event.type in event_types and event.usage is not None:
+            usage = add_model_usage(usage, _with_inferred_call(event.usage))
+    return usage
+
+
+def _with_inferred_call(usage: ModelUsage) -> ModelUsage:
+    if usage.model_calls > 0 or not _has_tokens(usage):
+        return usage
+    return usage.model_copy(update={"model_calls": 1})
+
+
+def _has_tokens(usage: ModelUsage) -> bool:
+    return bool(usage.input_tokens or usage.output_tokens or usage.total_tokens)
+
+
+__all__ = ["summarize_run_usage"]

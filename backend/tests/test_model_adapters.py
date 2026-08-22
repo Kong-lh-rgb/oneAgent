@@ -134,6 +134,10 @@ async def test_openai_responses_adapter_normalizes_tool_calls() -> None:
             input_tokens=10,
             output_tokens=4,
             total_tokens=14,
+            input_tokens_details=SimpleNamespace(
+                cached_tokens=6,
+                cache_creation_input_tokens=2,
+            ),
         ),
     )
     client = FakeOpenAIClient(responses_result=result)
@@ -161,6 +165,10 @@ async def test_openai_responses_adapter_normalizes_tool_calls() -> None:
     assert response.finish_reason == "tool_calls"
     assert response.message.tool_calls[0].arguments == {"city": "Shanghai"}
     assert client.responses.kwargs["tools"][0]["name"] == "weather"
+    assert response.usage.cached_input_tokens == 6
+    assert response.usage.uncached_input_tokens == 4
+    assert response.usage.cache_write_input_tokens == 2
+    assert response.usage.model_calls == 1
 
 
 @pytest.mark.asyncio
@@ -215,6 +223,8 @@ async def test_openai_compatible_chat_adapter_preserves_tool_history() -> None:
             prompt_tokens=8,
             completion_tokens=2,
             total_tokens=10,
+            prompt_cache_hit_tokens=5,
+            prompt_cache_miss_tokens=3,
         ),
     )
     client = FakeOpenAIClient(chat_result=result)
@@ -254,6 +264,8 @@ async def test_openai_compatible_chat_adapter_preserves_tool_history() -> None:
     assert sent[1]["tool_call_id"] == "call_1"
     assert response.message.content == "done"
     assert response.message.reasoning == "先分析用户意图"
+    assert response.usage.cached_input_tokens == 5
+    assert response.usage.uncached_input_tokens == 3
 
 
 @pytest.mark.asyncio
@@ -343,7 +355,12 @@ async def test_anthropic_adapter_separates_system_and_tool_messages() -> None:
             ),
         ],
         stop_reason="tool_use",
-        usage=SimpleNamespace(input_tokens=12, output_tokens=5),
+        usage=SimpleNamespace(
+            input_tokens=12,
+            output_tokens=5,
+            cache_read_input_tokens=7,
+            cache_creation_input_tokens=3,
+        ),
     )
     client = FakeAnthropicClient(result)
     adapter = AnthropicAdapter(
@@ -370,7 +387,11 @@ async def test_anthropic_adapter_separates_system_and_tool_messages() -> None:
     ]
     assert response.message.content == "Calling "
     assert response.message.tool_calls[0].name == "search"
-    assert response.usage.total_tokens == 17
+    assert response.usage.input_tokens == 22
+    assert response.usage.total_tokens == 27
+    assert response.usage.cached_input_tokens == 7
+    assert response.usage.uncached_input_tokens == 15
+    assert response.usage.cache_write_input_tokens == 3
 
 
 @pytest.mark.asyncio

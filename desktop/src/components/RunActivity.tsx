@@ -3,7 +3,7 @@ import { useState } from 'react'
 
 import { listArtifacts } from '../api/artifacts'
 import { getRun, getRunTrace } from '../api/runs'
-import type { AgentEvent, Run } from '../api/types'
+import type { AgentEvent, Run, RunUsageSummary } from '../api/types'
 import { mergeRunEvents } from '../agent/runAnalysis'
 import {
   buildTurnView,
@@ -17,6 +17,7 @@ import ContextInspector from './ContextInspector'
 import ExecutionTrace from './ExecutionTrace'
 import { Icon } from './Icon'
 import { EmptyState, StatusDot, type StatusTone } from './ui'
+import UsageInspector from './UsageInspector'
 
 export type ActivityState = 'active' | 'done' | 'failed' | 'waiting' | 'neutral'
 
@@ -263,10 +264,12 @@ export function RunInspectorOverview({
   run,
   events,
   artifactCount = 0,
+  usageSummary,
 }: {
   run: Run | null
   events: AgentEvent[]
   artifactCount?: number
+  usageSummary?: RunUsageSummary | null
 }): React.JSX.Element {
   const view = buildTurnView(events, { now: Date.now() })
   const status = run?.status ?? view.status
@@ -285,6 +288,10 @@ export function RunInspectorOverview({
           {view.capability ? <div><dt>能力</dt><dd>{view.capability}</dd></div> : null}
           {view.targetApp ? <div><dt>目标</dt><dd>{view.targetApp}</dd></div> : null}
         </dl>
+      </section>
+      <section className="inspector-section">
+        <h3>Usage</h3>
+        <UsageInspector summary={usageSummary} />
       </section>
       {view.error ? (
         <section className="inspector-error">
@@ -403,7 +410,12 @@ export default function RunActivity({
         {!runId ? (
           <EmptyState title="暂无 Run" hint="开始执行任务后可在这里分析过程。" />
         ) : tab === 'run' ? (
-          <RunInspectorOverview run={run} events={events} artifactCount={artifactsQuery.data?.length ?? 0} />
+          <RunInspectorOverview
+            run={run}
+            events={events}
+            artifactCount={artifactsQuery.data?.length ?? 0}
+            usageSummary={traceQuery.data?.usage}
+          />
         ) : tab === 'context' ? (
           <ContextInspector events={events} />
         ) : (

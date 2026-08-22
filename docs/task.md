@@ -7,6 +7,44 @@
 ---
 ## 2026-08-22
 
+### 完成：Reflection Gate V1
+
+#### Bad Case
+- [x] 每个`final_answer`都无条件调用Reflection，寒暄、能力查询和天气/时间等一次性请求也产生额外模型开销
+- [x] 直接用宽泛关键词判断“没有长期价值”会限制模型自主权，并可能漏掉用户偏好、项目决定或Memory修正
+- [x] Reflection被跳过时若不记录原因，Usage为0但无法区分策略跳过、禁用、失败或尚未运行
+
+#### 实现结果
+- [x] 新增保守确定性Reflection Gate，只跳过精确寒暄、明确能力盘点、天气/时间类一次性查询
+- [x] 出现长期偏好、项目决定、规则修正等耐久信号时强制保留Reflection；语义不确定时也继续交给模型判断
+- [x] 本轮成功读取过普通Memory时不允许Gate跳过，继续支持Reflection UPDATE闭环
+- [x] Gate只位于Post-Run Reflection之前，不修改Main Agent、工具、Task、Core Memory或普通Memory写入规则
+- [x] 跳过时发射`memory_reflection_skipped`，记录`gate:smalltalk`、`gate:capability_query`或`gate:ephemeral_lookup`
+- [x] Gate跳过后仍执行现有Memory容量维护检查，不破坏Maintenance语义
+- [x] 新增`MEMORY_REFLECTION_GATE_ENABLED`配置；CLI、Trace和Usage Inspector均展示skip原因
+- [x] Backend 915 tests全部通过；Desktop 37个测试文件/220 tests全部通过
+
+### 完成：Usage Foundation
+
+#### Bad Case
+- [x] Run只记录Main Agent的input/output/total，无法区分缓存命中、未命中、缓存读写与模型调用次数
+- [x] Memory Reflection和Maintenance发生在`agent_completed`之后，Usage虽在Trace中但没有进入Run分析总账
+- [x] 直接用Main Agent Token做Run硬上限会忽略Provider缓存折扣，无法判断真实成本结构
+- [x] Tool Schema每个Step重复发送，但界面没有累计估算，难以判断多轮调用为何昂贵
+- [x] 旧Context界面把约1M的模型输入上限显示成Input Budget，掩盖实际32K Working Budget
+
+#### 实现结果
+- [x] 扩展`ModelUsage`：processed input、output、total、cached/uncached input、cache read/write；未知缓存数据保持`None`而不是伪装成0
+- [x] OpenAI Responses/Chat、Qwen兼容缓存字段、DeepSeek hit/miss、Anthropic cache read/creation统一归一化
+- [x] 所有核心Usage聚合路径保留缓存细分，不再只累加三个旧字段
+- [x] 新增事件派生`RunUsageSummary`，明确拆分Main Agent、Memory Reflection、Memory Maintenance与Provider Total
+- [x] Main Agent记录真实模型调用数；旧Trace从`model_completed`事件回算调用数，Post-Run从完成/失败事件回算
+- [x] `trace.get`返回完整Usage账本；不复制第二套事实，也不要求破坏性SQLite迁移
+- [x] Run Inspector与Run Detail新增Usage视图，展示processed/cached/uncached/output/cache read-write/calls/Post-Run/Provider Total
+- [x] Tool Schema按全部Model Step累计并明确标为估算值
+- [x] Context视图分开显示Model input limit、Working Budget、Trigger和Target，预算占比按Working Budget计算
+- [x] Backend 911 tests、ruff、compileall；Desktop 37个测试文件/220 tests、typecheck、production build全部通过
+
 ### 完成：Run Inspector（Run / Context / Trace）
 
 #### Bad Case

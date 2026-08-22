@@ -16,6 +16,7 @@ import { ErrorState, LoadingState } from '../components/PageStates'
 import { PageShell } from '../components/PageShell'
 import { ActivityItems } from '../components/RunActivity'
 import RunBadge from '../components/RunBadge'
+import UsageInspector from '../components/UsageInspector'
 import { toast } from '../stores/toasts'
 
 export default function RunDetailPage({ runId, onBack }: { runId: string; onBack: () => void }): React.JSX.Element {
@@ -82,6 +83,11 @@ export default function RunDetailPage({ runId, onBack }: { runId: string; onBack
                   <div><dt>Tokens</dt><dd>{turn.usage ? formatTokens(turn.usage.totalTokens) : formatTokens(traceQuery.data?.run.total_tokens ?? 0)}</dd></div>
                   <div><dt>Duration</dt><dd>{formatDuration(turn.durationMs) || '—'}</dd></div>
                 </dl>
+              </section>
+
+              <section className="run-detail-section">
+                <div className="section-heading"><div><h2>Usage</h2><p>Main Agent, Post-Run, cache, and Provider total</p></div></div>
+                <UsageInspector summary={traceQuery.data?.usage} />
               </section>
 
               <section className="run-detail-section">

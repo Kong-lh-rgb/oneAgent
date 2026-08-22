@@ -25,6 +25,7 @@ from app.memory import (
     MemoryReflectionInput,
     PostRunMemoryReflector,
     ReflectionAction,
+    decide_reflection_gate,
 )
 from app.models.registry import ModelAdapterRegistry
 from app.models.types import (
@@ -36,6 +37,7 @@ from app.models.types import (
     ModelUsage,
     ToolCall,
     ToolResult,
+    add_model_usage,
 )
 from app.skills import (
     SKILL_READ_TOOL_NAME,
@@ -1007,6 +1009,25 @@ class AgentRuntime:
             )
             return
 
+        recalled_memory_revisions = _recalled_memory_revisions(result.tool_calls)
+        if reflector.config.gate_enabled:
+            gate = decide_reflection_gate(
+                user_input,
+                recalled_memory_ids=tuple(recalled_memory_revisions),
+            )
+            if not gate.should_reflect:
+                await emitter.emit(
+                    AgentEventType.MEMORY_REFLECTION_SKIPPED,
+                    reflection_triggered=False,
+                    reflection_skip_reason=f"gate:{gate.reason.value}",
+                )
+                if manager is not None:
+                    await self._ensure_memory_capacity(
+                        required_slots=0,
+                        emitter=emitter,
+                    )
+                return
+
         # 构造稳定 snapshot：在 Run 完成时捕获输入，后台任务不再读取当前
         # conversation / memory，避免下一轮输入污染上一 Run 的 reflection。
         try:
@@ -1020,9 +1041,6 @@ class AgentRuntime:
                 )
                 if task_message is not None:
                     task_context = task_message.content or ""
-            recalled_memory_revisions = _recalled_memory_revisions(
-                result.tool_calls
-            )
             reflection_input = MemoryReflectionInput(
                 run_id=result.run_id,
                 conversation_id=conversation_id,
@@ -1661,11 +1679,7 @@ def _plan_task_id_from_output(output: object) -> str | None:
 def _add_usage(total: ModelUsage, current: ModelUsage) -> ModelUsage:
     """累加多轮模型调用的 token 用量。"""
 
-    return ModelUsage(
-        input_tokens=total.input_tokens + current.input_tokens,
-        output_tokens=total.output_tokens + current.output_tokens,
-        total_tokens=total.total_tokens + current.total_tokens,
-    )
+    return add_model_usage(total, current)
 
 
 def _reflection_tool_context(

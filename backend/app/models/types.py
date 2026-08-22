@@ -137,11 +137,74 @@ class ModelRequest(BaseModel):
 
 
 class ModelUsage(BaseModel):
+    """一次或多次模型调用的用量。
+
+    ``input_tokens`` 表示 Provider 处理的全部输入（包含缓存命中）；缓存细分
+    无法从响应确认时保持 ``None``，不能把“未知”伪装成 0。
+    """
+
     model_config = ConfigDict(extra="allow")
 
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    cached_input_tokens: int | None = Field(default=None, ge=0)
+    uncached_input_tokens: int | None = Field(default=None, ge=0)
+    cache_read_input_tokens: int | None = Field(default=None, ge=0)
+    cache_write_input_tokens: int | None = Field(default=None, ge=0)
+    model_calls: int = Field(default=0, ge=0)
+
+
+def add_model_usage(left: ModelUsage, right: ModelUsage) -> ModelUsage:
+    """聚合 Usage，并保留缓存字段的“未知”语义。"""
+
+    left_has_usage = _has_model_usage(left)
+    right_has_usage = _has_model_usage(right)
+
+    def add_optional(left_value: int | None, right_value: int | None) -> int | None:
+        if not left_has_usage:
+            return right_value
+        if not right_has_usage:
+            return left_value
+        if left_value is None or right_value is None:
+            return None
+        return left_value + right_value
+
+    return ModelUsage(
+        input_tokens=left.input_tokens + right.input_tokens,
+        output_tokens=left.output_tokens + right.output_tokens,
+        total_tokens=left.total_tokens + right.total_tokens,
+        cached_input_tokens=add_optional(
+            left.cached_input_tokens,
+            right.cached_input_tokens,
+        ),
+        uncached_input_tokens=add_optional(
+            left.uncached_input_tokens,
+            right.uncached_input_tokens,
+        ),
+        cache_read_input_tokens=add_optional(
+            left.cache_read_input_tokens,
+            right.cache_read_input_tokens,
+        ),
+        cache_write_input_tokens=add_optional(
+            left.cache_write_input_tokens,
+            right.cache_write_input_tokens,
+        ),
+        model_calls=left.model_calls + right.model_calls,
+    )
+
+
+def _has_model_usage(usage: ModelUsage) -> bool:
+    return bool(
+        usage.input_tokens
+        or usage.output_tokens
+        or usage.total_tokens
+        or usage.cached_input_tokens is not None
+        or usage.uncached_input_tokens is not None
+        or usage.cache_read_input_tokens is not None
+        or usage.cache_write_input_tokens is not None
+        or usage.model_calls
+    )
 
 
 class ModelResponse(BaseModel):

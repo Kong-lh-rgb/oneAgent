@@ -41,6 +41,7 @@ class MemoryReflectionConfig(BaseSettings):
     timeout_seconds: float = Field(default=30.0, gt=0.0)
     max_tool_context_chars: int = Field(default=8_000, ge=0, le=20_000)
     capture_raw_io: bool = False
+    gate_enabled: bool = True
 
     @field_validator("provider", "model", mode="before")
     @classmethod
